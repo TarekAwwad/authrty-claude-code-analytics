@@ -15,11 +15,6 @@ function ImportPage() {
   const [draft, setDraft] = useState(root);
   useEffect(() => setDraft(root), [root]);
 
-  const projects = useQuery({
-    queryKey: ["source-projects", root],
-    queryFn: () => discoverSourceProjects(root),
-    enabled: root.length > 0,
-  });
   const stats = useQuery({ queryKey: ["stats"], queryFn: getCacheStats });
 
   const invalidateAll = async () => {
@@ -51,6 +46,12 @@ function ImportPage() {
 
   const importPending = importOne.isPending || importAll.isPending;
   const mutationPending = importPending || reset.isPending || loadDemo.isPending;
+  const projects = useQuery({
+    queryKey: ["source-projects", root],
+    queryFn: () => discoverSourceProjects(root),
+    enabled: root.length > 0,
+    refetchInterval: importPending ? 750 : false,
+  });
   const progress = useQuery({
     queryKey: ["import-progress"],
     queryFn: getImportProgress,
@@ -82,14 +83,14 @@ function ImportPage() {
         </div>
 
         <form
-          className={`scan-field${projects.isFetching ? " is-scanning" : ""}${isDocker ? " is-locked" : ""}`}
+          className={`scan-field${projects.isLoading ? " is-scanning" : ""}${isDocker ? " is-locked" : ""}`}
           onSubmit={(e) => {
             e.preventDefault();
             if (!isDocker) setRoot(draft);
           }}
         >
           <span className="scan-glyph" aria-hidden>
-            {projects.isFetching ? <LoadingBar size="inline" label="Scanning" /> : <FolderInput size={15} />}
+            {projects.isLoading ? <LoadingBar size="inline" label="Scanning" /> : <FolderInput size={15} />}
           </span>
           <input
             aria-label="Import source root"
@@ -182,44 +183,46 @@ function ImportPage() {
             </span>
           )}
         </div>
-        {projects.isFetching && <p className="muted card-pad">Scanning source…</p>}
-        {projects.error && <p className="error-text card-pad">{(projects.error as Error).message}</p>}
-        {root.length > 0 && discovered.length === 0 && !projects.isFetching && !projects.error && (
-          <p className="muted card-pad">No project folders found in the source root.</p>
-        )}
-        {discovered.map((project: DiscoveredProject) => {
-          const busy = pendingName === project.name;
-          return (
-            <div className={`import-row${project.imported ? " is-imported" : ""}`} key={project.name}>
-              <span className={`status-dot${project.imported ? " on" : ""}`} aria-hidden="true" />
-              <span className="path">{project.name}</span>
-              <span className="row-meta">
-                {project.imported ? (
-                  <>
-                    <b>{project.session_count.toLocaleString()}</b> session{project.session_count === 1 ? "" : "s"}
-                    {project.last_imported_at && (
-                      <span className="row-time"> · {formatImported(project.last_imported_at)}</span>
-                    )}
-                  </>
-                ) : (
-                  <span className="muted">Not imported</span>
-                )}
-              </span>
-              <button
-                className="ghost-action"
-                onClick={() => importOne.mutate(project.name)}
-                disabled={mutationPending}
-                aria-label={`${project.imported ? "Re-import" : "Import"} ${project.name}`}
-              >
-                {busy ? <LoadingBar size="inline" label="Importing" /> : project.imported ? <RotateCcw size={14} /> : <FolderInput size={14} />}
-                <span>{busy ? "Importing…" : project.imported ? "Re-import" : "Import"}</span>
-              </button>
-            </div>
-          );
-        })}
-        {(importOne.error || importAll.error || reset.error || loadDemo.error) && (
-          <p className="error-text card-pad">{((importOne.error || importAll.error || reset.error || loadDemo.error) as Error).message}</p>
-        )}
+        <div className="import-project-list" role="region" aria-label="Source projects" tabIndex={0}>
+          {projects.isLoading && <p className="muted card-pad">Scanning source…</p>}
+          {projects.error && <p className="error-text card-pad">{(projects.error as Error).message}</p>}
+          {root.length > 0 && discovered.length === 0 && !projects.isLoading && !projects.error && (
+            <p className="muted card-pad">No project folders found in the source root.</p>
+          )}
+          {discovered.map((project: DiscoveredProject) => {
+            const busy = pendingName === project.name;
+            return (
+              <div className={`import-row${project.imported ? " is-imported" : ""}`} key={project.name}>
+                <span className={`status-dot${project.imported ? " on" : ""}`} aria-hidden="true" />
+                <span className="path">{project.name}</span>
+                <span className="row-meta">
+                  {project.imported ? (
+                    <>
+                      <b>{project.session_count.toLocaleString()}</b> session{project.session_count === 1 ? "" : "s"}
+                      {project.last_imported_at && (
+                        <span className="row-time"> · {formatImported(project.last_imported_at)}</span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="muted">Not imported</span>
+                  )}
+                </span>
+                <button
+                  className="ghost-action"
+                  onClick={() => importOne.mutate(project.name)}
+                  disabled={mutationPending}
+                  aria-label={`${project.imported ? "Re-import" : "Import"} ${project.name}`}
+                >
+                  {busy ? <LoadingBar size="inline" label="Importing" /> : project.imported ? <RotateCcw size={14} /> : <FolderInput size={14} />}
+                  <span>{busy ? "Importing…" : project.imported ? "Re-import" : "Import"}</span>
+                </button>
+              </div>
+            );
+          })}
+          {(importOne.error || importAll.error || reset.error || loadDemo.error) && (
+            <p className="error-text card-pad">{((importOne.error || importAll.error || reset.error || loadDemo.error) as Error).message}</p>
+          )}
+        </div>
       </section>
     </main>
   );

@@ -311,9 +311,16 @@ html:has(.glossary-dialog[open]) { overflow: hidden; }
 }
 
 .page { flex: 1; width: 100%; max-width: var(--page-max-width); margin: 0 auto; padding: 22px var(--page-gutter); }
-.import-page,
 .team-export-page,
 .team-import-page { overflow: auto; width: 100%; }
+
+.import-page {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  width: 100%;
+}
 
 /* Source console — the scan / import / cache control surface. */
 .source-console {
@@ -458,6 +465,13 @@ h3 {
 .card-count { font-size: 11.5px; color: var(--faint); }
 .card-count b { color: var(--text); font-weight: 700; }
 .card-pad { padding: 13px 16px; }
+.history-card { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+.history-card .card-head { flex: 0 0 auto; }
+.import-project-list {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.import-project-list:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .status-badge { font-size: 10.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px; }
 .status-badge.ok { color: var(--asst); background: color-mix(in srgb, var(--asst) 14%, transparent); }
 .status-badge.warn { color: var(--loop); background: color-mix(in srgb, var(--loop) 14%, transparent); }

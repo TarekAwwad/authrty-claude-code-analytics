@@ -130,6 +130,38 @@ describe("ImportPage", () => {
     expect(band).toHaveClass("is-live");
   });
 
+  it("refreshes project import statuses while a batch import is running", async () => {
+    const beforeImport = [
+      { name: "d--Alpha", imported: false, session_count: 0, last_imported_at: null },
+      { name: "d--Beta", imported: false, session_count: 0, last_imported_at: null },
+    ];
+    const afterFirstProject = [
+      { name: "d--Alpha", imported: true, session_count: 3, last_imported_at: "2026-06-03T00:00:00Z" },
+      beforeImport[1],
+    ];
+    vi.spyOn(client, "discoverSourceProjects")
+      .mockResolvedValueOnce(beforeImport)
+      .mockResolvedValue(afterFirstProject);
+    vi.spyOn(client, "createImport").mockImplementation(
+      () => new Promise(() => undefined),
+    );
+
+    renderPage();
+
+    const alpha = await screen.findByText("d--Alpha");
+    const beta = screen.getByText("d--Beta");
+    expect(alpha.closest(".import-row")).not.toHaveClass("is-imported");
+    expect(beta.closest(".import-row")).not.toHaveClass("is-imported");
+
+    fireEvent.click(screen.getByRole("button", { name: /Import all new/i }));
+
+    await waitFor(
+      () => expect(alpha.closest(".import-row")).toHaveClass("is-imported"),
+      { timeout: 2_000 },
+    );
+    expect(beta.closest(".import-row")).not.toHaveClass("is-imported");
+  });
+
   it("rescans when a custom root is set", async () => {
     const discover = vi.spyOn(client, "discoverSourceProjects").mockResolvedValue([]);
 
