@@ -279,6 +279,32 @@ CREATE INDEX IF NOT EXISTS idx_risk_findings_session ON risk_findings(session_id
 CREATE INDEX IF NOT EXISTS idx_risk_findings_category ON risk_findings(category);
 CREATE INDEX IF NOT EXISTS idx_risk_findings_score ON risk_findings(score);
 
+CREATE TABLE IF NOT EXISTS session_findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    finding_key TEXT NOT NULL,
+    detector_key TEXT NOT NULL,
+    basis TEXT NOT NULL CHECK (basis IN ('observed', 'estimated', 'inferred', 'associated')),
+    category TEXT NOT NULL,
+    title TEXT NOT NULL,
+    explanation TEXT NOT NULL,
+    recommendation TEXT,
+    start_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
+    end_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    UNIQUE(session_id, finding_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_findings_session
+    ON session_findings(session_id);
+CREATE INDEX IF NOT EXISTS idx_session_findings_detector
+    ON session_findings(detector_key);
+
+CREATE TABLE IF NOT EXISTS analysis_metadata (
+    name TEXT PRIMARY KEY,
+    version INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS team_bundles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     bundle_id TEXT NOT NULL UNIQUE,
@@ -337,8 +363,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
 
 DROP_TABLES = [
     "search_index",
+    "analysis_metadata",
     "team_bundle_sessions",
     "team_bundles",
+    "session_findings",
     "risk_findings",
     "pattern_hits",
     "event_features",
@@ -476,9 +504,32 @@ def connect(path: Path) -> sqlite3.Connection:
 
 
 def init_db(conn: sqlite3.Connection) -> None:
-    conn.executescript(SCHEMA)
-    migrate_db(conn)
-    conn.commit()
+    try:
+        conn.executescript(SCHEMA)
+        migrate_db(conn)
+        _backfill_session_findings_once(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _backfill_session_findings_once(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT version FROM analysis_metadata WHERE name = 'session_findings'"
+    ).fetchone()
+    if row is not None and int(row[0]) >= 1:
+        return
+
+    from ccfr.analysis.session_findings import rebuild_session_findings
+
+    rebuild_session_findings(conn)
+    conn.execute(
+        """
+        INSERT INTO analysis_metadata(name, version) VALUES ('session_findings', 1)
+        ON CONFLICT(name) DO UPDATE SET version = excluded.version
+        """
+    )
 
 
 def reset_db(conn: sqlite3.Connection) -> None:

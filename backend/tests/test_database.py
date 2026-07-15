@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import sqlite3
 
+import pytest
+
 from ccfr.storage import init_db, reset_db
 
 
@@ -158,3 +160,177 @@ def test_migrate_adds_team_privacy_level_columns():
     session_cols = {r[1] for r in conn.execute("PRAGMA table_info(team_bundle_sessions)")}
     assert "member_name" in bundle_cols
     assert {"project_name", "tools_json", "file_types_json"} <= session_cols
+
+
+def _insert_session(conn: sqlite3.Connection, external_id: str = "session-a") -> int:
+    import_id = conn.execute(
+        "INSERT INTO imports(source_path, imported_at, status) VALUES ('/fixture', '2026-01-01', 'completed')"
+    ).lastrowid
+    project_id = conn.execute(
+        "INSERT INTO projects(import_id, export_name) VALUES (?, ?)",
+        (import_id, f"project-{external_id}"),
+    ).lastrowid
+    return int(
+        conn.execute(
+            "INSERT INTO sessions(project_id, session_id) VALUES (?, ?)",
+            (project_id, external_id),
+        ).lastrowid
+    )
+
+
+def _insert_tool_receipt(
+    conn: sqlite3.Connection,
+    session_id: int,
+    ordinal: int,
+    *,
+    output: str,
+    is_error: bool,
+) -> None:
+    tool_use_id = f"tool-{ordinal}"
+    call_event_id = conn.execute(
+        """
+        INSERT INTO events(session_id, source_path, line_no, type, raw_json)
+        VALUES (?, 'fixture.jsonl', ?, 'assistant', '{}')
+        """,
+        (session_id, ordinal * 2 - 1),
+    ).lastrowid
+    call_json = json.dumps(
+        {"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {"command": "pytest -q"}}
+    )
+    conn.execute(
+        """
+        INSERT INTO tool_calls(event_id, session_id, tool_use_id, tool_name, input_preview, raw_json)
+        VALUES (?, ?, ?, 'Bash', ?, ?)
+        """,
+        (call_event_id, session_id, tool_use_id, '{"command":"pytest -q"}', call_json),
+    )
+    result_event_id = conn.execute(
+        """
+        INSERT INTO events(session_id, source_path, line_no, type, raw_json)
+        VALUES (?, 'fixture.jsonl', ?, 'user', '{}')
+        """,
+        (session_id, ordinal * 2),
+    ).lastrowid
+    result_json = json.dumps(
+        {"type": "tool_result", "tool_use_id": tool_use_id, "is_error": is_error, "content": output}
+    )
+    conn.execute(
+        """
+        INSERT INTO tool_results(event_id, session_id, tool_use_id, is_error, output_preview, raw_json)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (result_event_id, session_id, tool_use_id, int(is_error), output, result_json),
+    )
+
+
+def test_init_db_creates_exact_session_findings_schema_and_basis_constraint() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+
+    columns = [
+        (row["name"], row["type"], row["notnull"], row["dflt_value"], row["pk"])
+        for row in conn.execute("PRAGMA table_info(session_findings)")
+    ]
+    assert columns == [
+        ("id", "INTEGER", 0, None, 1),
+        ("session_id", "INTEGER", 1, None, 0),
+        ("finding_key", "TEXT", 1, None, 0),
+        ("detector_key", "TEXT", 1, None, 0),
+        ("basis", "TEXT", 1, None, 0),
+        ("category", "TEXT", 1, None, 0),
+        ("title", "TEXT", 1, None, 0),
+        ("explanation", "TEXT", 1, None, 0),
+        ("recommendation", "TEXT", 0, None, 0),
+        ("start_event_id", "INTEGER", 0, None, 0),
+        ("end_event_id", "INTEGER", 0, None, 0),
+        ("evidence_json", "TEXT", 1, "'{}'", 0),
+    ]
+    indexes = {row["name"] for row in conn.execute("PRAGMA index_list(session_findings)")}
+    assert {"idx_session_findings_session", "idx_session_findings_detector"} <= indexes
+    foreign_keys = {
+        (row["from"], row["table"], row["to"], row["on_delete"])
+        for row in conn.execute("PRAGMA foreign_key_list(session_findings)")
+    }
+    assert foreign_keys == {
+        ("session_id", "sessions", "id", "CASCADE"),
+        ("start_event_id", "events", "id", "SET NULL"),
+        ("end_event_id", "events", "id", "SET NULL"),
+    }
+    metadata_columns = {row["name"] for row in conn.execute("PRAGMA table_info(analysis_metadata)")}
+    assert metadata_columns == {"name", "version"}
+    assert conn.execute(
+        "SELECT version FROM analysis_metadata WHERE name = 'session_findings'"
+    ).fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM session_findings").fetchone()[0] == 0
+
+    session_id = _insert_session(conn)
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+        conn.execute(
+            """
+            INSERT INTO session_findings(
+                session_id, finding_key, detector_key, basis, category, title, explanation
+            ) VALUES (?, 'invalid', 'fixture', 'guessed', 'fixture', 'Fixture', 'Fixture')
+            """,
+            (session_id,),
+        )
+
+
+def test_init_db_backfills_existing_cache_once_even_when_later_receipts_change() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    session_id = _insert_session(conn)
+    _insert_tool_receipt(conn, session_id, 1, output="same failure", is_error=True)
+    _insert_tool_receipt(conn, session_id, 2, output="same failure", is_error=True)
+    conn.execute("DELETE FROM analysis_metadata WHERE name = 'session_findings'")
+    conn.commit()
+
+    init_db(conn)
+
+    assert conn.execute(
+        "SELECT version FROM analysis_metadata WHERE name = 'session_findings'"
+    ).fetchone()[0] == 1
+    assert [row[0] for row in conn.execute("SELECT detector_key FROM session_findings")] == [
+        "repeated_identical_failure"
+    ]
+
+    _insert_tool_receipt(conn, session_id, 3, output="command timed out after 30 seconds", is_error=True)
+    conn.commit()
+    init_db(conn)
+
+    assert [row[0] for row in conn.execute("SELECT detector_key FROM session_findings")] == [
+        "repeated_identical_failure"
+    ]
+
+
+def test_init_db_rolls_back_backfill_and_metadata_together(monkeypatch: pytest.MonkeyPatch) -> None:
+    import ccfr.analysis.session_findings as session_findings
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    session_id = _insert_session(conn)
+    conn.execute("DELETE FROM analysis_metadata WHERE name = 'session_findings'")
+    conn.commit()
+
+    def broken_backfill(conn_: sqlite3.Connection, session_ids=None) -> None:
+        conn_.execute(
+            """
+            INSERT INTO session_findings(
+                session_id, finding_key, detector_key, basis, category, title, explanation
+            ) VALUES (?, 'sentinel', 'fixture', 'observed', 'fixture', 'Fixture', 'Fixture')
+            """,
+            (session_id,),
+        )
+        raise RuntimeError("backfill failed")
+
+    monkeypatch.setattr(session_findings, "rebuild_session_findings", broken_backfill)
+
+    with pytest.raises(RuntimeError, match="backfill failed"):
+        init_db(conn)
+
+    assert conn.execute("SELECT COUNT(*) FROM session_findings").fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM analysis_metadata WHERE name = 'session_findings'"
+    ).fetchone()[0] == 0

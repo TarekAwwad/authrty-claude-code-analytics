@@ -92,6 +92,72 @@ def _write_project(root: Path, name: str, session_id: str, text: str = "hello") 
     )
 
 
+def _write_findings_project(root: Path, *, repeated_failure: bool) -> None:
+    project = root / "d--Findings"
+    project.mkdir(parents=True, exist_ok=True)
+    session_id = "44444444-4444-4444-4444-444444444444"
+    rows: list[dict] = []
+    for index in (1, 2):
+        tool_use_id = f"tool-{index}"
+        rows.append(
+            {
+                "type": "assistant",
+                "uuid": f"a{index}",
+                "timestamp": f"2026-01-01T00:00:0{index * 2 - 1}Z",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": tool_use_id,
+                            "name": "Bash",
+                            "input": {"command": "pytest -q"},
+                        }
+                    ],
+                },
+            }
+        )
+        rows.append(
+            {
+                "type": "user",
+                "uuid": f"u{index}",
+                "parentUuid": f"a{index}",
+                "timestamp": f"2026-01-01T00:00:0{index * 2}Z",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "is_error": repeated_failure,
+                            "content": "same test failure" if repeated_failure else "tests passed",
+                        }
+                    ],
+                },
+            }
+        )
+    (project / f"{session_id}.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows),
+        encoding="utf-8",
+    )
+
+
+def test_reimport_rebuilds_session_findings_for_replaced_sessions(tmp_path: Path) -> None:
+    conn = memory_conn()
+    _write_findings_project(tmp_path, repeated_failure=True)
+
+    import_export(conn, tmp_path)
+
+    assert [row[0] for row in conn.execute("SELECT detector_key FROM session_findings")] == [
+        "repeated_identical_failure"
+    ]
+
+    _write_findings_project(tmp_path, repeated_failure=False)
+    import_export(conn, tmp_path)
+
+    assert conn.execute("SELECT COUNT(*) FROM session_findings").fetchone()[0] == 0
+
+
 def test_import_all_new_is_additive(tmp_path: Path) -> None:
     from ccfr.ingest import import_all_new
 
@@ -127,6 +193,7 @@ def test_reimport_replaces_without_orphaning_derived_rows(tmp_path: Path) -> Non
             "sequence_slices",
             "sequence_patterns",
             "risk_findings",
+            "session_findings",
             "projects",
         )
     }
@@ -145,6 +212,7 @@ def test_reimport_replaces_without_orphaning_derived_rows(tmp_path: Path) -> Non
             "sequence_slices",
             "sequence_patterns",
             "risk_findings",
+            "session_findings",
             "projects",
         )
     }

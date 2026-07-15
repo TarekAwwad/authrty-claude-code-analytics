@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from ccfr.analysis.metrics import compute_loop_stats
 from ccfr.analysis.risk_patterns import clear_risk_pattern_tables, rebuild_risk_patterns
+from ccfr.analysis.session_findings import rebuild_session_findings
 from ccfr.ingest.file_ext import file_ext_from_tool_input
 from ccfr.storage.database import init_db
 
@@ -414,6 +415,7 @@ def _rebuild_derived(conn: sqlite3.Connection, session_ids: list[int], project_i
     _refresh_project_cwd(conn, project_ids)
     _populate_search(conn, project_ids)
     rebuild_risk_patterns(conn, session_ids=session_ids)
+    rebuild_session_findings(conn, session_ids=session_ids)
 
 
 def _looks_like_uuid(value: str) -> bool:
