@@ -69,6 +69,7 @@ from ccfr.api.schemas import (
     TeamProjectEntry,
     TeamProjectsResponse,
     TimelineItem,
+    ToolActivityResponse,
     TurnCostBreakdown,
     TraceResponse,
     UsageCharacteristicsResponse,
@@ -517,10 +518,27 @@ def get_turn_costs(
 
 
 @router.get("/sessions/{session_id}/subagents", response_model=list[SubagentResponse])
-def get_subagents(session_id: int, conn: Connection = Depends(get_db)) -> list[SubagentResponse]:
+def get_subagents(
+    session_id: int,
+    conn: Connection = Depends(get_db),
+    historical: bool = Depends(get_historical_pricing),
+) -> list[SubagentResponse]:
     if repository.get_session(conn, session_id) is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    return [SubagentResponse(**row) for row in repository.list_subagents(conn, session_id)]
+    return [
+        SubagentResponse(**row)
+        for row in repository.list_subagents(conn, session_id, historical=historical)
+    ]
+
+
+@router.get("/sessions/{session_id}/tool-activity", response_model=list[ToolActivityResponse])
+def get_tool_activity(
+    session_id: int,
+    conn: Connection = Depends(get_db),
+) -> list[ToolActivityResponse]:
+    if repository.get_session(conn, session_id) is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return [ToolActivityResponse(**row) for row in repository.list_tool_activity(conn, session_id)]
 
 
 @router.get("/sessions/{session_id}/findings", response_model=list[RiskFindingResponse])

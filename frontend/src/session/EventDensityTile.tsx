@@ -9,6 +9,7 @@ interface Props {
   items: TimelineItem[];
   loopContexts?: Map<number, LoopContext>;
   loading?: boolean;
+  wide?: boolean;
 }
 
 const VIEW_W = 600;
@@ -21,7 +22,7 @@ const ERROR_COLOR = DANGER_COLOR;
 
 // Area chart of event count over session time. It uses the same chart shell as
 // the cost page Spend over time graph, with overlays for error and loop points.
-export default function EventDensityTile({ items, loopContexts, loading }: Props) {
+export default function EventDensityTile({ items, loopContexts, loading, wide }: Props) {
   const model = React.useMemo(() => buildDensity(items, loopContexts, 32), [items, loopContexts]);
 
   const points = React.useMemo(() => {
@@ -67,7 +68,7 @@ export default function EventDensityTile({ items, loopContexts, loading }: Props
   const gradientId = React.useId();
 
   return (
-    <section className="tile session-tile">
+    <section className={`tile session-tile${wide ? " tile-full" : ""}`}>
       <h2>Event density</h2>
       {loading ? (
         <div className="session-tile-empty"><LoadingBar size="tile" /></div>

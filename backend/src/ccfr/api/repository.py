@@ -384,6 +384,7 @@ def get_timeline(conn: sqlite3.Connection, session_id: int) -> list[dict[str, An
                 "tool_name": row["tool_name"],
                 "agent_id": row["agent_id"],
                 "is_sidechain": bool(row["is_sidechain"]),
+                "is_error": bool(row["is_error"]),
                 "related_event_ids": related,
             }
         )
@@ -475,8 +476,13 @@ def get_trace(conn: sqlite3.Connection, session_id: int, *, historical: bool = T
     return trace
 
 
-def list_subagents(conn: sqlite3.Connection, session_id: int) -> list[dict[str, Any]]:
-    return rows_to_dicts(
+def list_subagents(
+    conn: sqlite3.Connection,
+    session_id: int,
+    *,
+    historical: bool = True,
+) -> list[dict[str, Any]]:
+    subagents = rows_to_dicts(
         conn.execute(
             """
             SELECT id, agent_id, agent_type, description, name, tool_use_id, event_count, first_ts, last_ts
@@ -487,6 +493,135 @@ def list_subagents(conn: sqlite3.Connection, session_id: int) -> list[dict[str, 
             (session_id,),
         ).fetchall()
     )
+    if not subagents:
+        return []
+
+    timeline = load_price_timeline(pricing_path(), pricing_dir())
+    period_expr = timeline.sql_period_expr("e.timestamp", historical=historical)
+    message_rows = conn.execute(
+        f"""
+        SELECT
+            e.agent_id,
+            m.model,
+            ({period_expr}) AS price_period,
+            COALESCE(SUM(m.input_tokens), 0) AS input_tokens,
+            COALESCE(SUM(m.output_tokens), 0) AS output_tokens,
+            COALESCE(SUM(m.base_input_tokens), 0) AS base_input,
+            COALESCE(SUM(m.cache_5m_tokens), 0) AS cache_write_5m,
+            COALESCE(SUM(m.cache_1h_tokens), 0) AS cache_write_1h,
+            COALESCE(SUM(m.cache_read_tokens), 0) AS cache_read,
+            COALESCE(SUM(m.output_tokens), 0) AS output
+        FROM events e
+        JOIN messages m ON m.event_id = e.id
+        WHERE e.session_id = ? AND e.agent_id IS NOT NULL AND m.role = 'assistant'
+        GROUP BY e.agent_id, m.model, price_period
+        """,
+        (session_id,),
+    ).fetchall()
+    error_counts = {
+        str(row["agent_id"]): int(row["error_count"])
+        for row in conn.execute(
+            """
+            SELECT e.agent_id, COUNT(*) AS error_count
+            FROM tool_results tr
+            JOIN events e ON e.id = tr.event_id
+            WHERE tr.session_id = ? AND tr.is_error = 1 AND e.agent_id IS NOT NULL
+            GROUP BY e.agent_id
+            """,
+            (session_id,),
+        ).fetchall()
+    }
+
+    activity: dict[str, dict[str, Any]] = {
+        str(agent["agent_id"]): {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "api_equivalent_usd": 0.0,
+            "unpriced_models": set(),
+        }
+        for agent in subagents
+    }
+    for row in message_rows:
+        agent = activity.get(str(row["agent_id"]))
+        if agent is None:
+            continue
+        agent["input_tokens"] += int(row["input_tokens"])
+        agent["output_tokens"] += int(row["output_tokens"])
+        breakdown = TokenBreakdown(**{category: int(row[category]) for category in _COST_CATEGORIES})
+        used = any(getattr(breakdown, category) for category in _COST_CATEGORIES)
+        table = timeline.table_for_period(row["price_period"], historical=historical)
+        price = match_price(table, row["model"])
+        if price is None:
+            if used:
+                agent["unpriced_models"].add(str(row["model"] or "Unknown model"))
+            continue
+        agent["api_equivalent_usd"] += cost_usd(price, breakdown)
+
+    for subagent in subagents:
+        agent_id = str(subagent["agent_id"])
+        values = activity[agent_id]
+        subagent.update(
+            input_tokens=values["input_tokens"],
+            output_tokens=values["output_tokens"],
+            error_count=error_counts.get(agent_id, 0),
+            api_equivalent_usd=round(values["api_equivalent_usd"], 6),
+            cost_available=timeline.has_prices,
+            unpriced_models=sorted(values["unpriced_models"]),
+        )
+    return subagents
+
+
+def list_tool_activity(conn: sqlite3.Connection, session_id: int) -> list[dict[str, Any]]:
+    activity: dict[str, dict[str, Any]] = {}
+    for row in conn.execute(
+        """
+        SELECT COALESCE(NULLIF(tool_name, ''), 'Unknown tool') AS tool_name, COUNT(*) AS call_count
+        FROM tool_calls
+        WHERE session_id = ?
+        GROUP BY COALESCE(NULLIF(tool_name, ''), 'Unknown tool')
+        """,
+        (session_id,),
+    ).fetchall():
+        tool_name = str(row["tool_name"])
+        activity[tool_name] = {
+            "tool_name": tool_name,
+            "call_count": int(row["call_count"]),
+            "error_count": 0,
+            "observed_result_bytes": 0,
+            "persisted_result_bytes": 0,
+        }
+
+    result_rows = conn.execute(
+        """
+        SELECT
+            calls.tool_name,
+            tr.is_error,
+            LENGTH(CAST(tr.raw_json AS BLOB)) AS observed_result_bytes,
+            COALESCE(po.size_bytes, 0) AS persisted_result_bytes
+        FROM tool_results tr
+        JOIN (
+            SELECT
+                session_id,
+                tool_use_id,
+                MIN(COALESCE(NULLIF(tool_name, ''), 'Unknown tool')) AS tool_name
+            FROM tool_calls
+            WHERE session_id = ? AND tool_use_id IS NOT NULL
+            GROUP BY session_id, tool_use_id
+        ) calls ON calls.session_id = tr.session_id AND calls.tool_use_id = tr.tool_use_id
+        LEFT JOIN persisted_outputs po ON po.id = tr.persisted_output_id
+        WHERE tr.session_id = ?
+        """,
+        (session_id, session_id),
+    ).fetchall()
+    for row in result_rows:
+        tool = activity.get(str(row["tool_name"]))
+        if tool is None:
+            continue
+        tool["error_count"] += int(row["is_error"] or 0)
+        tool["observed_result_bytes"] += int(row["observed_result_bytes"] or 0)
+        tool["persisted_result_bytes"] += int(row["persisted_result_bytes"] or 0)
+
+    return sorted(activity.values(), key=lambda row: (-row["call_count"], row["tool_name"].lower()))
 
 
 def list_risk_findings(conn: sqlite3.Connection, session_id: int) -> list[dict[str, Any]]:

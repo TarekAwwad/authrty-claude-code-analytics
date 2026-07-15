@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionCard } from "../api/types";
+import { getSubagents } from "../api/client";
 import SessionWorkspace from "./SessionWorkspace";
 
 vi.mock("../api/client", () => ({
@@ -21,6 +22,7 @@ vi.mock("../api/client", () => ({
     },
   })),
   getSubagents: vi.fn(async () => []),
+  getToolActivity: vi.fn(async () => []),
   getSessionFindings: vi.fn(async () => []),
   getEvent: vi.fn(async () => null),
   search: vi.fn(async () => []),
@@ -76,7 +78,12 @@ function baseSession(id: number): SessionCard {
   };
 }
 
-function renderWorkspace(options: { initialEventId?: number | null; backLabel?: string; onBack?: () => void } = {}) {
+function renderWorkspace(options: {
+  initialEventId?: number | null;
+  backLabel?: string;
+  onBack?: () => void;
+  historical?: boolean;
+} = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
@@ -99,9 +106,35 @@ describe("SessionWorkspace", () => {
     expect(container.querySelector(".session-toolbar")).not.toBeNull();
     expect(container.querySelector(".session-overview .session-summary-grid")).not.toBeNull();
     expect(container.querySelector(".session-workspace")).not.toBeNull();
-    expect(screen.getByRole("heading", { name: "Event density" })).toBeInTheDocument();
+    expect(screen.getByText("Estimated API-equivalent cost")).toBeInTheDocument();
+    expect(screen.getByText("Turns")).toBeInTheDocument();
+    expect(screen.getByText("Session span")).toBeInTheDocument();
+    expect(screen.getByText("Observed errors")).toBeInTheDocument();
+    expect(screen.queryByText("Risk score")).not.toBeInTheDocument();
+    expect(screen.queryByText("Max loop")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Subagents - 0" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Tool usage" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Tool activity" })).toBeInTheDocument();
+  });
+
+  it("keeps Event density visible directly above the evidence workspace", async () => {
+    const { container } = renderWorkspace();
+
+    const densityHeading = await screen.findByRole("heading", { name: "Event density" });
+    const overview = densityHeading.closest(".session-overview");
+    const workspace = container.querySelector(".session-workspace");
+
+    expect(densityHeading.closest("details")).toBeNull();
+    expect(container.querySelector(".session-advanced-metrics")).toBeNull();
+    expect(overview).not.toBeNull();
+    expect(workspace).not.toBeNull();
+    expect(overview?.nextElementSibling).toBe(workspace);
+  });
+
+  it("passes the existing historical-pricing mode to subagent activity", async () => {
+    vi.mocked(getSubagents).mockClear();
+    renderWorkspace({ historical: false });
+
+    await waitFor(() => expect(getSubagents).toHaveBeenCalledWith(1, false));
   });
 
   it("renders trace timeline and inspector without switching tabs", async () => {

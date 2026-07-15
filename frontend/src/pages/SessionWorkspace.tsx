@@ -1,7 +1,7 @@
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ArrowLeftRight, Search } from "lucide-react";
-import { getEvent, getSession, getSessionFindings, getSubagents, getTimeline, getTrace, search } from "../api/client";
+import { getEvent, getSession, getSessionFindings, getSubagents, getTimeline, getToolActivity, getTrace, search } from "../api/client";
 import { Blurred } from "../shell/Blurred";
 import type { SessionCard } from "../api/types";
 import TimelinePanel from "../timeline/TimelinePanel";
@@ -21,9 +21,11 @@ interface Props {
   /** Label for the origin-aware navigation control, for example "Back to Cost". */
   backLabel?: string;
   onBack?: () => void;
+  historical?: boolean;
 }
 
-function SessionWorkspace({ session, initialEventId = null, backLabel, onBack }: Props) {
+function SessionWorkspace({ session, initialEventId = null, backLabel, onBack, historical = true }: Props) {
+  const workspaceRef = React.useRef<HTMLElement | null>(null);
   const [selectedEventId, setSelectedEventId] = React.useState<number | null>(initialEventId);
   const [cursorIndex, setCursorIndex] = React.useState(0);
   const [playing, setPlaying] = React.useState(false);
@@ -32,7 +34,14 @@ function SessionWorkspace({ session, initialEventId = null, backLabel, onBack }:
   const sessionQuery = useQuery({ queryKey: ["session", session.id], queryFn: () => getSession(session.id), initialData: session });
   const timeline = useQuery({ queryKey: ["timeline", session.id], queryFn: () => getTimeline(session.id) });
   const trace = useQuery({ queryKey: ["trace", session.id], queryFn: () => getTrace(session.id) });
-  const subagents = useQuery({ queryKey: ["subagents", session.id], queryFn: () => getSubagents(session.id) });
+  const subagents = useQuery({
+    queryKey: ["subagents", session.id, historical],
+    queryFn: () => getSubagents(session.id, historical),
+  });
+  const toolActivity = useQuery({
+    queryKey: ["tool-activity", session.id],
+    queryFn: () => getToolActivity(session.id),
+  });
   const findings = useQuery({ queryKey: ["findings", session.id], queryFn: () => getSessionFindings(session.id) });
   const selectedEvent = useQuery({
     queryKey: ["event", selectedEventId],
@@ -78,13 +87,16 @@ function SessionWorkspace({ session, initialEventId = null, backLabel, onBack }:
     setSelectedEventId(timelineItems[boundedIndex].event_id);
   }, [timelineItems]);
 
-  const selectSubagent = React.useCallback((agentId: string) => {
+  const inspectSubagent = React.useCallback((agentId: string) => {
     const eventId = subagentFirstEventIds.get(agentId);
     if (!eventId) return;
     const index = timelineItems.findIndex((item) => item.event_id === eventId);
     if (index >= 0) setCursorIndex(index);
     setSelectedEventId(eventId);
     setPlaying(false);
+    window.requestAnimationFrame(() => {
+      workspaceRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }, [subagentFirstEventIds, timelineItems]);
 
   React.useEffect(() => {
@@ -156,21 +168,31 @@ function SessionWorkspace({ session, initialEventId = null, backLabel, onBack }:
             )}
           </div>
         </div>
-        <SessionInsightStrip session={card} />
+        <SessionInsightStrip
+          session={card}
+          costUsd={trace.data?.cost.usd}
+          costAvailable={trace.data?.cost.available}
+        />
 
         <section className="session-overview" aria-label="Session overview">
             <div className="cost-bento session-summary-grid">
-              <EventDensityTile items={timelineItems} loopContexts={loopContexts} loading={timeline.isLoading} />
               <SubagentHeatTile
                 subagents={subagentList}
                 firstEventIds={subagentFirstEventIds}
-                onSelectSubagent={selectSubagent}
+                onSelectSubagent={inspectSubagent}
+                loading={subagents.isLoading}
               />
-              <ToolUsageTile items={timelineItems} loading={timeline.isLoading} />
+              <ToolUsageTile activity={toolActivity.data ?? []} loading={toolActivity.isLoading} />
+              <EventDensityTile
+                items={timelineItems}
+                loopContexts={loopContexts}
+                loading={timeline.isLoading}
+                wide
+              />
             </div>
         </section>
 
-        <section className="cost-bento session-workspace" aria-label="Session workspace">
+        <section ref={workspaceRef} className="cost-bento session-workspace" aria-label="Session workspace">
             <section className="tile tile-full session-trace-tile">
               <div className="session-tile-heading">
                 <div className="session-title">

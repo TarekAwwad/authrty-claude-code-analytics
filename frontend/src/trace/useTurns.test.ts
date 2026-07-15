@@ -13,6 +13,7 @@ function item(partial: Partial<TimelineItem> & { event_id: number; kind: string 
     tool_name: null,
     agent_id: null,
     is_sidechain: false,
+    is_error: false,
     related_event_ids: [],
     ...partial,
   };

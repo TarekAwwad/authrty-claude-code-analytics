@@ -110,6 +110,7 @@ export interface TimelineItem {
   tool_name: string | null;
   agent_id: string | null;
   is_sidechain: boolean;
+  is_error: boolean;
   related_event_ids: number[];
 }
 
@@ -171,6 +172,20 @@ export interface Subagent {
   event_count: number;
   first_ts: string | null;
   last_ts: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  error_count: number;
+  api_equivalent_usd: number;
+  cost_available: boolean;
+  unpriced_models: string[];
+}
+
+export interface ToolActivity {
+  tool_name: string;
+  call_count: number;
+  error_count: number;
+  observed_result_bytes: number;
+  persisted_result_bytes: number;
 }
 
 export interface RiskFinding {

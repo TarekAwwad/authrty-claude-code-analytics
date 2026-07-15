@@ -16,6 +16,7 @@ function item(partial: Partial<TimelineItem> & { id: string; event_id: number; k
     tool_name: partial.tool_name ?? null,
     agent_id: partial.agent_id ?? null,
     is_sidechain: partial.is_sidechain ?? false,
+    is_error: partial.is_error ?? false,
     related_event_ids: partial.related_event_ids ?? [],
   };
 }
@@ -27,14 +28,14 @@ const items: TimelineItem[] = [
 ];
 
 describe("TimelinePanel", () => {
-  it("scrolls the selected replay event into view when selection changes", () => {
+  it("scrolls only the timeline list when selection changes", () => {
     const scrollIntoView = vi.fn();
     Object.defineProperty(window.HTMLElement.prototype, "scrollIntoView", {
       configurable: true,
       value: scrollIntoView,
     });
 
-    const { rerender } = render(
+    const { container, rerender } = render(
       <TimelinePanel
         items={items}
         selectedEventId={1}
@@ -46,7 +47,11 @@ describe("TimelinePanel", () => {
       />,
     );
 
-    const initialCalls = scrollIntoView.mock.calls.length;
+    const timelineList = container.querySelector(".timeline-list") as HTMLDivElement;
+    const readButton = screen.getByRole("button", { name: /Read file/i });
+    timelineList.scrollTop = 0;
+    vi.spyOn(timelineList, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
+    vi.spyOn(readButton, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 120, 100, 20));
 
     rerender(
       <TimelinePanel
@@ -61,8 +66,8 @@ describe("TimelinePanel", () => {
     );
 
     expect(screen.getByRole("button", { name: /Read file/i })).toHaveClass("selected");
-    expect(scrollIntoView.mock.calls.length).toBeGreaterThan(initialCalls);
-    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest", inline: "nearest" });
+    expect(timelineList.scrollTop).toBe(40);
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
   it("marks replay rows that are part of a loop run", () => {
@@ -130,7 +135,7 @@ describe("TimelinePanel", () => {
       item({ id: "e1", event_id: 11, kind: "assistant", title: "Step 1" }),
       item({ id: "e2", event_id: 12, kind: "assistant", title: "Step 2" }),
       item({ id: "e3", event_id: 13, kind: "assistant", title: "Step 3" }),
-      item({ id: "err", event_id: 14, kind: "system", title: "Tool error" }),
+      item({ id: "err", event_id: 14, kind: "system", title: "Tool error", is_error: true }),
       item({ id: "e5", event_id: 15, kind: "assistant", title: "Step 5" }),
       item({ id: "e6", event_id: 16, kind: "assistant", title: "Step 6" }),
     ];

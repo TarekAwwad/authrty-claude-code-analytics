@@ -111,10 +111,12 @@ vi.mock("./api/client", () => ({
 vi.mock("./pages/SessionWorkspace", () => ({
   default: ({
     backLabel,
+    historical,
     initialEventId,
     onBack,
   }: {
     backLabel?: string;
+    historical?: boolean;
     initialEventId?: number | null;
     onBack?: () => void;
   }) => (
@@ -124,6 +126,7 @@ vi.mock("./pages/SessionWorkspace", () => ({
           {backLabel}
         </button>
       )}
+      <span data-testid="session-historical-pricing">{String(historical)}</span>
       <span data-testid="session-initial-event">{initialEventId ?? "none"}</span>
     </main>
   ),
@@ -208,11 +211,15 @@ function renderApp() {
 
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState(null, "", "/");
   vi.mocked(client.listImports).mockResolvedValue([] as never);
   vi.mocked(client.listProjects).mockResolvedValue([] as never);
   vi.mocked(client.listSessions).mockResolvedValue([] as never);
 });
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+});
 
 describe("App", () => {
   it("renders the import screen shell", async () => {
@@ -294,10 +301,56 @@ describe("App", () => {
 
     fireEvent.click(await screen.findByText("App test session"));
 
+    expect(screen.getByTestId("session-historical-pricing")).toHaveTextContent("true");
+
     fireEvent.click(await screen.findByRole("button", { name: "Back to Sessions" }));
 
     await waitFor(() => expect(screen.getByRole("button", { name: "Sessions" })).toHaveClass("active"));
     expect(await screen.findByText("App test session")).toBeInTheDocument();
+  });
+
+  it("adds sessions to browser history and restores the originating view on popstate", async () => {
+    mockImportedSession();
+    const pushState = vi.spyOn(window.history, "pushState");
+    renderApp();
+
+    fireEvent.click(await screen.findByText("App test session"));
+
+    expect(pushState).toHaveBeenCalledWith(
+      {
+        cya: {
+          view: "session",
+          sessionId: 7,
+          origin: "map",
+          eventId: null,
+        },
+      },
+      "",
+      "#session/7",
+    );
+
+    window.dispatchEvent(new PopStateEvent("popstate", { state: { cya: { view: "map" } } }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sessions" })).toHaveClass("active"));
+    expect(await screen.findByText("App test session")).toBeInTheDocument();
+  });
+
+  it("uses Backspace as session Back only outside editable controls", async () => {
+    mockImportedSession();
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    renderApp();
+
+    fireEvent.click(await screen.findByText("App test session"));
+    fireEvent.keyDown(document.body, { key: "Backspace" });
+
+    expect(back).toHaveBeenCalledTimes(1);
+
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    fireEvent.keyDown(input, { key: "Backspace" });
+
+    expect(back).toHaveBeenCalledTimes(1);
+    input.remove();
   });
 
   it("returns from a session to the originating Cost view", async () => {

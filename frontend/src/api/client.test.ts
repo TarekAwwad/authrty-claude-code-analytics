@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   exportTeamBundle,
   getCostAnalytics,
+  getSubagents,
   getTeamDashboard,
   getTeamPreview,
   getTeamProjects,
+  getToolActivity,
   importTeamBundle,
   importTeamBundleFile,
   listTeamImports,
@@ -43,6 +45,17 @@ describe("api client", () => {
   it("omits the historical param when the mode is not provided", async () => {
     await getCostAnalytics({ dateFrom: "2026-05-18" });
     expect(fetchMock.mock.calls[0][0] as string).not.toContain("historical=");
+  });
+
+  it("uses the session activity routes and shares the historical pricing mode", async () => {
+    await getSubagents(7, false);
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/sessions/7/subagents?historical=false");
+
+    await getSubagents(7, true);
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/sessions/7/subagents?historical=true");
+
+    await getToolActivity(7);
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/sessions/7/tool-activity");
   });
 
   it("surfaces FastAPI error details as the thrown message", async () => {

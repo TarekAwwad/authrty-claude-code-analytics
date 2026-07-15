@@ -29,6 +29,7 @@ import type {
   TeamPreview,
   TeamProjectsResult,
   TimelineItem,
+  ToolActivity,
   TurnCostBreakdown,
   TraceResponse,
   UsageMapResponse,
@@ -158,8 +159,13 @@ export function getSessionTurnCosts(sessionId: number) {
   return request<TurnCostBreakdown>(`/sessions/${sessionId}/turn-costs`);
 }
 
-export function getSubagents(sessionId: number) {
-  return request<Subagent[]>(`/sessions/${sessionId}/subagents`);
+export function getSubagents(sessionId: number, historical?: boolean) {
+  const query = historical === undefined ? "" : `?historical=${historical}`;
+  return request<Subagent[]>(`/sessions/${sessionId}/subagents${query}`);
+}
+
+export function getToolActivity(sessionId: number) {
+  return request<ToolActivity[]>(`/sessions/${sessionId}/tool-activity`);
 }
 
 export function getSessionFindings(sessionId: number) {

@@ -135,6 +135,7 @@ class TimelineItem(BaseModel):
     tool_name: str | None = None
     agent_id: str | None = None
     is_sidechain: bool = False
+    is_error: bool = False
     related_event_ids: list[int] = Field(default_factory=list)
 
 
@@ -149,6 +150,20 @@ class SubagentResponse(BaseModel):
     event_count: int
     first_ts: str | None
     last_ts: str | None
+    input_tokens: int
+    output_tokens: int
+    error_count: int
+    api_equivalent_usd: float
+    cost_available: bool
+    unpriced_models: list[str] = Field(default_factory=list)
+
+
+class ToolActivityResponse(BaseModel):
+    tool_name: str
+    call_count: int
+    error_count: int
+    observed_result_bytes: int
+    persisted_result_bytes: int
 
 
 class RiskFindingResponse(BaseModel):

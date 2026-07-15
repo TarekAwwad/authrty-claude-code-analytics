@@ -34,10 +34,20 @@ function TimelinePanel({
 }: Props) {
   const safeCursor = items.length === 0 ? 0 : Math.min(cursorIndex, items.length - 1);
   const selectedButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const timelineListRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
     if (selectedEventId === null) return;
-    selectedButtonRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const selected = selectedButtonRef.current;
+    const list = timelineListRef.current;
+    if (!selected || !list) return;
+    const selectedRect = selected.getBoundingClientRect();
+    const listRect = list.getBoundingClientRect();
+    if (selectedRect.top < listRect.top) {
+      list.scrollTop -= listRect.top - selectedRect.top;
+    } else if (selectedRect.bottom > listRect.bottom) {
+      list.scrollTop += selectedRect.bottom - listRect.bottom;
+    }
   }, [selectedEventId]);
 
   const turns = React.useMemo(() => groupTurns(items), [items]);
@@ -65,7 +75,7 @@ function TimelinePanel({
         </div>
         <span>{items.length}</span>
       </div>
-      <div className="timeline-list">
+      <div ref={timelineListRef} className="timeline-list">
         {turns.map((turn) => (
           <TurnGroup
             key={turn.id}

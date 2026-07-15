@@ -162,6 +162,103 @@ def _pricing(tmp_path):
     return baseline, sheets
 
 
+def _seed_session_activity(conn):
+    conn.execute(
+        "INSERT INTO subagents(parent_session_id, agent_id, agent_type, event_count, first_ts, last_ts) "
+        "VALUES(1, 'agent-a', 'Explore', 2, '2026-01-15T10:00:00Z', '2026-01-15T10:05:00Z')"
+    )
+    conn.execute("UPDATE events SET agent_id = 'agent-a' WHERE id = 1")
+    conn.execute("UPDATE messages SET input_tokens = 1000000 WHERE event_id = 1")
+    conn.execute(
+        "INSERT INTO messages(event_id, role, model, input_tokens, output_tokens, base_input_tokens) "
+        "VALUES(1, 'assistant', 'custom-unpriced-model', 250, 50, 250)"
+    )
+
+    result_event_id = conn.execute(
+        "INSERT INTO events(session_id, source_path, line_no, type, timestamp, agent_id, raw_json) "
+        "VALUES(1, 'f', 100, 'user', '2026-01-15T10:05:00Z', 'agent-a', '{}')"
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO tool_calls(event_id, session_id, tool_use_id, tool_name, raw_json) "
+        "VALUES(1, 1, 'read-1', 'Read', '{}')"
+    )
+    conn.execute(
+        "INSERT INTO tool_calls(event_id, session_id, tool_use_id, tool_name, raw_json) "
+        "VALUES(1, 1, 'read-2', 'Read', '{}')"
+    )
+    persisted_id = conn.execute(
+        "INSERT INTO persisted_outputs(session_id, path, size_bytes) VALUES(1, 'large-output.txt', 1234)"
+    ).lastrowid
+    raw_result = '{"content":"abcdef"}'
+    conn.execute(
+        "INSERT INTO tool_results(event_id, session_id, tool_use_id, is_error, persisted_output_id, raw_json) "
+        "VALUES(?, 1, 'read-1', 1, ?, ?)",
+        (result_event_id, persisted_id, raw_result),
+    )
+    conn.execute(
+        "INSERT INTO events(session_id, source_path, line_no, type, timestamp, agent_id, raw_json) "
+        "VALUES(1, 'f', 101, 'system', '2026-01-15T10:06:00Z', 'agent-a', '{}')"
+    )
+
+    conn.execute(
+        "INSERT INTO subagents(parent_session_id, agent_id, agent_type, event_count, first_ts, last_ts) "
+        "VALUES(2, 'agent-b', 'Plan', 1, '2026-08-15T10:00:00Z', '2026-08-15T10:00:00Z')"
+    )
+    conn.execute("UPDATE events SET agent_id = 'agent-b' WHERE id = 2")
+    conn.execute(
+        "UPDATE messages SET model = 'only-unpriced-model', input_tokens = 1000000 WHERE event_id = 2"
+    )
+    conn.commit()
+    return raw_result
+
+
+def test_subagent_activity_uses_direct_lane_receipts_and_historical_prices(monkeypatch, tmp_path):
+    conn = connect(tmp_path / "db.sqlite3")
+    _seed_two_dated_sessions(conn)
+    _seed_session_activity(conn)
+    baseline, sheets = _pricing(tmp_path)
+    monkeypatch.setattr(repository, "pricing_path", lambda: baseline)
+    monkeypatch.setattr(repository, "pricing_dir", lambda: sheets)
+
+    historical = repository.list_subagents(conn, 1, historical=True)[0]
+    current = repository.list_subagents(conn, 1, historical=False)[0]
+
+    assert historical["input_tokens"] == 1_000_250
+    assert historical["output_tokens"] == 50
+    assert historical["error_count"] == 1
+    assert historical["api_equivalent_usd"] == 15.0
+    assert current["api_equivalent_usd"] == 5.0
+    assert historical["cost_available"] is True
+    assert historical["unpriced_models"] == ["custom-unpriced-model"]
+
+    system_items = [item for item in repository.get_timeline(conn, 1) if item["kind"] == "system"]
+    assert sorted(item["is_error"] for item in system_items) == [False, True]
+
+    unpriced = repository.list_subagents(conn, 2, historical=True)[0]
+    assert unpriced["api_equivalent_usd"] == 0
+    assert unpriced["cost_available"] is True
+    assert unpriced["unpriced_models"] == ["only-unpriced-model"]
+
+
+def test_tool_activity_reports_receipt_sizes_without_allocating_model_cost(tmp_path):
+    conn = connect(tmp_path / "db.sqlite3")
+    _seed_two_dated_sessions(conn)
+    raw_result = _seed_session_activity(conn)
+
+    activity = repository.list_tool_activity(conn, 1)
+
+    assert activity == [
+        {
+            "tool_name": "Read",
+            "call_count": 2,
+            "error_count": 1,
+            "observed_result_bytes": len(raw_result.encode("utf-8")),
+            "persisted_result_bytes": 1234,
+        }
+    ]
+    assert "api_equivalent_usd" not in activity[0]
+
+
 def test_session_cost_prices_by_session_date(monkeypatch, tmp_path):
     conn = connect(tmp_path / "db.sqlite3")
     _seed_two_dated_sessions(conn)
