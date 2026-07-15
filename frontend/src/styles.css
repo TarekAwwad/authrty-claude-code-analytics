@@ -741,26 +741,10 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
 .triage-row:hover { background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
 .triage-table td { padding: 12px 16px; vertical-align: middle; }
 
-/* Self-explaining risk cell: score (magnitude, tier-colored) over a segmented
-   underline showing what drives it. Segment colors match the Err/Loop/Fan columns. */
-.risk-cell { display: inline-flex; flex-direction: column; align-items: center; gap: 5px; width: 48px; }
-.risk-score { font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums; line-height: 1; }
-.risk-score.g-hi { color: var(--err); }
-.risk-score.g-md { color: var(--loop); }
-.risk-score.g-lo { color: var(--muted); }
-.risk-bar { display: flex; width: 42px; height: 3px; border-radius: 999px; overflow: hidden; background: var(--track); }
-.risk-bar.calm { background: var(--faint); opacity: 0.35; }
-.risk-seg { height: 100%; min-width: 2px; }
-.risk-seg.seg-alerts { background: var(--err); }
-.risk-seg.seg-loops { background: var(--loop); }
-.risk-seg.seg-fanout { background: var(--fan); }
-.risk-seg.seg-cost { background: var(--accent); }
-.risk-seg.seg-patterns { background: var(--info); }
-
 /* ---------------------------------------------------------------------------
-   LoadingBar — the app's one loading indicator. Reuses the risk-bar track and
-   its segment colours. Motion adapts to size: panel/tile sweep a gradient band
-   across; inline fills and resets. Theme-aware via the risk CSS vars.
+   LoadingBar — the app's one loading indicator. Motion adapts to size:
+   panel/tile sweep a gradient band across; inline fills and resets.
+   Theme-aware via the shared status palette.
 --------------------------------------------------------------------------- */
 .loading-bar {
   position: relative; display: block;
@@ -829,15 +813,12 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
 .tr-name { font-weight: 700; color: var(--text); }
 .tr-sub { font-size: 11px; color: var(--faint); margin-top: 3px; }
 .cell-started { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.cell-err, .cell-loop, .cell-fan { font-weight: 700; }
-.cell-err { color: var(--err); } .cell-loop { color: var(--loop); } .cell-fan { color: var(--fan); }
 .cell-muted { color: var(--faint); }
 .cell-vol b { font-weight: 700; } .vol-dur { color: var(--muted); font-size: 11px; margin-top: 2px; }
 .cell-cost { font-weight: 700; font-variant-numeric: tabular-nums; }
 .finding-cell { display: block; color: var(--text); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 150px; }
 .cell-issue small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
 .issue-finding .finding-cell { color: var(--text); }
-.issue-warn .finding-cell { color: var(--warning); }
 .issue-calm .finding-cell { color: var(--muted); }
 .impact-stack { display: flex; flex-wrap: wrap; gap: 5px; max-width: 260px; }
 .impact-chip {
@@ -846,8 +827,6 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
   color: var(--muted); font-size: 11px; font-weight: 700; white-space: nowrap;
 }
 .impact-chip.err { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, var(--border)); }
-.impact-chip.loop { color: var(--loop); border-color: color-mix(in srgb, var(--loop) 35%, var(--border)); }
-.impact-chip.fan { color: var(--fan); border-color: color-mix(in srgb, var(--fan) 35%, var(--border)); }
 .impact-chip.neutral { color: var(--muted); }
 .triage-action {
   border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
