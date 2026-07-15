@@ -8,7 +8,7 @@ const session = { event_count: 10, tool_call_count: 2, subagent_count: 1, error_
 
 const event = { type: "tool_call", role: "assistant", timestamp: "2026-01-01T00:00:00Z",
   source_path: "x.jsonl", line_no: 5, agent_id: null, text_preview: "hi",
-  tool_calls: [], tool_results: [], related_event_ids: [], raw_json: { a: 1 } } as unknown as EventDetail;
+  tool_calls: [], tool_results: [], related_event_ids: [7, 9], raw_json: { a: 1 } } as unknown as EventDetail;
 
 const subagents = [{ id: 1, agent_type: "explore", event_count: 12, description: "find things", name: null, agent_id: "ag1" }] as unknown as Subagent[];
 const findings = [{
@@ -61,5 +61,54 @@ describe("InspectorPanel tabs", () => {
     expect(screen.getByText("CALL:Bash:test")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Start event 10" }));
     expect(onSelectEvent).toHaveBeenCalledWith(10);
+  });
+
+  it("links related evidence and keeps source metadata and raw JSON in Advanced", () => {
+    const onSelectEvent = vi.fn();
+    render(
+      <InspectorPanel
+        session={session}
+        event={event}
+        subagents={subagents}
+        loading={false}
+        onSelectEvent={onSelectEvent}
+      />,
+    );
+
+    const advanced = screen.getByText("Advanced").closest("details");
+    expect(advanced).not.toHaveAttribute("open");
+    expect(advanced).toHaveTextContent("x.jsonl");
+    expect(advanced).toHaveTextContent('"a": 1');
+
+    fireEvent.click(screen.getByRole("button", { name: "Related event 9" }));
+    expect(onSelectEvent).toHaveBeenCalledWith(9);
+  });
+
+  it("uses neutral same-tool streak wording and a score-free empty finding state", () => {
+    render(
+      <InspectorPanel
+        session={session}
+        event={event}
+        subagents={subagents}
+        sameToolStreakContext={{
+          eventId: 7,
+          runId: "run-1",
+          toolName: "Read",
+          position: 2,
+          count: 3,
+          startEventId: 5,
+          endEventId: 9,
+        }}
+        loading={false}
+      />,
+    );
+
+    expect(screen.getByText("Same-tool streak")).toBeInTheDocument();
+    expect(screen.getByText(/Read appears 3 times consecutively/)).toBeInTheDocument();
+    expect(screen.queryByText(/loop evidence/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Findings" }));
+    expect(screen.getByText("No findings recorded.")).toBeInTheDocument();
+    expect(screen.queryByText(/risk pattern/i)).not.toBeInTheDocument();
   });
 });

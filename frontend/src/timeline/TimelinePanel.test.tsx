@@ -39,11 +39,7 @@ describe("TimelinePanel", () => {
       <TimelinePanel
         items={items}
         selectedEventId={1}
-        cursorIndex={0}
-        playing={false}
         onSelect={() => {}}
-        onCursorChange={() => {}}
-        onPlayingChange={() => {}}
       />,
     );
 
@@ -57,11 +53,7 @@ describe("TimelinePanel", () => {
       <TimelinePanel
         items={items}
         selectedEventId={3}
-        cursorIndex={2}
-        playing={false}
         onSelect={() => {}}
-        onCursorChange={() => {}}
-        onPlayingChange={() => {}}
       />,
     );
 
@@ -70,14 +62,12 @@ describe("TimelinePanel", () => {
     expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
-  it("marks replay rows that are part of a loop run", () => {
+  it("marks rows that are part of a neutral same-tool streak", () => {
     render(
       <TimelinePanel
         items={items}
         selectedEventId={3}
-        cursorIndex={2}
-        playing={false}
-        loopContexts={new Map([
+        sameToolStreakContexts={new Map([
           [3, {
             eventId: 3,
             runId: "main-tool-loop-1",
@@ -89,13 +79,28 @@ describe("TimelinePanel", () => {
           }],
         ])}
         onSelect={() => {}}
-        onCursorChange={() => {}}
-        onPlayingChange={() => {}}
       />,
     );
 
-    expect(screen.getByText("Loop 2/3")).toBeInTheDocument();
-    expect(screen.getByTitle(/Read repeated 3 times consecutively/)).toBeInTheDocument();
+    expect(screen.getByText("Same-tool streak 2/3")).toBeInTheDocument();
+    expect(screen.getByTitle(/Read appears 3 times consecutively/)).toBeInTheDocument();
+    expect(screen.queryByText(/loop/i)).not.toBeInTheDocument();
+  });
+
+  it("has no replay transport and keeps event evidence selectable", () => {
+    const onSelect = vi.fn();
+    const { container } = render(
+      <TimelinePanel items={items} selectedEventId={null} onSelect={onSelect} />,
+    );
+
+    expect(screen.queryByTitle("Play")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Pause")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Back")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Forward")).not.toBeInTheDocument();
+    expect(container.querySelector(".replay-progress")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Read file/i }));
+    expect(onSelect).toHaveBeenCalledWith(3);
   });
 
   it("collapses a turn with more than five events to the first three plus show more", () => {
@@ -108,11 +113,7 @@ describe("TimelinePanel", () => {
       <TimelinePanel
         items={big}
         selectedEventId={null}
-        cursorIndex={0}
-        playing={false}
         onSelect={() => {}}
-        onCursorChange={() => {}}
-        onPlayingChange={() => {}}
       />,
     );
 
@@ -143,11 +144,7 @@ describe("TimelinePanel", () => {
       <TimelinePanel
         items={big}
         selectedEventId={null}
-        cursorIndex={0}
-        playing={false}
         onSelect={() => {}}
-        onCursorChange={() => {}}
-        onPlayingChange={() => {}}
       />,
     );
 
@@ -167,11 +164,7 @@ describe("TimelinePanel", () => {
       <TimelinePanel
         items={big}
         selectedEventId={15}
-        cursorIndex={6}
-        playing={false}
         onSelect={() => {}}
-        onCursorChange={() => {}}
-        onPlayingChange={() => {}}
       />,
     );
 

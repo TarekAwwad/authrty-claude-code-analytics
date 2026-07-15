@@ -1,15 +1,15 @@
 import React from "react";
-import { AlertTriangle, Braces, Link2, Repeat } from "lucide-react";
+import { AlertTriangle, Braces, Link2 } from "lucide-react";
 import type { EventDetail, RiskFinding, SessionCard, Subagent } from "../api/types";
-import type { LoopContext } from "../trace/loopContext";
-import { loopExplanation } from "../trace/loopContext";
+import type { SameToolStreakContext } from "../trace/loopContext";
+import { sameToolStreakExplanation } from "../trace/loopContext";
 import { Blurred } from "../shell/Blurred";
 import LoadingBar from "../components/LoadingBar";
 
 interface Props {
   session: SessionCard;
   event: EventDetail | undefined;
-  loopContext?: LoopContext;
+  sameToolStreakContext?: SameToolStreakContext;
   subagents: Subagent[];
   findings?: RiskFinding[];
   loading: boolean;
@@ -25,7 +25,7 @@ function formatCategory(value: string): string {
     .join(" ");
 }
 
-function InspectorPanel({ event, loopContext, subagents, findings = [], loading, onSelectEvent }: Props) {
+function InspectorPanel({ event, sameToolStreakContext, subagents, findings = [], loading, onSelectEvent }: Props) {
   const [tab, setTab] = React.useState<Tab>("event");
 
   return (
@@ -48,16 +48,14 @@ function InspectorPanel({ event, loopContext, subagents, findings = [], loading,
                 <dt>Type</dt><dd><span className="kind-tag">{event.type}</span></dd>
                 <dt>Role</dt><dd>{event.role || "none"}</dd>
                 <dt>Time</dt><dd>{event.timestamp ? new Date(event.timestamp).toLocaleString() : "unknown"}</dd>
-                <dt>Source</dt><dd>{event.source_path}:{event.line_no}</dd>
-                <dt>Agent</dt><dd>{event.agent_id || "parent session"}</dd>
               </dl>
-              {loopContext && (
-                <div className="loop-evidence-panel">
-                  <p><Repeat size={14} /> Loop evidence</p>
+              {sameToolStreakContext && (
+                <div className="streak-evidence-panel">
+                  <p>Same-tool streak</p>
                   <dl>
-                    <dt>Why</dt><dd>{loopExplanation(loopContext)}</dd>
-                    <dt>Tool</dt><dd>{loopContext.toolName}</dd>
-                    <dt>Position</dt><dd>{loopContext.position} of {loopContext.count}</dd>
+                    <dt>Observed</dt><dd>{sameToolStreakExplanation(sameToolStreakContext)}</dd>
+                    <dt>Tool</dt><dd>{sameToolStreakContext.toolName}</dd>
+                    <dt>Position</dt><dd>{sameToolStreakContext.position} of {sameToolStreakContext.count}</dd>
                   </dl>
                 </div>
               )}
@@ -65,14 +63,32 @@ function InspectorPanel({ event, loopContext, subagents, findings = [], loading,
               {event.tool_calls.length > 0 && <Evidence title="Tool Calls" rows={event.tool_calls} />}
               {event.tool_results.length > 0 && <Evidence title="Tool Results" rows={event.tool_results} />}
               {event.related_event_ids.length > 0 && (
-                <p className="related"><Link2 size={14} /> Related events: {event.related_event_ids.join(", ")}</p>
+                <div className="related">
+                  <Link2 size={14} />
+                  <span>Related events</span>
+                  <div className="related-event-links">
+                    {event.related_event_ids.map((eventId) => (
+                      <button
+                        key={eventId}
+                        type="button"
+                        disabled={!onSelectEvent}
+                        onClick={() => onSelectEvent?.(eventId)}
+                      >
+                        Related event {eventId}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               )}
-              {event.raw_json && (
-                <details className="raw-json">
-                  <summary><Braces size={14} /> Raw JSON</summary>
-                  <pre>{JSON.stringify(event.raw_json, null, 2)}</pre>
-                </details>
-              )}
+              <details className="raw-json inspector-advanced">
+                <summary><Braces size={14} /> Advanced</summary>
+                <dl>
+                  <dt>Source</dt><dd>{event.source_path}</dd>
+                  <dt>Line</dt><dd>{event.line_no}</dd>
+                  <dt>Agent</dt><dd>{event.agent_id || "parent session"}</dd>
+                </dl>
+                {event.raw_json && <pre>{JSON.stringify(event.raw_json, null, 2)}</pre>}
+              </details>
             </>
           )}
         </section>
@@ -104,7 +120,7 @@ function InspectorPanel({ event, loopContext, subagents, findings = [], loading,
         <section className="inspect-section">
           <h3>Findings Â· {findings.length}</h3>
           {findings.length === 0 ? (
-            <p className="muted">No risk pattern findings recorded.</p>
+            <p className="muted">No findings recorded.</p>
           ) : (
             <div className="finding-list">
               {findings.map((finding) => (

@@ -1,7 +1,6 @@
 // Pure helpers that derive the session analytics tiles from already-fetched
 // query data (timeline items, trace spans, subagents). No network access.
 import type { Subagent, TimelineItem } from "../api/types";
-import type { LoopContext } from "../trace/loopContext";
 
 export function isErrorItem(item: TimelineItem): boolean {
   return item.is_error === true;
@@ -11,77 +10,6 @@ function toMs(ts: string | null): number | null {
   if (!ts) return null;
   const value = Date.parse(ts);
   return Number.isNaN(value) ? null : value;
-}
-
-function timestampBounds(stamps: Array<number | null>): { min: number | null; max: number | null } {
-  let min: number | null = null;
-  let max: number | null = null;
-  for (const stamp of stamps) {
-    if (stamp === null) continue;
-    min = min === null ? stamp : Math.min(min, stamp);
-    max = max === null ? stamp : Math.max(max, stamp);
-  }
-  return { min, max };
-}
-
-export interface DensityBucket {
-  index: number;
-  count: number;
-  hasError: boolean;
-  hasLoop: boolean;
-}
-
-export interface DensityModel {
-  buckets: DensityBucket[];
-  total: number;
-  maxCount: number;
-  durationMinutes: number;
-}
-
-// Bucket timeline events evenly across the session timespan. Falls back to
-// even index spacing when timestamps are missing.
-export function buildDensity(
-  items: TimelineItem[],
-  loopContexts: Map<number, LoopContext> | undefined,
-  bucketCount = 32,
-): DensityModel {
-  const buckets: DensityBucket[] = Array.from({ length: bucketCount }, (_, index) => ({
-    index,
-    count: 0,
-    hasError: false,
-    hasLoop: false,
-  }));
-  if (items.length === 0) {
-    return { buckets, total: 0, maxCount: 0, durationMinutes: 0 };
-  }
-
-  const stamps = items.map((item) => toMs(item.timestamp));
-  const { min: minMs, max: maxMs } = timestampBounds(stamps);
-  const span = minMs !== null && maxMs !== null ? maxMs - minMs : 0;
-
-  const bucketFor = (index: number): number => {
-    const stamp = stamps[index];
-    if (minMs !== null && maxMs !== null && span > 0 && stamp !== null) {
-      return Math.min(bucketCount - 1, Math.floor(((stamp - minMs) / span) * bucketCount));
-    }
-    // No usable timestamps: spread events evenly by position.
-    return Math.min(bucketCount - 1, Math.floor((index / items.length) * bucketCount));
-  };
-
-  items.forEach((item, index) => {
-    const bucket = buckets[bucketFor(index)];
-    bucket.count += 1;
-    if (isErrorItem(item)) bucket.hasError = true;
-    if (loopContexts?.has(item.event_id)) bucket.hasLoop = true;
-  });
-
-  const maxCount = Math.max(...buckets.map((bucket) => bucket.count), 0);
-  return {
-    buckets,
-    total: items.length,
-    maxCount,
-    durationMinutes: span > 0 ? span / 60000 : 0,
-  };
 }
 
 export interface SubagentHeatCell {

@@ -1,6 +1,6 @@
 import type { TraceSpan } from "../api/types";
 
-export interface LoopContext {
+export interface SameToolStreakContext {
   eventId: number;
   runId: string;
   toolName: string;
@@ -14,7 +14,7 @@ function fallbackRunId(span: TraceSpan): string {
   return `${span.lane}-${span.tool_name ?? "tool"}-${span.loop_start_event_id ?? span.event_id}`;
 }
 
-export function contextForLoopSpan(span: TraceSpan): LoopContext | null {
+export function contextForSameToolStreakSpan(span: TraceSpan): SameToolStreakContext | null {
   if (!span.is_loop) return null;
   const count = span.loop_count ?? 0;
   const position = span.loop_position ?? 0;
@@ -31,10 +31,10 @@ export function contextForLoopSpan(span: TraceSpan): LoopContext | null {
   };
 }
 
-export function buildLoopContextMap(spans: TraceSpan[]): Map<number, LoopContext> {
-  const contexts = new Map<number, LoopContext>();
+export function buildSameToolStreakContextMap(spans: TraceSpan[]): Map<number, SameToolStreakContext> {
+  const contexts = new Map<number, SameToolStreakContext>();
   for (const span of spans) {
-    const context = contextForLoopSpan(span);
+    const context = contextForSameToolStreakSpan(span);
     if (context) {
       contexts.set(span.event_id, context);
     }
@@ -42,6 +42,6 @@ export function buildLoopContextMap(spans: TraceSpan[]): Map<number, LoopContext
   return contexts;
 }
 
-export function loopExplanation(context: LoopContext): string {
-  return `${context.toolName} repeated ${context.count} times consecutively on the main thread; this event is ${context.position} of ${context.count} in events ${context.startEventId}-${context.endEventId}.`;
+export function sameToolStreakExplanation(context: SameToolStreakContext): string {
+  return `${context.toolName} appears ${context.count} times consecutively on the main thread; this event is ${context.position} of ${context.count} in events ${context.startEventId}-${context.endEventId}.`;
 }

@@ -1,7 +1,7 @@
 import React from "react";
 import { ArrowLeft } from "lucide-react";
 import type { TraceResponse, TraceSpan } from "../api/types";
-import { buildLoopContextMap, loopExplanation } from "./loopContext";
+import { buildSameToolStreakContextMap, sameToolStreakExplanation } from "./loopContext";
 import { buildTokenModelChart, sessionMaxForMetric, sessionSumForMetric } from "./tokenModelChart";
 import type { TokenMetric } from "./tokenHeatmap";
 import { distinctModels, modelColor, shortModelName } from "./modelLane";
@@ -10,6 +10,7 @@ interface Props {
   trace: TraceResponse;
   selectedEventId: number | null;
   playheadTimestamp: string | null;
+  subagentLabels?: Map<string, string>;
   onSelect: (eventId: number) => void;
 }
 
@@ -41,7 +42,7 @@ const LEGEND_ITEMS: Array<{ key: LegendFilterKey; label: string }> = [
   { key: "tool", label: "Tool call/result" },
   { key: "subagent_event", label: "Subagent" },
   { key: "system", label: "System / tool error" },
-  { key: "loop", label: "Loop span" },
+  { key: "loop", label: "Same-tool streak" },
 ];
 
 const DISTRIBUTION_OPTIONS: Array<{ value: DistributionMode; label: string }> = [
@@ -401,7 +402,7 @@ function spanMatchesFilter(span: ProjectedSpan, filter: LegendFilterKey): boolea
   return span.kind === filter;
 }
 
-function TraceView({ trace, selectedEventId, playheadTimestamp, onSelect }: Props) {
+function TraceView({ trace, selectedEventId, playheadTimestamp, subagentLabels, onSelect }: Props) {
   const [distributionMode, setDistributionMode] = React.useState<DistributionMode>("compressed");
   const [tokenMetric, setTokenMetric] = React.useState<TokenMetric>("total");
   const [useLogScale, setUseLogScale] = React.useState(true);
@@ -413,7 +414,10 @@ function TraceView({ trace, selectedEventId, playheadTimestamp, onSelect }: Prop
   const [draftBrush, setDraftBrush] = React.useState<DraftBrush | null>(null);
   const brushStartX = React.useRef<number | null>(null);
   const projection = React.useMemo(() => buildProjection(trace, distributionMode), [trace, distributionMode]);
-  const loopContexts = React.useMemo(() => buildLoopContextMap(trace.spans), [trace.spans]);
+  const sameToolStreakContexts = React.useMemo(
+    () => buildSameToolStreakContextMap(trace.spans),
+    [trace.spans],
+  );
   const visibleSpans = React.useMemo(() => {
     if (activeFilters.size === 0) return projection.spans;
     return projection.spans.filter((span) => (
@@ -614,9 +618,9 @@ function TraceView({ trace, selectedEventId, playheadTimestamp, onSelect }: Prop
   const renderSpan = (span: ProjectedSpan) => {
     const { left, width } = geometry(span.startCoord, span.endCoord);
     const selected = span.event_id === selectedEventId;
-    const loopContext = loopContexts.get(span.event_id);
-    const title = loopContext
-      ? loopExplanation(loopContext)
+    const sameToolStreakContext = sameToolStreakContexts.get(span.event_id);
+    const title = sameToolStreakContext
+      ? sameToolStreakExplanation(sameToolStreakContext)
       : `${span.kind.replace("_", " ")} event ${span.event_id}`;
     return (
       <g key={span.id} onClick={() => onSelect(span.event_id)}>
@@ -678,7 +682,7 @@ function TraceView({ trace, selectedEventId, playheadTimestamp, onSelect }: Prop
   const renderLoopRegion = (region: LoopRegion) => {
     const { left, width } = geometry(region.startCoord, region.endCoord);
     const selected = region.spans.some((span) => span.event_id === selectedEventId);
-    const context = loopContexts.get(region.firstEventId);
+    const context = sameToolStreakContexts.get(region.firstEventId);
     return (
       <g
         key={region.id}
@@ -687,7 +691,7 @@ function TraceView({ trace, selectedEventId, playheadTimestamp, onSelect }: Prop
         className="trace-loop-band"
         onClick={() => onSelect(region.firstEventId)}
       >
-        <title>{context ? loopExplanation(context) : `loop \u00d7${region.spans.length}`}</title>
+        <title>{context ? sameToolStreakExplanation(context) : `same-tool streak \u00d7${region.spans.length}`}</title>
         <rect
           x={left}
           y={3}
@@ -787,46 +791,50 @@ function TraceView({ trace, selectedEventId, playheadTimestamp, onSelect }: Prop
       </div>
 
       <div className="trace-lanes">
-        {trace.lanes.map((lane) => {
-          const laneSpans = visibleSpans
-            .filter((span) => span.lane === lane.lane_id)
-            .filter((span) => spanIntersectsWindow(span, windowStart, windowEnd));
-          const laneBatches = batchDenseEvents
-            ? buildSpanBatches(laneSpans, (span) => geometry(span.startCoord, span.endCoord))
-            : laneSpans.map((span) => {
-              const { left, width } = geometry(span.startCoord, span.endCoord);
-              return {
-                id: span.id,
-                spans: [span],
-                left,
-                width,
-                kindClass: `k-${span.kind}`,
-              };
-            });
-          const laneRegions = buildLoopRegions(laneSpans)
-            .filter((region) => regionIntersectsWindow(region, windowStart, windowEnd));
-          return (
-            <div className="trace-lane" key={lane.lane_id}>
-              <span className={`lane-label ${lane.kind}`}>{lane.label}</span>
-              <svg className="lane-track" width="100%" height={LANE_HEIGHT} viewBox={`0 0 ${TRACK_WIDTH} ${LANE_HEIGHT}`} preserveAspectRatio="none">
-                {laneRegions.map(renderLoopRegion)}
-                {laneBatches.map((batch) => {
-                  const expanded = batch.spans.length === 1
-                    || expandedBatches.has(batch.id)
-                    || batch.spans.some((span) => span.event_id === selectedEventId);
-                  return expanded ? (
-                    <React.Fragment key={batch.id}>
-                      {batch.spans.map(renderSpan)}
-                    </React.Fragment>
-                  ) : renderBatch(batch);
-                })}
-                {lanePlayheadX !== null && (
-                  <line className="trace-playhead" data-playhead={`lane-${lane.lane_id}`} x1={lanePlayheadX} x2={lanePlayheadX} y1={0} y2={LANE_HEIGHT} />
-                )}
-              </svg>
-            </div>
-          );
-        })}
+        {trace.lanes
+          .filter((lane) => projection.spans.some((span) => span.lane === lane.lane_id))
+          .map((lane) => {
+            const laneSpans = visibleSpans
+              .filter((span) => span.lane === lane.lane_id)
+              .filter((span) => spanIntersectsWindow(span, windowStart, windowEnd));
+            const laneBatches = batchDenseEvents
+              ? buildSpanBatches(laneSpans, (span) => geometry(span.startCoord, span.endCoord))
+              : laneSpans.map((span) => {
+                const { left, width } = geometry(span.startCoord, span.endCoord);
+                return {
+                  id: span.id,
+                  spans: [span],
+                  left,
+                  width,
+                  kindClass: `k-${span.kind}`,
+                };
+              });
+            const laneRegions = buildLoopRegions(laneSpans)
+              .filter((region) => regionIntersectsWindow(region, windowStart, windowEnd));
+            return (
+              <div className="trace-lane" key={lane.lane_id}>
+                <span className={`lane-label ${lane.kind}`}>
+                  {lane.kind === "subagent" ? subagentLabels?.get(lane.lane_id) ?? lane.label : lane.label}
+                </span>
+                <svg className="lane-track" width="100%" height={LANE_HEIGHT} viewBox={`0 0 ${TRACK_WIDTH} ${LANE_HEIGHT}`} preserveAspectRatio="none">
+                  {laneRegions.map(renderLoopRegion)}
+                  {laneBatches.map((batch) => {
+                    const expanded = batch.spans.length === 1
+                      || expandedBatches.has(batch.id)
+                      || batch.spans.some((span) => span.event_id === selectedEventId);
+                    return expanded ? (
+                      <React.Fragment key={batch.id}>
+                        {batch.spans.map(renderSpan)}
+                      </React.Fragment>
+                    ) : renderBatch(batch);
+                  })}
+                  {lanePlayheadX !== null && (
+                    <line className="trace-playhead" data-playhead={`lane-${lane.lane_id}`} x1={lanePlayheadX} x2={lanePlayheadX} y1={0} y2={LANE_HEIGHT} />
+                  )}
+                </svg>
+              </div>
+            );
+          })}
       </div>
 
       <div className="trace-token-chart">

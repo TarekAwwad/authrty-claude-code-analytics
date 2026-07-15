@@ -17,6 +17,7 @@ const trace: TraceResponse = {
   lanes: [
     { lane_id: "main", label: "main thread", kind: "main" },
     { lane_id: "a1", label: "a1", kind: "subagent" },
+    { lane_id: "unused", label: "unused-agent-id", kind: "subagent" },
   ],
   spans: [
     { id: "span-1", event_id: 1, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:01:00Z", end_ts: "2026-01-01T00:02:00Z", tool_use_id: "u1", tool_name: "Read", is_loop: true },
@@ -124,10 +125,20 @@ function eventX(container: HTMLElement, eventId: number): number {
 }
 
 describe("TraceView", () => {
-  it("renders one labeled row per lane", () => {
-    render(<TraceView trace={trace} selectedEventId={null} playheadTimestamp={null} onSelect={() => {}} />);
+  it("omits empty lanes and replaces known subagent IDs with readable labels", () => {
+    render(
+      <TraceView
+        trace={trace}
+        selectedEventId={null}
+        playheadTimestamp={null}
+        subagentLabels={new Map([["a1", "A1 · Explore"]])}
+        onSelect={() => {}}
+      />,
+    );
     expect(screen.getByText("main thread")).toBeInTheDocument();
-    expect(screen.getByText("a1")).toBeInTheDocument();
+    expect(screen.getByText("A1 · Explore")).toBeInTheDocument();
+    expect(screen.queryByText("a1")).not.toBeInTheDocument();
+    expect(screen.queryByText("unused-agent-id")).not.toBeInTheDocument();
   });
 
   it("selects an event when a span is clicked", () => {
@@ -148,7 +159,8 @@ describe("TraceView", () => {
     expect(legend).toHaveTextContent("Tool call/result");
     expect(legend).toHaveTextContent("Subagent");
     expect(legend).toHaveTextContent("System / tool error");
-    expect(legend).toHaveTextContent("Loop span");
+    expect(legend).toHaveTextContent("Same-tool streak");
+    expect(legend).not.toHaveTextContent("Loop span");
     expect(legend).toHaveTextContent("Selected event");
   });
 
@@ -221,8 +233,8 @@ describe("TraceView", () => {
     expect(container.querySelector('[data-event-id="2"]')).toBeNull();
   });
 
-  it("draws a replay playhead on the minimap, lanes, and token chart", () => {
-    const { container } = render(<TraceView trace={trace} selectedEventId={null} playheadTimestamp="2026-01-01T00:05:00Z" onSelect={() => {}} />);
+  it("draws selected-event focus on the minimap, lanes, and token chart", () => {
+    const { container } = render(<TraceView trace={trace} selectedEventId={2} playheadTimestamp={null} onSelect={() => {}} />);
 
     expect(container.querySelector('[data-playhead="minimap"]')).not.toBeNull();
     expect(container.querySelector('[data-playhead="lane-main"]')).not.toBeNull();
@@ -238,16 +250,18 @@ describe("TraceView", () => {
     expect(screen.getByRole("checkbox", { name: "Group dense" })).toBeChecked();
   });
 
-  it("batches dense lane events and drills into the batch on click", () => {
+  it("keeps dense event batches keyboard-accessible and drills into them", () => {
     const { container } = render(<TraceView trace={denseTrace} selectedEventId={null} playheadTimestamp={null} onSelect={() => {}} />);
 
     const batch = container.querySelector("[data-trace-batch]");
     expect(batch).not.toBeNull();
     expect(batch).toHaveAttribute("data-batch-size", "6");
     expect(batch).toHaveAttribute("data-batch-event-ids", "10,11,12,13,14,15");
+    expect(batch).toHaveAttribute("role", "button");
+    expect(batch).toHaveAttribute("tabindex", "0");
     expect(container.querySelector('[data-event-id="10"]')).toBeNull();
 
-    fireEvent.click(batch as Element);
+    fireEvent.keyDown(batch as Element, { key: "Enter" });
 
     expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
     expect(container.querySelector(".trace-brush")).not.toBeNull();

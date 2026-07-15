@@ -1,28 +1,9 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { SessionCard, Subagent, TimelineItem, ToolActivity } from "../api/types";
+import type { SessionCard, Subagent, ToolActivity } from "../api/types";
 import SessionInsightStrip from "./SessionInsightStrip";
-import EventDensityTile from "./EventDensityTile";
 import ToolUsageTile from "./ToolUsageTile";
 import SubagentHeatTile from "./SubagentHeatTile";
-
-function item(partial: Partial<TimelineItem> & { id: string; event_id: number; kind: string; title: string }): TimelineItem {
-  return {
-    id: partial.id,
-    event_id: partial.event_id,
-    kind: partial.kind,
-    title: partial.title,
-    timestamp: partial.timestamp ?? null,
-    preview: partial.preview ?? null,
-    event_type: partial.event_type ?? partial.kind,
-    role: partial.role ?? null,
-    tool_name: partial.tool_name ?? null,
-    agent_id: partial.agent_id ?? null,
-    is_sidechain: partial.is_sidechain ?? false,
-    is_error: partial.is_error ?? false,
-    related_event_ids: partial.related_event_ids ?? [],
-  };
-}
 
 const baseSession: SessionCard = {
   id: 1, project_id: 1, project_name: "ccfr", session_id: "s-1", title: "Debug loop",
@@ -50,29 +31,6 @@ describe("SessionInsightStrip", () => {
   });
 });
 
-describe("EventDensityTile", () => {
-  it("marks only explicitly observed errors, not ordinary system events", () => {
-    const items = [
-      item({ id: "a", event_id: 1, kind: "user_turn", title: "Prompt", timestamp: "2026-06-03T10:00:00Z" }),
-      item({ id: "b", event_id: 2, kind: "assistant", title: "Plan", timestamp: "2026-06-03T10:05:00Z" }),
-      item({ id: "c", event_id: 3, kind: "system", title: "System notice", timestamp: "2026-06-03T10:10:00Z" }),
-      item({ id: "d", event_id: 4, kind: "system", title: "Tool error", timestamp: "2026-06-03T10:15:00Z", is_error: true }),
-      item({ id: "e", event_id: 5, kind: "tool_call", title: "Bash", timestamp: "2026-06-03T10:20:00Z" }),
-    ];
-    const loops = new Map([[5, { eventId: 5, runId: "r", toolName: "Bash", position: 1, count: 3, startEventId: 5, endEventId: 7 }]]);
-    const { container } = render(<EventDensityTile items={items} loopContexts={loops} />);
-    expect(screen.getByText("events")).toBeInTheDocument();
-    expect(container.querySelector(".sot-plot")).not.toBeNull();
-    expect(container.querySelectorAll('[data-marker="error"]')).toHaveLength(1);
-    expect(container.querySelector('[data-marker="loop"]')).not.toBeNull();
-  });
-
-  it("shows an empty state with no events", () => {
-    render(<EventDensityTile items={[]} />);
-    expect(screen.getByText("No events")).toBeInTheDocument();
-  });
-});
-
 describe("ToolUsageTile", () => {
   it("visualizes receipt-derived calls, errors, and result sizes without a raw table or tool cost", () => {
     const activity: ToolActivity[] = [
@@ -95,10 +53,24 @@ describe("ToolUsageTile", () => {
 
     expect(screen.getByRole("heading", { name: "Tool activity" })).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    const legend = screen.getByRole("group", { name: "Tool activity legend" });
+    expect(legend).toHaveTextContent("Successful calls");
+    expect(legend).toHaveTextContent("Errors");
     expect(container.querySelectorAll(".tool-activity-bar")).toHaveLength(2);
     expect(screen.getByText("Read")).toBeInTheDocument();
-    expect(screen.getByText("3 calls")).toBeInTheDocument();
-    expect(screen.getByText("1 error")).toBeInTheDocument();
+    const readRow = screen.getByText("Read").closest(".tool-activity-row");
+    expect(readRow).toHaveTextContent("3 calls");
+    expect(readRow).toHaveTextContent("1 error");
+    const readBar = readRow?.querySelector(".tool-activity-bar");
+    expect(readBar).toHaveAttribute("role", "img");
+    expect(readBar).toHaveAttribute("aria-label", "3 calls: 2 successful, 1 error");
+    expect(readBar?.querySelector(".tool-activity-bar-success")).toHaveStyle({ width: "66.66666666666667%" });
+    expect(readBar?.querySelector(".tool-activity-bar-error")).toHaveStyle({ width: "33.33333333333333%" });
+    expect(readBar?.querySelector(".tool-activity-bar-success")).toBeEmptyDOMElement();
+    expect(readBar?.querySelector(".tool-activity-bar-error")).toBeEmptyDOMElement();
+    const bashRow = screen.getByText("Bash").closest(".tool-activity-row");
+    expect(bashRow).toHaveTextContent("1 call");
+    expect(bashRow).toHaveTextContent("0 errors");
     expect(screen.getByText("2.0 KB")).toBeInTheDocument();
     expect(screen.getByText("8.0 KB")).toBeInTheDocument();
     expect(screen.queryByText(/cost/i)).not.toBeInTheDocument();
@@ -165,7 +137,10 @@ describe("SubagentHeatTile", () => {
     expect(container.querySelector(".heat-cell.lvl-2")).not.toBeNull();
     expect(container.querySelector(".subagent-activity-lane")).toBeNull();
     expect(screen.getByText("A1")).toBeInTheDocument();
-    expect(screen.getByText("240 recorded events")).toBeInTheDocument();
+    expect(screen.queryByText("240 recorded events")).not.toBeInTheDocument();
+    const metricControl = screen.getByRole("radiogroup", { name: "Heatmap metric" });
+    expect(screen.getByRole("heading", { name: "Subagents - 2" }).closest(".session-visual-heading"))
+      .toContainElement(metricControl);
     expect(screen.getByText("Select an agent to inspect its receipts")).toBeInTheDocument();
     expect(screen.queryByText("1,500 tokens")).not.toBeInTheDocument();
     expect(screen.queryByText("$1.25 direct cost")).not.toBeInTheDocument();
@@ -238,7 +213,7 @@ describe("SubagentHeatTile", () => {
     const a1 = screen.getByRole("button", { name: "Select A1 Explore subagent" });
     const a2 = screen.getByRole("button", { name: "Select A2 Plan subagent" });
 
-    expect(screen.getByRole("radiogroup", { name: "Heatmap metric" })).toBeInTheDocument();
+    expect(screen.getByRole("radiogroup", { name: "Heatmap metric" })).toHaveTextContent("Color by");
     expect(screen.getByRole("radio", { name: "Events" })).toHaveAttribute("aria-checked", "true");
     expect(a1).toHaveClass("lvl-3");
     expect(a2).toHaveClass("lvl-1");

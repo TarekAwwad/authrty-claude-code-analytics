@@ -114,20 +114,7 @@ describe("SessionWorkspace", () => {
     expect(screen.queryByText("Max loop")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Subagents - 0" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Tool activity" })).toBeInTheDocument();
-  });
-
-  it("keeps Event density visible directly above the evidence workspace", async () => {
-    const { container } = renderWorkspace();
-
-    const densityHeading = await screen.findByRole("heading", { name: "Event density" });
-    const overview = densityHeading.closest(".session-overview");
-    const workspace = container.querySelector(".session-workspace");
-
-    expect(densityHeading.closest("details")).toBeNull();
-    expect(container.querySelector(".session-advanced-metrics")).toBeNull();
-    expect(overview).not.toBeNull();
-    expect(workspace).not.toBeNull();
-    expect(overview?.nextElementSibling).toBe(workspace);
+    expect(screen.queryByRole("heading", { name: "Event density" })).not.toBeInTheDocument();
   });
 
   it("passes the existing historical-pricing mode to subagent activity", async () => {
@@ -137,12 +124,15 @@ describe("SessionWorkspace", () => {
     await waitFor(() => expect(getSubagents).toHaveBeenCalledWith(1, false));
   });
 
-  it("renders trace timeline and inspector without switching tabs", async () => {
+  it("keeps Trace visible alongside Timeline and Inspector", async () => {
     renderWorkspace();
 
     expect(await screen.findByTestId("trace-view")).toBeInTheDocument();
     expect(screen.getByTestId("timeline-panel")).toBeInTheDocument();
     expect(screen.getByTestId("inspector-panel")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show trace" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Hide trace" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/loops/i)).not.toBeInTheDocument();
   });
 
   it("shows an origin-aware back control when provided", async () => {
@@ -154,7 +144,7 @@ describe("SessionWorkspace", () => {
     expect(onBack).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps a deep-linked event selected on entry", async () => {
+  it("keeps a deep-linked event selected in Trace", async () => {
     renderWorkspace({ initialEventId: 42 });
 
     expect(await screen.findByTestId("trace-view")).toHaveAttribute("data-selected-event-id", "42");

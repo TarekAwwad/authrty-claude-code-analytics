@@ -54,9 +54,14 @@ export default function ToolUsageTile({ activity, loading }: Props) {
 
   return (
     <section className="tile session-tile">
-      <div className="session-visual-heading">
+      <div className="session-visual-heading tool-activity-heading">
         <h2>Tool activity</h2>
-        {activity.length > 0 && <span>{activity.length.toLocaleString()} observed tools</span>}
+        {activity.length > 0 && (
+          <div className="tool-activity-legend" role="group" aria-label="Tool activity legend">
+            <span><i className="tool-activity-key-success" />Successful calls</span>
+            <span><i className="tool-activity-key-error" />Errors</span>
+          </div>
+        )}
       </div>
       {loading ? (
         <div className="session-tile-empty"><LoadingBar size="tile" /></div>
@@ -69,6 +74,10 @@ export default function ToolUsageTile({ activity, loading }: Props) {
               ? `Other · ${row.aggregate_count.toLocaleString()} tools`
               : row.tool_name;
             const width = maxCalls > 0 ? Math.max(4, (row.call_count / maxCalls) * 100) : 0;
+            const errorCalls = Math.min(row.error_count, row.call_count);
+            const successfulCalls = Math.max(row.call_count - errorCalls, 0);
+            const errorShare = row.call_count > 0 ? (errorCalls / row.call_count) * 100 : 0;
+            const successShare = 100 - errorShare;
             const title = [
               label,
               plural(row.call_count, "call"),
@@ -80,11 +89,27 @@ export default function ToolUsageTile({ activity, loading }: Props) {
               <div className="tool-activity-row" role="listitem" key={row.tool_name} title={title}>
                 <div className="tool-activity-label">
                   <b>{label}</b>
-                  <span>{plural(row.call_count, "call")}</span>
-                  {row.error_count > 0 && <em>{plural(row.error_count, "error")}</em>}
+                  <span className="tool-activity-counts">
+                    <span>{plural(row.call_count, "call")}</span>
+                    <span className="tool-activity-error-count" data-has-errors={row.error_count > 0}>
+                      {plural(row.error_count, "error")}
+                    </span>
+                  </span>
                 </div>
-                <div className="tool-activity-track" aria-hidden="true">
-                  <i className="tool-activity-bar" style={{ width: `${width}%` }} />
+                <div className="tool-activity-track">
+                  <span
+                    className="tool-activity-bar"
+                    style={{ width: `${width}%` }}
+                    role="img"
+                    aria-label={`${plural(row.call_count, "call")}: ${successfulCalls.toLocaleString()} successful, ${plural(row.error_count, "error")}`}
+                  >
+                    {successfulCalls > 0 && (
+                      <i aria-hidden="true" className="tool-activity-bar-success" style={{ width: `${successShare}%` }} />
+                    )}
+                    {row.error_count > 0 && (
+                      <i aria-hidden="true" className="tool-activity-bar-error" style={{ width: `${errorShare}%` }} />
+                    )}
+                  </span>
                 </div>
                 <div className="tool-activity-receipts">
                   <span><small>Observed</small><b>{formatBytes(row.observed_result_bytes)}</b></span>

@@ -72,9 +72,24 @@ export default function SubagentHeatTile({
 
   return (
     <section className={`tile session-tile${wide ? " tile-full" : ""}`}>
-      <div className="session-visual-heading">
+      <div className="session-visual-heading subagent-heat-heading">
         <h2>Subagents - {model.count}</h2>
-        {model.count > 0 && <span>{model.totalEvents.toLocaleString()} recorded events</span>}
+        {model.count > 0 && (
+          <div className="heat-metric-control" role="radiogroup" aria-label="Heatmap metric">
+            <span className="heat-metric-label">Color by</span>
+            {HEAT_METRICS.map((metric) => (
+              <button
+                key={metric.value}
+                type="button"
+                role="radio"
+                aria-checked={heatMetric === metric.value}
+                onClick={() => setHeatMetric(metric.value)}
+              >
+                {metric.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       {loading ? (
         <div className="session-tile-empty"><LoadingBar size="tile" /></div>
@@ -82,22 +97,6 @@ export default function SubagentHeatTile({
         <div className="session-tile-empty">No subagent activity</div>
       ) : (
         <div className="agent-heat">
-          <div className="heat-toolbar">
-            <span>Color by</span>
-            <div className="heat-metric-control" role="radiogroup" aria-label="Heatmap metric">
-              {HEAT_METRICS.map((metric) => (
-                <button
-                  key={metric.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={heatMetric === metric.value}
-                  onClick={() => setHeatMetric(metric.value)}
-                >
-                  {metric.label}
-                </button>
-              ))}
-            </div>
-          </div>
           <div className="heat-grid" role="group" aria-label={`Subagents by ${activeMetric.scale.toLowerCase()}`}>
             {model.cells.map((cell) => {
               const type = cell.agentType || "Unknown";
