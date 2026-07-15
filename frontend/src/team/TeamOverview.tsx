@@ -16,7 +16,7 @@ interface Props {
   onGoToImport: () => void;
 }
 
-// The team-scope "Overview": the same aggregate story the local Overview tells,
+// The team-scope "Overview": the same aggregate story the local Sessions view tells,
 // but computed on the backend from imported team bundles. No per-session detail
 // exists in a bundle, so there is nothing to drill into here by design.
 export default function TeamOverview({ onGoToImport }: Props) {

@@ -33,9 +33,10 @@ describe("Sidebar", () => {
     setup();
     expect(screen.getByText("Check Your Agent")).toBeInTheDocument();
     expect(screen.getByText("local, read-only session data")).toBeInTheDocument();
-    for (const name of ["Import", "Export", "Overview", "Cost", "Explore"]) {
+    for (const name of ["Import", "Export", "Sessions", "Cost", "Explore"]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Data" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Session" })).not.toBeInTheDocument();
   });
@@ -45,6 +46,7 @@ describe("Sidebar", () => {
     for (const name of ["Import", "Overview", "Cost"]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("button", { name: "Sessions" })).not.toBeInTheDocument();
     // Export (share a local bundle) and Explore (subgroup drilldown) have no
     // team-bundle equivalent.
     expect(screen.queryByRole("button", { name: "Export" })).not.toBeInTheDocument();
@@ -75,7 +77,7 @@ describe("Sidebar", () => {
   it("marks the active view and routes nav clicks", () => {
     const props = setup({ view: "cost" });
     expect(screen.getByRole("button", { name: "Cost" })).toHaveClass("active");
-    fireEvent.click(screen.getByRole("button", { name: "Overview" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sessions" }));
     expect(props.onSelectView).toHaveBeenCalledWith("map");
   });
 
@@ -86,11 +88,25 @@ describe("Sidebar", () => {
     fireEvent.click(ready);
     expect(props.onSelectTechnique).toHaveBeenCalledWith("subgroup");
     expect(screen.queryByRole("button", { name: /Sequence mining/ })).not.toBeInTheDocument();
+
+    const experimental = screen.getByRole("group", { name: "Experimental techniques" });
+    expect(within(experimental).getByRole("button", { name: "Usage Mindmap" })).toBeInTheDocument();
+    expect(within(experimental).getByRole("button", { name: "Subgroups" })).toBeInTheDocument();
+    expect(within(experimental).queryByRole("button", { name: "Usage drivers" })).not.toBeInTheDocument();
+    expect(screen.getByText("Experimental")).toBeInTheDocument();
   });
 
   it("hides the technique subnav when Explore is not active", () => {
     setup({ view: "cost" });
+    expect(screen.queryByRole("group", { name: "Explore techniques" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Experimental techniques" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Subgroups" })).not.toBeInTheDocument();
+  });
+
+  it("does not render the technique subnav while collapsed", () => {
+    setup({ view: "discover", collapsed: true });
+    expect(screen.queryByRole("group", { name: "Explore techniques" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Experimental techniques" })).not.toBeInTheDocument();
   });
 
   it("fires footer actions", () => {

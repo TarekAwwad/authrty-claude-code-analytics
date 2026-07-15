@@ -7,6 +7,7 @@ export type View = "import" | "export" | "map" | "session" | "cost" | "discover"
 export interface NavItem {
   key: View;
   label: string;
+  scopeLabels?: Partial<Record<DataScope, string>>;
   icon: LucideIcon;
   // Which data scopes expose this view. Team scope only surfaces the aggregate
   // views; per-session drilldowns have no team equivalent by design.
@@ -20,7 +21,17 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { key: "import", label: "Import", icon: Upload, scopes: ["local", "team"] },
   { key: "export", label: "Export", icon: Download, scopes: ["local"] },
-  { key: "map", label: "Overview", icon: LayoutDashboard, scopes: ["local", "team"] },
+  {
+    key: "map",
+    label: "Sessions",
+    scopeLabels: { team: "Overview" },
+    icon: LayoutDashboard,
+    scopes: ["local", "team"],
+  },
   { key: "cost", label: "Cost", icon: DollarSign, scopes: ["local", "team"] },
   { key: "discover", label: "Explore", icon: Sparkles, scopes: ["local"] },
 ];
+
+export function navItemLabel(item: NavItem, scope: DataScope): string {
+  return item.scopeLabels?.[scope] ?? item.label;
+}

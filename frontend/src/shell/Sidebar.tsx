@@ -1,6 +1,6 @@
 // frontend/src/shell/Sidebar.tsx
 import { Eye, EyeOff, History, HelpCircle, Monitor, Moon, PanelLeft, PanelLeftClose, Sun, Users } from "lucide-react";
-import { NAV_ITEMS, type View } from "./navConfig";
+import { NAV_ITEMS, navItemLabel, type View } from "./navConfig";
 import type { DataScope } from "./useDataScope";
 import { TECHNIQUES } from "../discover/techniques";
 
@@ -51,6 +51,8 @@ export default function Sidebar({
   onTogglePrivacyMode,
 }: Props) {
   const readyTechniques = TECHNIQUES.filter((tech) => tech.status === "ready");
+  const mainTechniques = readyTechniques.filter((tech) => tech.section === "main");
+  const experimentalTechniques = readyTechniques.filter((tech) => tech.section === "experimental");
   const navItems = NAV_ITEMS.filter((item) => item.scopes.includes(scope));
   const scopeLabel = scope === "team" ? "Team" : "This machine";
   const ScopeIcon = scope === "team" ? Users : Monitor;
@@ -71,21 +73,22 @@ export default function Sidebar({
         {navItems.map((item) => {
           const Icon = item.icon;
           const active = view === item.key;
+          const label = navItemLabel(item, scope);
           return (
             <div key={item.key}>
               <button
                 className={`sb-item ${active ? "active" : ""}`}
                 onClick={() => onSelectView(item.key)}
-                aria-label={item.label}
-                title={item.label}
+                aria-label={label}
+                title={label}
               >
                 <Icon className="sb-ic" size={16} />
-                <span className="sb-label">{item.label}</span>
+                <span className="sb-label">{label}</span>
               </button>
 
-              {item.key === "discover" && view === "discover" && (
-                <div className="sb-subnav" role="group" aria-label="Discovery techniques">
-                  {readyTechniques.map((tech) => (
+              {item.key === "discover" && view === "discover" && !collapsed && (
+                <div className="sb-subnav" role="group" aria-label="Explore techniques">
+                  {mainTechniques.map((tech) => (
                     <button
                       key={tech.key}
                       className={`sb-subitem ${discoverTechnique === tech.key ? "active" : ""}`}
@@ -96,6 +99,22 @@ export default function Sidebar({
                       <span className="sb-label">{tech.label}</span>
                     </button>
                   ))}
+                  {experimentalTechniques.length > 0 && (
+                    <div className="sb-subsection" role="group" aria-label="Experimental techniques">
+                      <span className="sb-subsection-label">Experimental</span>
+                      {experimentalTechniques.map((tech) => (
+                        <button
+                          key={tech.key}
+                          className={`sb-subitem ${discoverTechnique === tech.key ? "active" : ""}`}
+                          onClick={() => onSelectTechnique(tech.key)}
+                          title={tech.label}
+                        >
+                          <span className="sb-dot" aria-hidden="true" />
+                          <span className="sb-label">{tech.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

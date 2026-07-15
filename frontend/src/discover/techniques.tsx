@@ -16,6 +16,7 @@ export interface Technique {
   key: string;
   label: string;
   status: "ready" | "soon";
+  section: "main" | "experimental";
   component?: ComponentType<TechniqueProps>;
 }
 
@@ -25,11 +26,11 @@ export interface Technique {
 // Listed in priority order; the sidebar renders this order verbatim and the
 // first entry is what Explore opens to.
 export const TECHNIQUES: Technique[] = [
-  { key: "limits", label: "Limit hits", status: "ready", component: LimitHits },
-  { key: "context", label: "Context economics", status: "ready", component: ContextEconomics },
-  { key: "drivers", label: "Usage drivers", status: "ready", component: UsageDrivers },
-  { key: "mindmap", label: "Usage Mindmap", status: "ready", component: UsageMindmap },
-  { key: "subgroup", label: "Subgroups", status: "ready", component: SubgroupDiscovery },
+  { key: "limits", label: "Limit hits", status: "ready", section: "main", component: LimitHits },
+  { key: "context", label: "Context economics", status: "ready", section: "main", component: ContextEconomics },
+  { key: "drivers", label: "Usage drivers", status: "ready", section: "main", component: UsageDrivers },
+  { key: "mindmap", label: "Usage Mindmap", status: "ready", section: "experimental", component: UsageMindmap },
+  { key: "subgroup", label: "Subgroups", status: "ready", section: "experimental", component: SubgroupDiscovery },
 ];
 
 export const DEFAULT_TECHNIQUE = "limits";

@@ -229,8 +229,8 @@ describe("App", () => {
 
     renderApp();
 
-    // With imports present, the app auto-advances to Overview on first load.
-    await waitFor(() => expect(screen.getByRole("button", { name: "Overview" })).toHaveClass("active"));
+    // With imports present, the app auto-advances to Sessions on first load.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sessions" })).toHaveClass("active"));
 
     fireEvent.click(screen.getByRole("button", { name: "Import" }));
 
@@ -288,15 +288,15 @@ describe("App", () => {
     expect(screen.queryByText("Projects in source")).not.toBeInTheDocument();
   });
 
-  it("returns from a session to the originating Overview view", async () => {
+  it("returns from a session to the originating Sessions view", async () => {
     mockImportedSession();
     renderApp();
 
     fireEvent.click(await screen.findByText("App test session"));
 
-    fireEvent.click(await screen.findByRole("button", { name: "Back to Overview" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Back to Sessions" }));
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Overview" })).toHaveClass("active"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sessions" })).toHaveClass("active"));
     expect(await screen.findByText("App test session")).toBeInTheDocument();
   });
 

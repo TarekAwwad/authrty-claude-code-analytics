@@ -17,6 +17,16 @@ describe("technique registry", () => {
     expect(DEFAULT_TECHNIQUE).toBe(TECHNIQUES[0].key);
   });
 
+  it("separates established and experimental techniques", () => {
+    expect(TECHNIQUES.map(({ key, section }) => ({ key, section }))).toEqual([
+      { key: "limits", section: "main" },
+      { key: "context", section: "main" },
+      { key: "drivers", section: "main" },
+      { key: "mindmap", section: "experimental" },
+      { key: "subgroup", section: "experimental" },
+    ]);
+  });
+
   it("registers Limit hits as a ready technique with a component", () => {
     const limits = TECHNIQUES.find((t) => t.key === "limits");
     expect(limits?.status).toBe("ready");
