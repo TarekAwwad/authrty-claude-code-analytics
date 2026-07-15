@@ -31,13 +31,97 @@ def test_repository_returns_session_timeline_trace_and_event_detail(tmp_path: Pa
     assert subagents
     assert event is not None
     assert event["raw_json"] is not None
-    assert "pattern_risk_score" in sessions[0]
+    assert "pattern_risk_score" not in sessions[0]
+    assert "top_finding_severity" not in sessions[0]
     assert sessions_with_findings
 
-    findings = repository.list_risk_findings(conn, sessions_with_findings[0]["id"])
+    findings = repository.list_session_findings(conn, sessions_with_findings[0]["id"])
     assert findings
-    assert findings[0]["pattern"]
-    assert "lift" in findings[0]
+    assert findings[0]["basis"] in {"observed", "estimated", "inferred", "associated"}
+    assert "score" not in findings[0]
+    assert "lift" not in findings[0]
+    assert "pattern" not in findings[0]
+
+
+def test_session_findings_validate_and_deduplicate_evidence_events() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    conn.execute("INSERT INTO imports(source_path, imported_at, status) VALUES('x','x','done')")
+    conn.execute("INSERT INTO projects(import_id, export_name) VALUES(1,'project')")
+    conn.execute("INSERT INTO sessions(project_id, session_id) VALUES(1,'target')")
+    conn.execute("INSERT INTO sessions(project_id, session_id) VALUES(1,'other')")
+    target_event = conn.execute(
+        "INSERT INTO events(session_id, source_path, line_no, type, raw_json) "
+        "VALUES(1,'target.jsonl',1,'user','{}')"
+    ).lastrowid
+    other_event = conn.execute(
+        "INSERT INTO events(session_id, source_path, line_no, type, raw_json) "
+        "VALUES(2,'other.jsonl',1,'user','{}')"
+    ).lastrowid
+    conn.execute(
+        """
+        INSERT INTO session_findings(
+            session_id, finding_key, detector_key, basis, category, title,
+            explanation, evidence_json
+        ) VALUES(1, 'timeout:one', 'timeout', 'observed', 'execution_failure',
+                 'Timed out', 'The call timed out.', ?)
+        """,
+        (f'{{"event_ids":[{target_event},{target_event},{other_event},999,"bad"]}}',),
+    )
+    conn.execute(
+        """
+        INSERT INTO session_findings(
+            session_id, finding_key, detector_key, basis, category, title,
+            explanation, evidence_json
+        ) VALUES(1, 'large:one', 'large_tool_result', 'estimated', 'result_size',
+                 'Large result', 'The result was large.', ?)
+        """,
+        (f'{{"event_ids":{target_event}}}',),
+    )
+
+    findings = repository.list_session_findings(conn, 1)
+    finding = findings[0]
+
+    assert finding["evidence_event_ids"] == [target_event]
+    assert finding["evidence"]["event_ids"] == [
+        target_event,
+        target_event,
+        other_event,
+        999,
+        "bad",
+    ]
+    assert findings[1]["evidence_event_ids"] == []
+
+
+def test_session_top_finding_uses_documented_detector_precedence() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    conn.execute("INSERT INTO imports(source_path, imported_at, status) VALUES('x','x','done')")
+    conn.execute("INSERT INTO projects(import_id, export_name) VALUES(1,'project')")
+    conn.execute("INSERT INTO sessions(project_id, session_id) VALUES(1,'target')")
+    findings = [
+        ("large:one", "large_tool_result", "estimated", "Large result"),
+        ("permission:one", "permission_rejected", "observed", "Permission rejected"),
+        ("repeat:one", "repeated_identical_failure", "observed", "Repeated failure"),
+    ]
+    conn.executemany(
+        """
+        INSERT INTO session_findings(
+            session_id, finding_key, detector_key, basis, category, title, explanation
+        ) VALUES(1, ?, ?, ?, 'execution_failure', ?, 'Evidence-backed explanation')
+        """,
+        findings,
+    )
+
+    session = repository.list_sessions(conn, with_cost=False)[0]
+
+    assert session["finding_count"] == 3
+    assert session["top_finding_title"] == "Repeated failure"
+    assert session["top_finding_basis"] == "observed"
+    assert "pattern_risk_score" not in session
+    assert "top_finding_severity" not in session
 
 
 def test_list_sessions_and_projects_carry_cost_estimates(tmp_path: Path) -> None:

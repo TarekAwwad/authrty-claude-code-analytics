@@ -168,6 +168,7 @@ def test_repeated_identical_failure_requires_matching_receipts() -> None:
     evidence = json.loads(row["evidence_json"])
     assert row["detector_key"] == "repeated_identical_failure"
     assert row["basis"] == "observed"
+    assert row["recommendation"] is None
     assert row["start_event_id"] == first_result
     assert row["end_event_id"] == second_result
     assert evidence["event_ids"] == [first_call, first_result, second_call, second_result]
@@ -311,6 +312,7 @@ def test_timeout_requires_narrow_observed_error_evidence() -> None:
     evidence = json.loads(row["evidence_json"])
     assert row["detector_key"] == "timeout"
     assert row["basis"] == "observed"
+    assert row["recommendation"] is None
     assert evidence["event_ids"] == [result]
     assert evidence["match_type"] == "timed_out"
 
@@ -340,6 +342,7 @@ def test_missing_dependency_or_command_matches_specific_errors(output: str, matc
     evidence = json.loads(row["evidence_json"])
     assert row["detector_key"] == "missing_dependency_or_command"
     assert row["basis"] == "observed"
+    assert row["recommendation"] is None
     assert evidence["event_ids"] == [result]
     assert evidence["match_type"] == match_type
 
@@ -362,6 +365,7 @@ def test_permission_rejection_requires_narrow_observed_error_evidence() -> None:
     evidence = json.loads(row["evidence_json"])
     assert row["detector_key"] == "permission_rejected"
     assert row["basis"] == "observed"
+    assert row["recommendation"] is None
     assert evidence["event_ids"] == [result]
     assert evidence["match_type"] == "permission_denied"
 
@@ -424,6 +428,7 @@ def test_large_tool_result_uses_observed_persisted_size_and_exact_threshold() ->
     evidence = json.loads(row["evidence_json"])
     assert row["detector_key"] == "large_tool_result"
     assert row["basis"] == "estimated"
+    assert row["recommendation"] is None
     assert row["start_event_id"] == result
     assert evidence["event_ids"] == [result]
     assert evidence["observed_size_bytes"] == LARGE_TOOL_RESULT_THRESHOLD_BYTES

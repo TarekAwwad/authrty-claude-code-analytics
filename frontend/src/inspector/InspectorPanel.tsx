@@ -1,6 +1,6 @@
 import React from "react";
 import { AlertTriangle, Braces, Link2 } from "lucide-react";
-import type { EventDetail, RiskFinding, SessionCard, Subagent } from "../api/types";
+import type { EventDetail, SessionCard, SessionFinding, Subagent } from "../api/types";
 import type { SameToolStreakContext } from "../trace/loopContext";
 import { sameToolStreakExplanation } from "../trace/loopContext";
 import { Blurred } from "../shell/Blurred";
@@ -11,7 +11,7 @@ interface Props {
   event: EventDetail | undefined;
   sameToolStreakContext?: SameToolStreakContext;
   subagents: Subagent[];
-  findings?: RiskFinding[];
+  findings?: SessionFinding[];
   loading: boolean;
   onSelectEvent?: (eventId: number) => void;
 }
@@ -27,6 +27,11 @@ function formatCategory(value: string): string {
 
 function InspectorPanel({ event, sameToolStreakContext, subagents, findings = [], loading, onSelectEvent }: Props) {
   const [tab, setTab] = React.useState<Tab>("event");
+  const openEvidenceEvent = (eventId: number) => {
+    if (!onSelectEvent) return;
+    onSelectEvent(eventId);
+    setTab("event");
+  };
 
   return (
     <aside className="inspector-panel">
@@ -118,43 +123,31 @@ function InspectorPanel({ event, sameToolStreakContext, subagents, findings = []
 
       {tab === "findings" && (
         <section className="inspect-section">
-          <h3>Findings Â· {findings.length}</h3>
+          <h3>Findings · {findings.length}</h3>
           {findings.length === 0 ? (
-            <p className="muted">No findings recorded.</p>
+            <p className="muted">No supported findings detected.</p>
           ) : (
             <div className="finding-list">
               {findings.map((finding) => (
-                <article key={finding.id} className={`finding-card sev-${finding.severity}`}>
+                <article key={finding.id} className="finding-card">
                   <div className="finding-card-head">
                     <span>{formatCategory(finding.category)}</span>
-                    <b>{finding.severity}</b>
+                    <b>Basis: {formatCategory(finding.basis)}</b>
                   </div>
                   <h4>{finding.title}</h4>
                   <p>{finding.explanation}</p>
-                  <div className="finding-metrics">
-                    <span>score {finding.score.toFixed(1)}</span>
-                    <span>lift {finding.lift.toFixed(2)}</span>
-                    <span>support {finding.positive_support}/{finding.support}</span>
-                  </div>
-                  {finding.pattern.length > 0 && (
-                    <ol className="finding-pattern" aria-label={`Pattern for ${finding.title}`}>
-                      {finding.pattern.map((symbol, index) => (
-                        <li key={`${finding.id}-${index}`}>{symbol}</li>
+                  {finding.evidence_event_ids.length > 0 && (
+                    <div className="finding-jumps" aria-label={`Evidence for ${finding.title}`}>
+                      {finding.evidence_event_ids.map((eventId) => (
+                        <button
+                          key={eventId}
+                          type="button"
+                          disabled={!onSelectEvent}
+                          onClick={() => openEvidenceEvent(eventId)}
+                        >
+                          Evidence event {eventId}
+                        </button>
                       ))}
-                    </ol>
-                  )}
-                  {(finding.start_event_id || finding.end_event_id) && (
-                    <div className="finding-jumps">
-                      {finding.start_event_id && (
-                        <button type="button" onClick={() => onSelectEvent?.(finding.start_event_id as number)}>
-                          Start event {finding.start_event_id}
-                        </button>
-                      )}
-                      {finding.end_event_id && finding.end_event_id !== finding.start_event_id && (
-                        <button type="button" onClick={() => onSelectEvent?.(finding.end_event_id as number)}>
-                          End event {finding.end_event_id}
-                        </button>
-                      )}
                     </div>
                   )}
                 </article>

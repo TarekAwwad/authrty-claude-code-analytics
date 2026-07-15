@@ -41,19 +41,18 @@ function formatSessionStart(value: string | null): string {
   return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-function formatCategory(value: string | null): string {
-  if (!value) return "Supported finding detected";
-  return value
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
+function formatBasis(value: SessionCard["top_finding_basis"]): string | null {
+  if (!value) return null;
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function supportedFinding(session: SessionCard): { title: string; detail: string; tone: "finding" | "calm" } {
   if (session.finding_count > 0) {
+    const basis = formatBasis(session.top_finding_basis);
+    const count = `${session.finding_count} finding${session.finding_count === 1 ? "" : "s"}`;
     return {
-      title: session.top_finding_title || formatCategory(session.top_finding_category),
-      detail: `${session.finding_count} finding${session.finding_count === 1 ? "" : "s"}`,
+      title: session.top_finding_title || "Supported finding detected",
+      detail: basis ? `${basis} · ${count}` : count,
       tone: "finding",
     };
   }

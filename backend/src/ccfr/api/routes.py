@@ -50,7 +50,7 @@ from ccfr.api.schemas import (
     ImportSummaryResponse,
     LimitsResponse,
     ProjectResponse,
-    RiskFindingResponse,
+    SessionFindingResponse,
     RuntimeConfigResponse,
     SearchResult,
     SessionCard,
@@ -541,11 +541,11 @@ def get_tool_activity(
     return [ToolActivityResponse(**row) for row in repository.list_tool_activity(conn, session_id)]
 
 
-@router.get("/sessions/{session_id}/findings", response_model=list[RiskFindingResponse])
-def get_findings(session_id: int, conn: Connection = Depends(get_db)) -> list[RiskFindingResponse]:
+@router.get("/sessions/{session_id}/findings", response_model=list[SessionFindingResponse])
+def get_findings(session_id: int, conn: Connection = Depends(get_db)) -> list[SessionFindingResponse]:
     if repository.get_session(conn, session_id) is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    return [RiskFindingResponse(**row) for row in repository.list_risk_findings(conn, session_id)]
+    return [SessionFindingResponse(**row) for row in repository.list_session_findings(conn, session_id)]
 
 
 @router.get("/events/{event_id}", response_model=EventDetail)

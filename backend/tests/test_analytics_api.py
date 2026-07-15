@@ -62,6 +62,44 @@ def test_session_turn_costs_endpoint_returns_breakdown(client: TestClient) -> No
     assert body["turns"][0]["title"] == "Turn 1"
 
 
+def test_session_findings_endpoint_uses_exact_score_free_contract(client: TestClient) -> None:
+    response = client.get("/api/sessions/1/findings")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "id": 1,
+            "session_id": 1,
+            "detector_key": "timeout",
+            "basis": "observed",
+            "category": "execution_failure",
+            "title": "Tool call timed out",
+            "explanation": "The tool exceeded its time limit.",
+            "recommendation": None,
+            "start_event_id": 2,
+            "end_event_id": 2,
+            "evidence_event_ids": [2],
+            "evidence": {"event_ids": [2, 2], "tool_name": "Bash"},
+        }
+    ]
+    forbidden = {"score", "risk_score", "lift", "support", "pattern", "severity"}
+    assert forbidden.isdisjoint(response.json()[0])
+
+
+def test_session_card_exposes_score_free_finding_summary(client: TestClient) -> None:
+    response = client.get("/api/sessions")
+
+    assert response.status_code == 200
+    session = next(item for item in response.json() if item["id"] == 1)
+    assert session["finding_count"] == 1
+    assert session["top_finding_title"] == "Tool call timed out"
+    assert session["top_finding_basis"] == "observed"
+    assert "pattern_risk_score" not in session
+    assert "top_finding_severity" not in session
+    assert "loop_count" in session
+    assert "max_repeat" in session
+
+
 @pytest.fixture()
 def toggle_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Client seeded with two claude-opus-4-1 messages straddling a 2026-07-01 price change."""

@@ -12,8 +12,8 @@ const baseSession: SessionCard = {
   event_count: 50, turn_count: 4, tool_call_count: 10, subagent_count: 2, error_count: 3,
   system_count: 3, persisted_output_count: 0, input_tokens: 1000, output_tokens: 500,
   loop_count: 2, max_repeat: 7, duration_seconds: 1320, max_agent_events: 100,
-  finding_count: 1, pattern_risk_score: 42, top_finding_category: null,
-  top_finding_severity: null, top_finding_title: null, cost_usd: 0.48, cost_available: true,
+  finding_count: 1, top_finding_title: null, top_finding_basis: null,
+  cost_usd: 0.48, cost_available: true,
 };
 
 describe("SessionInsightStrip", () => {

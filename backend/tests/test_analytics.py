@@ -88,9 +88,15 @@ def _seed(conn: sqlite3.Connection) -> None:
         (ev1, s1),
     )
     conn.execute(
-        "INSERT INTO risk_findings(session_id, severity, category, title, explanation, score)"
-        " VALUES (?, 'medium', 'loop', 'Repeated expensive work', 'Fixture finding.', 2.5)",
-        (s1,),
+        """
+        INSERT INTO session_findings(
+            session_id, finding_key, detector_key, basis, category, title,
+            explanation, recommendation, start_event_id, end_event_id, evidence_json
+        ) VALUES (?, 'timeout:tool-1', 'timeout', 'observed', 'execution_failure',
+                  'Tool call timed out', 'The tool exceeded its time limit.',
+                  NULL, ?, ?, ?)
+        """,
+        (s1, ev1, ev1, f'{{"event_ids":[{ev1},{ev1}],"tool_name":"Bash"}}'),
     )
     conn.execute(
         """

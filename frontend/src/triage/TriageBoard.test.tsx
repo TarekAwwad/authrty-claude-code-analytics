@@ -11,8 +11,8 @@ function s(partial: Partial<SessionCard>): SessionCard {
     subagent_count: 0, error_count: 0, system_count: 0, persisted_output_count: 0,
     input_tokens: 0, output_tokens: 0, loop_count: 0, max_repeat: 0,
     duration_seconds: 0, max_agent_events: 0, finding_count: 0,
-    pattern_risk_score: 0, top_finding_category: null, top_finding_severity: null,
-    top_finding_title: null, cost_usd: 0, cost_available: true, ...partial,
+    top_finding_title: null, top_finding_basis: null,
+    cost_usd: 0, cost_available: true, ...partial,
   };
 }
 
@@ -151,10 +151,8 @@ describe("TriageBoard", () => {
         id: 2,
         session_id: "find9999",
         finding_count: 2,
-        pattern_risk_score: 9,
-        top_finding_category: "failed_verification_repair_loop",
-        top_finding_severity: "high",
-        top_finding_title: "Failed verification",
+        top_finding_title: "Repeated identical failure",
+        top_finding_basis: "observed",
       }),
     ];
 
@@ -164,7 +162,8 @@ describe("TriageBoard", () => {
 
     const rows = screen.getAllByRole("row").slice(1);
     expect(within(rows[0]).getByText(/find9999/)).toBeInTheDocument();
-    expect(within(rows[0]).getByText("Failed verification")).toBeInTheDocument();
+    expect(within(rows[0]).getByText("Repeated identical failure")).toBeInTheDocument();
+    expect(within(rows[0]).getByText("Observed · 2 findings")).toBeInTheDocument();
   });
 
   it("shows each session's estimated cost", () => {

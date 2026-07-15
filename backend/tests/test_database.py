@@ -261,7 +261,7 @@ def test_init_db_creates_exact_session_findings_schema_and_basis_constraint() ->
     assert metadata_columns == {"name", "version"}
     assert conn.execute(
         "SELECT version FROM analysis_metadata WHERE name = 'session_findings'"
-    ).fetchone()[0] == 1
+    ).fetchone()[0] == 2
     assert conn.execute("SELECT COUNT(*) FROM session_findings").fetchone()[0] == 0
 
     session_id = _insert_session(conn)
@@ -290,7 +290,7 @@ def test_init_db_backfills_existing_cache_once_even_when_later_receipts_change()
 
     assert conn.execute(
         "SELECT version FROM analysis_metadata WHERE name = 'session_findings'"
-    ).fetchone()[0] == 1
+    ).fetchone()[0] == 2
     assert [row[0] for row in conn.execute("SELECT detector_key FROM session_findings")] == [
         "repeated_identical_failure"
     ]
@@ -302,6 +302,45 @@ def test_init_db_backfills_existing_cache_once_even_when_later_receipts_change()
     assert [row[0] for row in conn.execute("SELECT detector_key FROM session_findings")] == [
         "repeated_identical_failure"
     ]
+
+
+def test_init_db_refreshes_version_one_findings_without_stale_recommendations() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    session_id = _insert_session(conn)
+    _insert_tool_receipt(
+        conn,
+        session_id,
+        1,
+        output="command timed out after 30 seconds",
+        is_error=True,
+    )
+    conn.execute(
+        """
+        INSERT INTO session_findings(
+            session_id, finding_key, detector_key, basis, category, title,
+            explanation, recommendation
+        ) VALUES (?, 'stale', 'timeout', 'observed', 'execution', 'Timed out',
+                  'Observed timeout.', 'Retry with a narrower scope.')
+        """,
+        (session_id,),
+    )
+    conn.execute(
+        "UPDATE analysis_metadata SET version = 1 WHERE name = 'session_findings'"
+    )
+    conn.commit()
+
+    init_db(conn)
+
+    finding = conn.execute(
+        "SELECT detector_key, recommendation FROM session_findings WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    assert tuple(finding) == ("timeout", None)
+    assert conn.execute(
+        "SELECT version FROM analysis_metadata WHERE name = 'session_findings'"
+    ).fetchone()[0] == 2
 
 
 def test_init_db_rolls_back_backfill_and_metadata_together(monkeypatch: pytest.MonkeyPatch) -> None:

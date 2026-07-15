@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -115,10 +115,8 @@ class SessionCard(BaseModel):
     duration_seconds: int = 0
     max_agent_events: int = 0
     finding_count: int = 0
-    pattern_risk_score: float = 0
-    top_finding_category: str | None = None
-    top_finding_severity: str | None = None
     top_finding_title: str | None = None
+    top_finding_basis: Literal["observed", "estimated", "inferred", "associated"] | None = None
     cost_usd: float = 0
     cost_available: bool = False
 
@@ -166,21 +164,18 @@ class ToolActivityResponse(BaseModel):
     persisted_result_bytes: int
 
 
-class RiskFindingResponse(BaseModel):
+class SessionFindingResponse(BaseModel):
     id: int
     session_id: int
-    severity: str
+    detector_key: str
+    basis: Literal["observed", "estimated", "inferred", "associated"]
     category: str
     title: str
     explanation: str
-    pattern: list[str] = Field(default_factory=list)
-    support: int
-    positive_support: int
-    negative_support: int
-    lift: float
-    score: float
-    start_event_id: int | None
-    end_event_id: int | None
+    recommendation: str | None = None
+    start_event_id: int | None = None
+    end_event_id: int | None = None
+    evidence_event_ids: list[int] = Field(default_factory=list)
     evidence: dict[str, Any] = Field(default_factory=dict)
 
 

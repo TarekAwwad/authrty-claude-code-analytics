@@ -23,7 +23,7 @@ def _write_project(root: Path, name: str, session_id: str) -> None:
     )
 
 
-def _write_risky_project(root: Path, name: str, session_id: str) -> None:
+def _write_finding_project(root: Path, name: str, session_id: str) -> None:
     project = root / name
     project.mkdir(parents=True, exist_ok=True)
     (project / f"{session_id}.jsonl").write_text(
@@ -35,7 +35,7 @@ def _write_risky_project(root: Path, name: str, session_id: str) -> None:
             '"id":"toolu_1","name":"Bash","input":{"command":"uv run pytest"}}]}}',
             '{"type":"user","uuid":"u2","parentUuid":"a1","timestamp":"2026-01-01T00:00:02Z",'
             '"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1",'
-            '"is_error":true,"content":"Exit code 1\\npytest failed"}]}}',
+            '"is_error":true,"content":"Command timed out after 20 seconds"}]}}',
         ]),
         encoding="utf-8",
     )
@@ -189,21 +189,27 @@ def test_import_progress_reports_running_project(client, monkeypatch: pytest.Mon
     assert c.get("/api/imports/progress").json()["active"] is False
 
 
-def test_findings_endpoint_returns_pattern_evidence(client) -> None:
+def test_findings_endpoint_returns_score_free_evidence(client) -> None:
     c, root = client
-    _write_risky_project(root, "d--Risky", "33333333-3333-3333-3333-333333333333")
+    _write_finding_project(root, "d--Finding", "33333333-3333-3333-3333-333333333333")
 
-    assert c.post("/api/imports", json={"project": "d--Risky"}).status_code == 200
+    assert c.post("/api/imports", json={"project": "d--Finding"}).status_code == 200
     sessions = c.get("/api/sessions").json()
     assert sessions[0]["finding_count"] > 0
-    assert sessions[0]["pattern_risk_score"] > 0
+    assert sessions[0]["top_finding_title"] == "Tool call timed out"
+    assert sessions[0]["top_finding_basis"] == "observed"
+    assert "pattern_risk_score" not in sessions[0]
+    assert "top_finding_severity" not in sessions[0]
 
     resp = c.get(f"/api/sessions/{sessions[0]['id']}/findings")
     assert resp.status_code == 200
     findings = resp.json()
     assert findings
-    assert findings[0]["pattern"]
+    assert findings[0]["detector_key"] == "timeout"
+    assert findings[0]["basis"] == "observed"
+    assert findings[0]["evidence_event_ids"]
     assert findings[0]["start_event_id"] is not None
+    assert {"score", "lift", "support", "pattern", "severity"}.isdisjoint(findings[0])
 
 
 def test_stats_reflect_current_cache(client) -> None:

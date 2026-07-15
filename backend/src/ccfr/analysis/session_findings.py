@@ -284,9 +284,7 @@ def _repeated_failure_findings(
                         f"failure {len(matches)} times with unchanged arguments and no intervening "
                         "successful tool result."
                     ),
-                    recommendation=(
-                        "Inspect the first failure and change the approach or inputs before retrying."
-                    ),
+                    recommendation=None,
                     start_event_id=first.result_event_id,
                     end_event_id=last.result_event_id,
                     evidence={
@@ -318,7 +316,6 @@ def _observed_error_findings(
     category: str,
     title: str,
     explanation: str,
-    recommendation: str,
 ) -> list[SessionFinding]:
     findings: list[SessionFinding] = []
     for receipt in receipts:
@@ -338,7 +335,7 @@ def _observed_error_findings(
                 category=category,
                 title=title,
                 explanation=f"{tool_name or 'Tool'} {explanation}",
-                recommendation=recommendation,
+                recommendation=None,
                 start_event_id=receipt.result_event_id,
                 end_event_id=receipt.result_event_id,
                 evidence={
@@ -374,7 +371,7 @@ def _large_tool_result_findings(
                     f"{tool_name or 'Tool'} produced an observed persisted output of "
                     f"{size:,} bytes; its context impact depends on how much is later inspected."
                 ),
-                recommendation="Inspect only the relevant range or summarize the persisted output first.",
+                recommendation=None,
                 start_event_id=receipt.result_event_id,
                 end_event_id=receipt.result_event_id,
                 evidence={
@@ -402,7 +399,6 @@ def detect_session_findings(conn: sqlite3.Connection, session_id: int) -> list[S
             category="execution",
             title="Tool call timed out",
             explanation="produced an observed timeout error.",
-            recommendation="Check the operation scope or timeout settings before retrying.",
         )
     )
     detected.extend(
@@ -414,7 +410,6 @@ def detect_session_findings(conn: sqlite3.Connection, session_id: int) -> list[S
             category="environment",
             title="Missing dependency or command",
             explanation="reported a missing dependency or command.",
-            recommendation="Verify the dependency or command is installed and available in this environment.",
         )
     )
     detected.extend(
@@ -426,7 +421,6 @@ def detect_session_findings(conn: sqlite3.Connection, session_id: int) -> list[S
             category="permissions",
             title="Permission rejected",
             explanation="reported an explicit permission rejection.",
-            recommendation="Confirm the intended access and adjust permissions or the target path before retrying.",
         )
     )
     detected.extend(_large_tool_result_findings(session_id, receipts))

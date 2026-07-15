@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   exportTeamBundle,
   getCostAnalytics,
+  getSessionFindings,
   getSubagents,
   getTeamDashboard,
   getTeamPreview,
@@ -56,6 +57,28 @@ describe("api client", () => {
 
     await getToolActivity(7);
     expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/sessions/7/tool-activity");
+
+    fetchMock.mockResolvedValueOnce(okJson([{
+      id: 1,
+      session_id: 7,
+      detector_key: "timeout",
+      basis: "observed",
+      category: "execution_failure",
+      title: "Tool call timed out",
+      explanation: "The call exceeded its time limit.",
+      recommendation: "Narrow the operation before retrying.",
+      start_event_id: 10,
+      end_event_id: 10,
+      evidence_event_ids: [10],
+      evidence: { event_ids: [10] },
+    }]));
+    const findings = await getSessionFindings(7);
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/sessions/7/findings");
+    expect(findings[0]).toEqual(expect.objectContaining({
+      detector_key: "timeout",
+      basis: "observed",
+      evidence_event_ids: [10],
+    }));
   });
 
   it("surfaces FastAPI error details as the thrown message", async () => {

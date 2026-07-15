@@ -90,10 +90,8 @@ export interface SessionCard {
   duration_seconds: number;
   max_agent_events: number;
   finding_count: number;
-  pattern_risk_score: number;
-  top_finding_category: string | null;
-  top_finding_severity: string | null;
   top_finding_title: string | null;
+  top_finding_basis: FindingBasis | null;
   cost_usd: number;
   cost_available: boolean;
 }
@@ -188,21 +186,20 @@ export interface ToolActivity {
   persisted_result_bytes: number;
 }
 
-export interface RiskFinding {
+export type FindingBasis = "observed" | "estimated" | "inferred" | "associated";
+
+export interface SessionFinding {
   id: number;
   session_id: number;
-  severity: "low" | "medium" | "high" | string;
+  detector_key: string;
+  basis: FindingBasis;
   category: string;
   title: string;
   explanation: string;
-  pattern: string[];
-  support: number;
-  positive_support: number;
-  negative_support: number;
-  lift: number;
-  score: number;
+  recommendation: string | null;
   start_event_id: number | null;
   end_event_id: number | null;
+  evidence_event_ids: number[];
   evidence: Record<string, unknown>;
 }
 

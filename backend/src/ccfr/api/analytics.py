@@ -538,7 +538,7 @@ def cost_analytics(
                CAST(
                    ROUND(COALESCE((julianday(s.last_ts) - julianday(s.first_ts)) * 86400, 0)) AS INTEGER
                ) AS duration_seconds,
-               COALESCE((SELECT COUNT(*) FROM risk_findings rf WHERE rf.session_id = s.id), 0) AS finding_count,
+               COALESCE((SELECT COUNT(*) FROM session_findings sf WHERE sf.session_id = s.id), 0) AS finding_count,
                {cols}
         FROM messages m
         JOIN events e ON e.id = m.event_id

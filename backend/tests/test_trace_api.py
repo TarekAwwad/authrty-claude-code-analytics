@@ -28,10 +28,13 @@ def test_list_sessions_includes_new_signal_fields(tmp_path: Path) -> None:
         "max_repeat",
         "max_agent_events",
         "finding_count",
-        "pattern_risk_score",
     ):
         assert key in sample
         assert isinstance(sample[key], int | float)
+    assert "top_finding_title" in sample
+    assert "top_finding_basis" in sample
+    assert "pattern_risk_score" not in sample
+    assert "top_finding_severity" not in sample
     # Guard against silent all-zero bugs: the fixture has subagents, real
     # durations, and at least one tool call, so these aggregates must be populated.
     assert any(s["duration_seconds"] > 0 for s in sessions)

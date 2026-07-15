@@ -184,10 +184,8 @@ function appSession(id: number): SessionCard {
     duration_seconds: 1320,
     max_agent_events: 100,
     finding_count: 1,
-    pattern_risk_score: 42,
-    top_finding_category: null,
-    top_finding_severity: null,
     top_finding_title: null,
+    top_finding_basis: null,
     cost_usd: 0.48,
     cost_available: true,
   };

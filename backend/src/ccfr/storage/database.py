@@ -514,11 +514,14 @@ def init_db(conn: sqlite3.Connection) -> None:
         raise
 
 
+_SESSION_FINDINGS_ANALYSIS_VERSION = 2
+
+
 def _backfill_session_findings_once(conn: sqlite3.Connection) -> None:
     row = conn.execute(
         "SELECT version FROM analysis_metadata WHERE name = 'session_findings'"
     ).fetchone()
-    if row is not None and int(row[0]) >= 1:
+    if row is not None and int(row[0]) >= _SESSION_FINDINGS_ANALYSIS_VERSION:
         return
 
     from ccfr.analysis.session_findings import rebuild_session_findings
@@ -526,7 +529,7 @@ def _backfill_session_findings_once(conn: sqlite3.Connection) -> None:
     rebuild_session_findings(conn)
     conn.execute(
         """
-        INSERT INTO analysis_metadata(name, version) VALUES ('session_findings', 1)
+        INSERT INTO analysis_metadata(name, version) VALUES ('session_findings', 2)
         ON CONFLICT(name) DO UPDATE SET version = excluded.version
         """
     )

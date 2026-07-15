@@ -13,7 +13,7 @@ import type {
   ImportSummary,
   LimitsResponse,
   Project,
-  RiskFinding,
+  SessionFinding,
   RuntimeConfig,
   SearchResult,
   SessionCard,
@@ -169,7 +169,7 @@ export function getToolActivity(sessionId: number) {
 }
 
 export function getSessionFindings(sessionId: number) {
-  return request<RiskFinding[]>(`/sessions/${sessionId}/findings`);
+  return request<SessionFinding[]>(`/sessions/${sessionId}/findings`);
 }
 
 export function getEvent(eventId: number, includeRaw = true) {

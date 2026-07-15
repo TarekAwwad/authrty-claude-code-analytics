@@ -665,18 +665,10 @@ dd { margin: 0; min-width: 0; font-size: 11.5px; overflow-wrap: anywhere; }
 .inspector-advanced pre { margin: 9px 0 0; }
 .finding-list { display: grid; gap: 10px; }
 .finding-card { border: 1px solid var(--border); border-radius: 9px; padding: 10px; background: var(--bg); }
-.finding-card.sev-high { border-color: color-mix(in srgb, var(--err) 45%, var(--border)); }
-.finding-card.sev-medium { border-color: color-mix(in srgb, var(--loop) 42%, var(--border)); }
 .finding-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
 .finding-card-head b { padding: 2px 7px; border-radius: 999px; background: var(--raised); color: var(--muted); }
-.finding-card.sev-high .finding-card-head b { color: var(--err); background: color-mix(in srgb, var(--err) 14%, transparent); }
-.finding-card.sev-medium .finding-card-head b { color: var(--loop); background: color-mix(in srgb, var(--loop) 14%, transparent); }
 .finding-card h4 { margin: 8px 0 6px; font-size: 12px; color: var(--text); }
 .finding-card p { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
-.finding-metrics { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
-.finding-metrics span { padding: 2px 7px; border-radius: 999px; color: var(--faint); background: var(--raised); font-size: 10.5px; }
-.finding-pattern { list-style: none; margin: 9px 0 0; padding: 0; display: grid; gap: 4px; }
-.finding-pattern li { padding: 5px 7px; border-radius: 6px; background: var(--track); color: var(--text); font-size: 10.5px; overflow-wrap: anywhere; }
 .finding-jumps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
 .finding-jumps button { border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--accent); font-size: 10.5px; font-weight: 700; padding: 5px 8px; }
 pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--text);
