@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ccfr.analysis.metrics import compute_loop_stats
-from ccfr.analysis.risk_patterns import clear_risk_pattern_tables, rebuild_risk_patterns
+from ccfr.analysis.sequence_features import rebuild_sequence_features
 from ccfr.analysis.session_findings import rebuild_session_findings
 from ccfr.ingest.file_ext import file_ext_from_tool_input
 from ccfr.storage.database import init_db
@@ -300,7 +300,6 @@ def _delete_project_by_name(conn: sqlite3.Connection, export_name: str) -> None:
         "SELECT id FROM sessions WHERE project_id = ?", (project_id,)
     ).fetchall()]
     if session_ids:
-        clear_risk_pattern_tables(conn, session_ids=session_ids)
         sp = ",".join("?" * len(session_ids))
         conn.execute(
             f"""DELETE FROM content_blocks WHERE message_id IN (
@@ -377,7 +376,7 @@ def _finish_import_or_strand(
     already match what's on disk, so the next import_all_new() run's skip check
     (_project_needs_import) would treat these projects as unchanged and never
     retry them — even though their derived tables (event_edges, session_stats,
-    search_index, risk_findings/patterns) never got rebuilt. Roll back any
+    search_index, sequence features, session findings) never got rebuilt. Roll back any
     partial derived writes, null the signatures so the projects are re-imported
     on the next run, and mark the import failed before re-raising so callers
     (e.g. the API route) see the failure instead of a silently-stuck "running" row.
@@ -414,7 +413,7 @@ def _rebuild_derived(conn: sqlite3.Connection, session_ids: list[int], project_i
     _refresh_session_stats(conn, session_ids)
     _refresh_project_cwd(conn, project_ids)
     _populate_search(conn, project_ids)
-    rebuild_risk_patterns(conn, session_ids=session_ids)
+    rebuild_sequence_features(conn, session_ids=session_ids)
     rebuild_session_findings(conn, session_ids=session_ids)
 
 

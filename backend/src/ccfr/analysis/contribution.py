@@ -37,7 +37,7 @@ PASSTHROUGH_TOOLS = frozenset({
     "BashOutput", "KillShell", "ExitPlanMode",
 })
 
-# Mirror the closed vocabularies produced by risk_patterns._command_family / _error_class.
+# Mirror the closed vocabularies produced by sequence_features classifiers.
 # Unknown values bucket to a safe generic ("other"), never echoed content.
 COMMAND_FAMILIES = frozenset({
     "empty", "test", "lint_typecheck", "build", "git", "deps", "delete",
@@ -75,7 +75,7 @@ def sanitize_symbol(symbol: str, family: str) -> str:
     """Re-bucket a precomputed event_features symbol into the closed vocabulary.
 
     event_features.symbol is mostly closed by construction (CALL:Bash:<family>,
-    RESULT:error:<class>, CALL:inspect:Read, ...), but risk_patterns' fallback
+    RESULT:error:<class>, CALL:inspect:Read, ...), but the builder's fallback
     emits CALL:<raw_tool_name> for unrecognized tools (including user-configured
     mcp__<server>__<tool> names). Collapse those; validate the rest defensively.
     """
@@ -149,7 +149,7 @@ class ContributionBundle:
 
 def _session_sequence(conn: sqlite3.Connection, session_pk: int) -> list[dict]:
     # Source structural symbols from precomputed event_features (populated by
-    # rebuild_risk_patterns at import). Restrict to the session_main + sidechain
+    # rebuild_sequence_features at import). Restrict to the session_main + sidechain
     # slices so each event's features appear exactly once (turn slices are subsets
     # of session_main). NO content column (raw_json / *_preview / attributes_json)
     # is read here.
@@ -218,7 +218,7 @@ def build_contribution(
             "tokens": _session_tokens(conn, session_pk),
             "stats": _session_stats(conn, session_pk),
             "stop_reasons": _session_stop_reasons(conn, session_pk),
-            "risk_categories": _session_risk_categories(conn, session_pk),
+            "risk_categories": _session_finding_categories(conn, session_pk),
             "subagents": _session_subagents(conn, session_pk),
             "sequence": _session_sequence(conn, session_pk),
         })
@@ -304,9 +304,9 @@ def _session_stop_reasons(conn: sqlite3.Connection, session_pk: int) -> dict:
     return counts
 
 
-def _session_risk_categories(conn: sqlite3.Connection, session_pk: int) -> list[str]:
+def _session_finding_categories(conn: sqlite3.Connection, session_pk: int) -> list[str]:
     rows = conn.execute(
-        "SELECT DISTINCT category FROM risk_findings WHERE session_id = ? ORDER BY category",
+        "SELECT DISTINCT category FROM session_findings WHERE session_id = ? ORDER BY category",
         (session_pk,),
     ).fetchall()
     return [str(r["category"]) for r in rows]

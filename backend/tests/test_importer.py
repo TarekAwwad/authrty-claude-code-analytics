@@ -191,8 +191,6 @@ def test_reimport_replaces_without_orphaning_derived_rows(tmp_path: Path) -> Non
             "search_index",
             "event_features",
             "sequence_slices",
-            "sequence_patterns",
-            "risk_findings",
             "session_findings",
             "projects",
         )
@@ -210,8 +208,6 @@ def test_reimport_replaces_without_orphaning_derived_rows(tmp_path: Path) -> Non
             "search_index",
             "event_features",
             "sequence_slices",
-            "sequence_patterns",
-            "risk_findings",
             "session_findings",
             "projects",
         )
@@ -299,7 +295,7 @@ def test_reimport_progress_does_not_double_count_replaced_project(tmp_path: Path
     assert repository.cache_stats(conn)["session_count"] == 2
 
 
-def test_import_project_keeps_unrelated_risk_analysis(tmp_path: Path) -> None:
+def test_import_project_keeps_unrelated_sequence_features(tmp_path: Path) -> None:
     from ccfr.ingest import import_all_new, import_project
 
     _write_project(tmp_path, "d--Alpha", "11111111-1111-1111-1111-111111111111")
@@ -328,6 +324,36 @@ def test_import_project_keeps_unrelated_risk_analysis(tmp_path: Path) -> None:
         "SELECT COUNT(*) FROM event_features WHERE session_id = ?",
         (beta_session,),
     ).fetchone()[0] == beta_feature_count
+
+
+def test_import_builds_only_neutral_sequence_features(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import ccfr.ingest.importer as importer
+    from ccfr.ingest import import_export
+
+    def legacy_rebuild_was_called(*_args, **_kwargs) -> None:
+        raise AssertionError("legacy risk-pattern rebuild must not run")
+
+    monkeypatch.setattr(
+        importer,
+        "rebuild_risk_patterns",
+        legacy_rebuild_was_called,
+        raising=False,
+    )
+    _write_project(tmp_path, "d--Alpha", "11111111-1111-1111-1111-111111111111")
+    conn = memory_conn()
+
+    import_export(conn, tmp_path)
+
+    assert conn.execute("SELECT COUNT(*) FROM event_features").fetchone()[0] > 0
+    assert conn.execute("SELECT COUNT(*) FROM sequence_slices").fetchone()[0] > 0
+    tables = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    assert {"sequence_patterns", "pattern_hits", "risk_findings"}.isdisjoint(tables)
 
 
 def test_import_project_unknown_name_raises(tmp_path: Path) -> None:

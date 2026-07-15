@@ -232,53 +232,6 @@ CREATE INDEX IF NOT EXISTS idx_event_features_session ON event_features(session_
 CREATE INDEX IF NOT EXISTS idx_event_features_slice_pos ON event_features(sequence_slice_id, position);
 CREATE INDEX IF NOT EXISTS idx_event_features_symbol ON event_features(symbol);
 
-CREATE TABLE IF NOT EXISTS sequence_patterns (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind TEXT NOT NULL,
-    pattern_json TEXT NOT NULL,
-    support INTEGER NOT NULL DEFAULT 0,
-    positive_support INTEGER NOT NULL DEFAULT 0,
-    negative_support INTEGER NOT NULL DEFAULT 0,
-    lift REAL NOT NULL DEFAULT 0,
-    score REAL NOT NULL DEFAULT 0,
-    label TEXT,
-    explanation TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_sequence_patterns_kind ON sequence_patterns(kind);
-CREATE INDEX IF NOT EXISTS idx_sequence_patterns_score ON sequence_patterns(score);
-
-CREATE TABLE IF NOT EXISTS pattern_hits (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    pattern_id INTEGER NOT NULL REFERENCES sequence_patterns(id) ON DELETE CASCADE,
-    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    sequence_slice_id INTEGER NOT NULL REFERENCES sequence_slices(id) ON DELETE CASCADE,
-    start_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
-    end_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
-    evidence_json TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE INDEX IF NOT EXISTS idx_pattern_hits_session ON pattern_hits(session_id);
-CREATE INDEX IF NOT EXISTS idx_pattern_hits_pattern ON pattern_hits(pattern_id);
-
-CREATE TABLE IF NOT EXISTS risk_findings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    severity TEXT NOT NULL,
-    category TEXT NOT NULL,
-    title TEXT NOT NULL,
-    explanation TEXT NOT NULL,
-    pattern_id INTEGER REFERENCES sequence_patterns(id) ON DELETE SET NULL,
-    start_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
-    end_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
-    score REAL NOT NULL DEFAULT 0,
-    evidence_json TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE INDEX IF NOT EXISTS idx_risk_findings_session ON risk_findings(session_id);
-CREATE INDEX IF NOT EXISTS idx_risk_findings_category ON risk_findings(category);
-CREATE INDEX IF NOT EXISTS idx_risk_findings_score ON risk_findings(score);
-
 CREATE TABLE IF NOT EXISTS session_findings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -367,10 +320,7 @@ DROP_TABLES = [
     "team_bundle_sessions",
     "team_bundles",
     "session_findings",
-    "risk_findings",
-    "pattern_hits",
     "event_features",
-    "sequence_patterns",
     "sequence_slices",
     "import_errors",
     "session_stats",
@@ -402,6 +352,8 @@ def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
 
 def migrate_db(conn: sqlite3.Connection) -> None:
     """Apply lightweight migrations for databases created by older app versions."""
+    _drop_legacy_risk_tables(conn)
+
     existing_message_columns = _column_names(conn, "messages")
     for name, definition in MESSAGE_COST_COLUMNS.items():
         if name not in existing_message_columns:
@@ -457,6 +409,12 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     if tool_call_columns and "file_ext" not in tool_call_columns:
         conn.execute("ALTER TABLE tool_calls ADD COLUMN file_ext TEXT")
         _backfill_tool_call_file_ext(conn)
+
+
+def _drop_legacy_risk_tables(conn: sqlite3.Connection) -> None:
+    """Remove obsolete inferred-pattern caches while preserving receipt findings."""
+    for table in ("risk_findings", "pattern_hits", "sequence_patterns"):
+        conn.execute(f"DROP TABLE IF EXISTS {table}")
 
 
 def _backfill_tool_call_file_ext(conn: sqlite3.Connection) -> None:

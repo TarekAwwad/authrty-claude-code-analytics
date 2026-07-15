@@ -16,6 +16,7 @@ from ccfr.analysis.discovery import (
     discovery_analytics,
     Subject,
 )
+from ccfr.analysis.sequence_features import rebuild_sequence_features
 from ccfr.api.deps import get_db
 from ccfr.main import create_app
 from ccfr.storage import init_db
@@ -254,34 +255,62 @@ def _seed(conn: sqlite3.Connection) -> tuple[int, int]:
             (event_id, session_id, tool_use_id, 1 if is_error else 0),
         )
 
-    # Rejection signal: 40 git-activity slices rejected 70% of the time vs 40
-    # inspect/read slices that are almost always clean.
+    # Rejection signal: 40 git-activity turns rejected 70% of the time vs 40
+    # inspect/read turns that are almost always clean. Seed raw receipts and let
+    # the neutral feature builder derive non-overlapping turn subjects.
     for index in range(80):
         session_id = sessions[index % len(sessions)]
+        conn.execute(
+            """
+            INSERT INTO events(session_id, source_path, line_no, type, timestamp, raw_json)
+            VALUES (?, 'slices.jsonl', ?, 'user', '2026-01-01T00:20:00Z', '{}')
+            """,
+            (session_id, index * 2 + 1),
+        )
+        prompt_event_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+        conn.execute(
+            """
+            INSERT INTO messages(event_id, role, text_preview)
+            VALUES (?, 'user', 'request')
+            """,
+            (prompt_event_id,),
+        )
         event_id = int(conn.execute(
             """
             INSERT INTO events(session_id, source_path, line_no, type, timestamp, raw_json)
             VALUES (?, 'slices.jsonl', ?, 'assistant', '2026-01-01T00:20:00Z', '{}')
             """,
-            (session_id, index + 1),
+            (session_id, index * 2 + 2),
         ).lastrowid)
         is_git = index < 40
         rejected = (is_git and index < 28) or (not is_git and index >= 78)
-        slice_id = int(conn.execute(
-            """
-            INSERT INTO sequence_slices(session_id, kind, lane, start_event_id, end_event_id, outcome, length, duration_seconds)
-            VALUES (?, 'turn', 'main', ?, ?, ?, 4, 60)
-            """,
-            (session_id, event_id, event_id, "rejected" if rejected else "clean"),
-        ).lastrowid)
-        symbol = "CALL:Bash:git" if is_git else "CALL:inspect:Read"
+        tool_name = "Bash" if is_git else "Read"
+        command = "git status --short" if is_git else ""
+        tool_use_id = f"rejection-call-{index}"
+        raw_json = f'{{"input": {{"command": "{command}"}}}}' if is_git else "{}"
         conn.execute(
             """
-            INSERT INTO event_features(event_id, session_id, sequence_slice_id, position, symbol, family, attributes_json)
-            VALUES (?, ?, ?, 0, ?, 'tool_call', '{}')
+            INSERT INTO tool_calls(
+                event_id, session_id, tool_use_id, tool_name, input_preview, raw_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (event_id, session_id, slice_id, symbol),
+            (event_id, session_id, tool_use_id, tool_name, command, raw_json),
         )
+        conn.execute(
+            """
+            INSERT INTO tool_results(
+                event_id, session_id, tool_use_id, is_error, output_preview, raw_json
+            ) VALUES (?, ?, ?, ?, ?, '{}')
+            """,
+            (
+                event_id,
+                session_id,
+                tool_use_id,
+                1 if rejected else 0,
+                "Denied by user" if rejected else "ok",
+            ),
+        )
+    rebuild_sequence_features(conn)
     conn.commit()
     return alpha, beta
 

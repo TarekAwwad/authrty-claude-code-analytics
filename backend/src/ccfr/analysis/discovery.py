@@ -9,7 +9,7 @@ from statistics import NormalDist
 from typing import Any
 
 from ccfr.analysis.pricing import TokenBreakdown, cost_usd, load_price_timeline, match_price
-from ccfr.analysis.risk_patterns import _command_family
+from ccfr.analysis.sequence_features import _command_family
 from ccfr.naming import project_display_name
 from ccfr.config import pricing_dir, pricing_path
 
@@ -476,7 +476,8 @@ def _rejection_slice_subjects(conn: sqlite3.Connection, *, project_id: int | Non
         FROM sequence_slices ss
         JOIN sessions s ON s.id = ss.session_id
         JOIN projects p ON p.id = s.project_id
-        {_project_where(project_id, "s")}
+        WHERE ss.kind = 'turn'
+        {"AND s.project_id = ?" if project_id is not None else ""}
         ORDER BY ss.id
         """,
         _project_params(project_id),

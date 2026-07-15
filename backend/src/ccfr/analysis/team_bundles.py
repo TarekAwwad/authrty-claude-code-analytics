@@ -326,7 +326,7 @@ def build_team_bundle(
             "tokens_by_model": _session_tokens_by_model(conn, session_pk),
             "stats": contribution_helpers._session_stats(conn, session_pk),
             "stop_reasons": contribution_helpers._session_stop_reasons(conn, session_pk),
-            "risk_categories": contribution_helpers._session_risk_categories(conn, session_pk),
+            "risk_categories": contribution_helpers._session_finding_categories(conn, session_pk),
             "sequence": contribution_helpers._session_sequence(conn, session_pk),
         }
         if privacy_level == LEVEL_TEAM:

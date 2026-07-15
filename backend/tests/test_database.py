@@ -276,6 +276,80 @@ def test_init_db_creates_exact_session_findings_schema_and_basis_constraint() ->
         )
 
 
+def test_init_db_drops_legacy_risk_tables_without_losing_session_findings() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    session_id = _insert_session(conn)
+    conn.execute(
+        """
+        INSERT INTO session_findings(
+            session_id, finding_key, detector_key, basis, category, title, explanation
+        ) VALUES (?, 'keep-me', 'fixture', 'observed', 'execution', 'Keep me', 'Observed receipt.')
+        """,
+        (session_id,),
+    )
+    conn.executescript(
+        """
+        DROP TABLE IF EXISTS risk_findings;
+        DROP TABLE IF EXISTS pattern_hits;
+        DROP TABLE IF EXISTS sequence_patterns;
+        CREATE TABLE IF NOT EXISTS sequence_patterns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            pattern_json TEXT NOT NULL,
+            support INTEGER NOT NULL DEFAULT 0,
+            positive_support INTEGER NOT NULL DEFAULT 0,
+            negative_support INTEGER NOT NULL DEFAULT 0,
+            lift REAL NOT NULL DEFAULT 0,
+            score REAL NOT NULL DEFAULT 0,
+            label TEXT,
+            explanation TEXT
+        );
+        CREATE TABLE IF NOT EXISTS pattern_hits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pattern_id INTEGER,
+            session_id INTEGER,
+            sequence_slice_id INTEGER,
+            start_event_id INTEGER,
+            end_event_id INTEGER,
+            evidence_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE IF NOT EXISTS risk_findings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            severity TEXT NOT NULL,
+            category TEXT NOT NULL,
+            title TEXT NOT NULL,
+            explanation TEXT NOT NULL,
+            pattern_id INTEGER,
+            start_event_id INTEGER,
+            end_event_id INTEGER,
+            score REAL NOT NULL DEFAULT 0,
+            evidence_json TEXT NOT NULL DEFAULT '{}'
+        );
+        INSERT INTO sequence_patterns(kind, pattern_json) VALUES ('legacy', '[]');
+        INSERT INTO pattern_hits(pattern_id, session_id, sequence_slice_id) VALUES (1, 1, 1);
+        INSERT INTO risk_findings(session_id, severity, category, title, explanation)
+        VALUES (1, 'high', 'legacy', 'Legacy', 'Legacy');
+        """
+    )
+    conn.commit()
+
+    init_db(conn)
+
+    tables = {
+        row["name"]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    assert {"sequence_patterns", "pattern_hits", "risk_findings"}.isdisjoint(tables)
+    finding = conn.execute(
+        "SELECT finding_key, title FROM session_findings WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    assert tuple(finding) == ("keep-me", "Keep me")
+
+
 def test_init_db_backfills_existing_cache_once_even_when_later_receipts_change() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
