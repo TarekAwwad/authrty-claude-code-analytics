@@ -108,9 +108,16 @@ export default function ContextEconomics({ projects, onOpenSession }: Props) {
           </div>
         </div>
 
-        {!meta.cost_available && (
-          <p className="tile-note">Price table unavailable — showing token counts only.</p>
-        )}
+        {meta.costs_partial ? (
+          <p className="tile-note">
+            Pricing is partial — dollar estimates exclude unpriced models: {meta.unpriced_models.join(", ")}.
+            Percentage breakdowns are hidden.
+          </p>
+        ) : !meta.cost_available ? (
+          <p className="tile-note">
+            Price table unavailable — estimated context opportunity is shown in tokens only.
+          </p>
+        ) : null}
 
         <TaxMeterHero
           meta={meta}
@@ -122,10 +129,15 @@ export default function ContextEconomics({ projects, onOpenSession }: Props) {
         {activeArchetype ? (
           <div className="context-board">
             <div className="context-side">
-              <ArchetypeBrief archetype={activeArchetype} costAvailable={meta.cost_available} />
+              <ArchetypeBrief
+                archetype={activeArchetype}
+                costAvailable={meta.cost_available}
+                costsPartial={meta.costs_partial}
+              />
               <FindingsPanel
                 archetype={activeArchetype}
                 costAvailable={meta.cost_available}
+                costsPartial={meta.costs_partial}
                 activeFindingKey={activeFinding ? findingKey(activeFinding) : null}
                 onSelectFinding={(finding) => setSelectedFindingKey(findingKey(finding))}
               />

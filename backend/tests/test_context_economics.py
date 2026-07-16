@@ -831,18 +831,43 @@ def economics_conn(conn: sqlite3.Connection, tmp_path: Path,
     return conn
 
 
-def test_corpus_payload_hero_math_is_consistent(economics_conn: sqlite3.Connection) -> None:
+CONTEXT_ECONOMICS_META_KEYS = {
+    "project_id",
+    "min_support",
+    "recorded_api_equivalent_usd",
+    "opportunity_usd",
+    "unattributed_usd",
+    "opportunity_tokens",
+    "cost_available",
+    "costs_partial",
+    "unpriced_models",
+    "sessions_analyzed",
+    "sessions_skipped",
+    "trend",
+}
+
+
+def test_corpus_payload_uses_estimated_opportunity_contract(
+    economics_conn: sqlite3.Connection,
+) -> None:
     payload = context_economics_analytics(economics_conn, min_support=3)
     meta = payload["meta"]
 
+    assert set(meta) == CONTEXT_ECONOMICS_META_KEYS
     assert meta["cost_available"] is True
+    assert meta["costs_partial"] is False
+    assert meta["unpriced_models"] == []
     assert meta["sessions_analyzed"] == 3 and meta["sessions_skipped"] == 0
-    assert meta["total_usd"] > 0
-    assert meta["avoidable_usd"] == pytest.approx(
+    assert meta["recorded_api_equivalent_usd"] > 0
+    assert meta["opportunity_usd"] == pytest.approx(
         sum(a["savings_usd"] for a in payload["archetypes"] if a["meets_support"])
     )
-    assert meta["necessary_usd"] == pytest.approx(meta["total_usd"] - meta["avoidable_usd"])
-    assert meta["avoidable_usd"] <= meta["total_usd"]
+    assert meta["unattributed_usd"] == pytest.approx(
+        meta["recorded_api_equivalent_usd"] - meta["opportunity_usd"]
+    )
+    assert meta["opportunity_usd"] <= meta["recorded_api_equivalent_usd"]
+    assert "necessary_usd" not in meta
+    assert "avoidable_token_share" not in meta
 
     keys = [a["key"] for a in payload["archetypes"]]
     assert keys == ["rereads", "oversized", "late_compaction", "stale_continuation"]
@@ -860,7 +885,7 @@ def test_corpus_payload_gates_archetypes_below_support(economics_conn: sqlite3.C
     rereads = payload["archetypes"][0]
     assert rereads["meets_support"] is False
     assert rereads["findings"] == [] and rereads["savings_usd"] == 0
-    assert payload["meta"]["avoidable_usd"] == 0
+    assert payload["meta"]["opportunity_usd"] == 0
 
 
 def test_corpus_payload_weekly_trend_buckets_total_and_avoidable(
@@ -874,7 +899,9 @@ def test_corpus_payload_weekly_trend_buckets_total_and_avoidable(
         assert datetime.fromisoformat(bucket["week_start"]).weekday() == 0
         assert 0 <= bucket["avoidable_usd"] <= bucket["total_usd"] + 1e-9
     # weekly totals partition the corpus total (same pricing + skip rules)
-    assert sum(b["total_usd"] for b in trend) == pytest.approx(payload["meta"]["total_usd"])
+    assert sum(b["total_usd"] for b in trend) == pytest.approx(
+        payload["meta"]["recorded_api_equivalent_usd"]
+    )
     assert sum(b["avoidable_usd"] for b in trend) > 0
 
 
@@ -886,34 +913,34 @@ def test_corpus_payload_without_pricing_is_token_only(
     add_session(conn, uuid="np", calls=[{"context": 10_000, "minute": 1}])
     payload = context_economics_analytics(conn)
     assert payload["meta"]["cost_available"] is False
-    assert payload["meta"]["total_usd"] == 0
+    assert payload["meta"]["costs_partial"] is False
+    assert payload["meta"]["recorded_api_equivalent_usd"] == 0
+    assert payload["meta"]["opportunity_usd"] == 0
+    assert payload["meta"]["unattributed_usd"] == 0
+    assert payload["meta"]["unpriced_models"] == ["claude-sonnet-4-6"]
     assert payload["meta"]["trend"] == []
 
 
-def test_corpus_payload_exposes_token_currency(economics_conn: sqlite3.Connection) -> None:
+def test_corpus_payload_exposes_absolute_opportunity_tokens(
+    economics_conn: sqlite3.Connection,
+) -> None:
     payload = context_economics_analytics(economics_conn, min_support=3)
     meta = payload["meta"]
 
-    assert meta["total_tokens"] > 0
-    raw_avoidable = sum(
+    raw_opportunity = sum(
         a["savings_tokens"] for a in payload["archetypes"] if a["meets_support"]
     )
-    # avoidable_tokens mirrors the supported archetypes' token savings, clamped so
-    # it can never exceed the corpus's own total (the same honesty clamp the USD
-    # headline uses).
-    assert meta["avoidable_tokens"] == min(raw_avoidable, meta["total_tokens"])
-    assert meta["avoidable_tokens"] <= meta["total_tokens"]
-    # abs=5e-7 because the share is rounded to 6 decimal places in the payload.
-    assert meta["avoidable_token_share"] == pytest.approx(
-        meta["avoidable_tokens"] / meta["total_tokens"], abs=5e-7
-    )
+    assert meta["opportunity_tokens"] > 0
+    assert meta["opportunity_tokens"] <= raw_opportunity
+    assert "total_tokens" not in meta
+    assert "avoidable_tokens" not in meta
+    assert "avoidable_token_share" not in meta
 
 
 def test_corpus_payload_token_currency_survives_missing_pricing(
     conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Tokens are a price-independent currency: they must be populated even when no
-    # price table is loaded (the whole point of this framing for Max users).
+    # Tokens are price-independent and remain useful when no price table exists.
     monkeypatch.setattr(context_economics, "pricing_path", lambda: tmp_path / "missing.csv")
     monkeypatch.setattr(context_economics, "pricing_dir", lambda: tmp_path / "pricing")
     for n in range(3):
@@ -928,10 +955,32 @@ def test_corpus_payload_token_currency_survives_missing_pricing(
     meta = payload["meta"]
 
     assert meta["cost_available"] is False
-    assert meta["total_usd"] == 0
-    assert meta["total_tokens"] > 0
-    assert meta["avoidable_tokens"] > 0
-    assert 0 < meta["avoidable_token_share"] <= 1
+    assert meta["recorded_api_equivalent_usd"] == 0
+    assert meta["opportunity_tokens"] > 0
+    assert "avoidable_token_share" not in meta
+
+
+def test_corpus_payload_marks_partial_pricing_and_names_unpriced_models(
+    economics_conn: sqlite3.Connection,
+) -> None:
+    # A used message with no matching price makes corpus dollar values partial.
+    economics_conn.execute(
+        "UPDATE messages SET model = 'custom-unpriced-model' WHERE event_id = "
+        "(SELECT MIN(event_id) FROM messages)"
+    )
+    economics_conn.commit()
+
+    payload = context_economics_analytics(economics_conn, min_support=3)
+    meta = payload["meta"]
+
+    assert meta["cost_available"] is True
+    assert meta["costs_partial"] is True
+    assert meta["unpriced_models"] == ["custom-unpriced-model"]
+    assert meta["recorded_api_equivalent_usd"] >= meta["opportunity_usd"] >= 0
+    assert meta["unattributed_usd"] == pytest.approx(
+        max(0, meta["recorded_api_equivalent_usd"] - meta["opportunity_usd"])
+    )
+    assert "avoidable_token_share" not in meta
 
 
 def test_corpus_payload_empty_db_is_stable(conn: sqlite3.Connection, tmp_path: Path,
@@ -1059,6 +1108,7 @@ def test_context_economics_endpoints(economics_conn: sqlite3.Connection, tmp_pat
 
     assert corpus.status_code == 200
     body = corpus.json()
+    assert set(body["meta"]) == CONTEXT_ECONOMICS_META_KEYS
     assert body["meta"]["min_support"] == 3
     assert [a["key"] for a in body["archetypes"]] == [
         "rereads", "oversized", "late_compaction", "stale_continuation",

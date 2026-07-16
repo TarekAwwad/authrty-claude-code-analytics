@@ -514,14 +514,13 @@ class ContextTrendBucket(BaseModel):
 class ContextEconomicsMeta(BaseModel):
     project_id: int | None = None
     min_support: int = 3
-    total_usd: float = 0
-    necessary_usd: float = 0
-    avoidable_usd: float = 0
-    unattributed_tokens: int = 0
-    total_tokens: int = 0
-    avoidable_tokens: int = 0
-    avoidable_token_share: float = 0
+    recorded_api_equivalent_usd: float = 0
+    opportunity_usd: float = 0
+    unattributed_usd: float = 0
+    opportunity_tokens: int = 0
     cost_available: bool = False
+    costs_partial: bool = False
+    unpriced_models: list[str] = Field(default_factory=list)
     sessions_analyzed: int = 0
     sessions_skipped: int = 0
     trend: list[ContextTrendBucket] = Field(default_factory=list)

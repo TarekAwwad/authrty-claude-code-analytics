@@ -75,7 +75,7 @@ def test_all_four_context_archetypes_meet_support(tmp_path, monkeypatch):
     payload = context_economics_analytics(conn, min_support=3)
 
     assert payload["meta"]["cost_available"] is True
-    assert payload["meta"]["avoidable_usd"] > 0
+    assert payload["meta"]["opportunity_usd"] > 0
     by_key = {a["key"]: a for a in payload["archetypes"]}
     for key in ("rereads", "oversized", "late_compaction", "stale_continuation"):
         assert by_key[key]["meets_support"] is True, key

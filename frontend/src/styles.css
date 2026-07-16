@@ -1896,8 +1896,8 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
 /* ---- Context economics ---- */
 .context-economics { display: contents; }
 
-/* Tax meter hero — gradient card matching session-header chrome */
-.tax-meter-hero {
+/* Estimated context opportunity — gradient card matching session-header chrome */
+.opportunity-meter-hero {
   padding: 20px 22px;
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -1907,20 +1907,20 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
   background: var(--raised);
 }
 
-.tax-meter-stats {
+.opportunity-meter-stats {
   display: flex;
   align-items: flex-end;
   gap: 36px;
   flex-wrap: wrap;
 }
 
-.tax-meter-stat {
+.opportunity-meter-stat {
   display: flex;
   flex-direction: column;
   gap: 5px;
 }
 
-.tax-meter-stat > span {
+.opportunity-meter-stat > span {
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -1928,7 +1928,7 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
   color: var(--faint);
 }
 
-.tax-meter-stat > strong {
+.opportunity-meter-stat > strong {
   font-size: 18px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -1936,31 +1936,29 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
   line-height: 1.05;
 }
 
-.tax-meter-stat > strong em {
+.opportunity-meter-stat > strong em {
   font-style: normal;
   font-size: 13px;
   color: var(--muted);
   margin-left: 3px;
 }
 
-.tax-meter-stat.is-avoidable > strong {
+.opportunity-meter-stat.is-opportunity > strong {
   font-size: 32px;
   color: var(--warning);
 }
 
-.tax-meter-stat.is-avoidable > strong em {
+.opportunity-meter-stat.is-opportunity > strong em {
   font-size: 15px;
   color: color-mix(in srgb, var(--warning) 70%, var(--muted));
 }
 
-.tax-meter-unavailable {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 700;
+.opportunity-meter-token-note {
+  font-size: 11px;
   color: var(--muted);
 }
 
-.tax-meter-bar {
+.opportunity-meter-bar {
   display: flex;
   height: 12px;
   border-radius: 6px;
@@ -1969,11 +1967,11 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
   border: 1px solid var(--border);
 }
 
-.tax-meter-bar i { display: block; height: 100%; }
-.tax-meter-necessary { background: var(--neutral-visual); opacity: 0.35; }
+.opportunity-meter-bar i { display: block; height: 100%; }
+.opportunity-meter-unattributed { background: var(--neutral-visual); opacity: 0.35; }
 
 /* Bar segments are buttons: click jumps to the matching archetype card */
-.tax-meter-segment {
+.opportunity-meter-segment {
   display: block;
   height: 100%;
   border: 0;
@@ -1982,9 +1980,9 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
   transition: filter .12s ease;
 }
 
-.tax-meter-segment:hover { filter: brightness(1.18); }
+.opportunity-meter-segment:hover { filter: brightness(1.18); }
 
-.tax-meter-legend {
+.opportunity-meter-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 5px 14px;
@@ -1994,7 +1992,7 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
 
 /* Legend entries are the archetype navigation: chip-styled so they read as
    clickable, with the selected archetype tinted in its color. */
-.tax-meter-legend-item {
+.opportunity-meter-legend-item {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -2008,36 +2006,36 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
   transition: border-color .12s ease, background .12s ease, color .12s ease;
 }
 
-.tax-meter-legend-item:not(.is-static):hover {
+.opportunity-meter-legend-item:not(.is-static):hover {
   border-color: color-mix(in srgb, var(--archetype-color, var(--accent)) 55%, var(--border));
   color: var(--text);
 }
 
-.tax-meter-legend-item.is-active {
+.opportunity-meter-legend-item.is-active {
   border-color: color-mix(in srgb, var(--archetype-color, var(--accent)) 60%, var(--border));
   background: color-mix(in srgb, var(--archetype-color, var(--accent)) 10%, var(--surface));
   color: var(--text);
 }
 
-.tax-meter-legend-item.is-static {
+.opportunity-meter-legend-item.is-static {
   cursor: default;
   border-style: dashed;
   background: transparent;
 }
 
-.tax-meter-legend-item:disabled {
+.opportunity-meter-legend-item:disabled {
   opacity: 0.5;
   cursor: default;
 }
-.tax-meter-legend i { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
-.tax-meter-legend b {
+.opportunity-meter-legend i { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
+.opportunity-meter-legend b {
   font-weight: 600;
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 
 /* Weekly trend sparkline in the hero stat row */
-.tax-meter-trend {
+.opportunity-meter-trend {
   margin-left: auto;
   display: flex;
   flex-direction: column;
@@ -2045,7 +2043,7 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
   align-items: flex-end;
 }
 
-.tax-meter-trend > span {
+.opportunity-meter-trend > span {
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -2053,15 +2051,15 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
   color: var(--faint);
 }
 
-.tax-meter-trend svg {
+.opportunity-meter-trend svg {
   width: 160px;
   height: 40px;
   display: block;
 }
 
-.trend-total { fill: var(--neutral-visual); opacity: 0.22; }
-.trend-avoidable { fill: var(--warning); opacity: 0.9; }
-.tax-meter-necessary-swatch { background: var(--neutral-visual); opacity: 0.35; }
+.trend-recorded-cost { fill: var(--neutral-visual); opacity: 0.22; }
+.trend-opportunity { fill: var(--warning); opacity: 0.9; }
+.opportunity-meter-unattributed-swatch { background: var(--neutral-visual); opacity: 0.35; }
 
 .archetype-dot {
   width: 8px;
@@ -2582,7 +2580,7 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
 
 @media (max-width: 760px) {
   .ballast-lane { grid-template-columns: 130px 1fr 90px; }
-  .tax-meter-trend { margin-left: 0; align-items: flex-start; }
+  .opportunity-meter-trend { margin-left: 0; align-items: flex-start; }
 }
 
 /* --- Usage map (force-directed) -------------------------------------------- */

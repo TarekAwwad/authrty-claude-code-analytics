@@ -11,9 +11,11 @@ import { ARCHETYPE_COLORS } from "./TaxMeterHero";
 export default function ArchetypeBrief({
   archetype,
   costAvailable,
+  costsPartial,
 }: {
   archetype: ContextArchetype;
   costAvailable: boolean;
+  costsPartial: boolean;
 }) {
   const [showMath, setShowMath] = React.useState(false);
   const color = ARCHETYPE_COLORS[archetype.key] ?? "var(--accent)";
@@ -26,7 +28,9 @@ export default function ArchetypeBrief({
           {archetype.title}
         </h3>
         <strong className="archetype-savings" style={{ color }}>
-          {costAvailable ? formatUsd(archetype.savings_usd) : formatTokens(archetype.savings_tokens)}
+          {costAvailable
+            ? `${costsPartial ? "≥" : ""}${formatUsd(archetype.savings_usd)}`
+            : formatTokens(archetype.savings_tokens)}
         </strong>
       </header>
       {archetype.description && (

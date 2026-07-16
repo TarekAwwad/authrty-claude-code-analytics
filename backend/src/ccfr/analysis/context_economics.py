@@ -857,8 +857,14 @@ def _corpus_total_tokens(conn: sqlite3.Connection, project_id: int | None) -> in
     return int(row["total"] or 0)
 
 
-def _corpus_total_usd(conn: sqlite3.Connection, project_id: int | None,
-                      timeline: PriceTimeline, *, historical: bool = True) -> float:
+def _corpus_cost_summary(
+    conn: sqlite3.Connection,
+    project_id: int | None,
+    timeline: PriceTimeline,
+    *,
+    historical: bool = True,
+) -> tuple[float, list[str]]:
+    """Known corpus cost and models whose used messages could not be priced."""
     where, params = "", []
     if project_id is not None:
         where = "WHERE s.project_id = ?"
@@ -878,9 +884,17 @@ def _corpus_total_usd(conn: sqlite3.Connection, project_id: int | None,
         params,
     ).fetchall()
     total = 0.0
+    unpriced_models: set[str] = set()
     for row in rows:
-        price = match_price(timeline.table_for_period(row["price_period"], historical=historical), row["model"])
+        used_tokens = sum(
+            int(row[key] or 0) for key in ("base", "c5", "c1", "cr", "out")
+        )
+        if used_tokens <= 0:
+            continue
+        table = timeline.table_for_period(row["price_period"], historical=historical)
+        price = match_price(table, row["model"])
         if price is None:
+            unpriced_models.add(str(row["model"] or "unknown"))
             continue
         total += (
             (row["base"] or 0) * price.base_input
@@ -889,7 +903,15 @@ def _corpus_total_usd(conn: sqlite3.Connection, project_id: int | None,
             + (row["cr"] or 0) * price.cache_read
             + (row["out"] or 0) * price.output
         ) / 1_000_000
-    return total
+    return total, sorted(unpriced_models)
+
+
+def _corpus_total_usd(conn: sqlite3.Connection, project_id: int | None,
+                      timeline: PriceTimeline, *, historical: bool = True) -> float:
+    """Compatibility helper for callers that only need the known priced total."""
+    return _corpus_cost_summary(
+        conn, project_id, timeline, historical=historical,
+    )[0]
 
 
 TREND_WEEKS = 12
@@ -999,8 +1021,8 @@ def context_economics_analytics(
     }
 
     archetypes = []
-    avoidable = 0.0
-    avoidable_weekly: dict[str, float] = defaultdict(float)
+    opportunity = 0.0
+    opportunity_weekly: dict[str, float] = defaultdict(float)
     for spec in ARCHETYPES:
         findings, thresholds = results[spec["key"]]
         findings = sorted(findings, key=lambda f: f.savings_usd, reverse=True)
@@ -1008,11 +1030,11 @@ def context_economics_analytics(
         savings_usd = sum(f.savings_usd for f in findings) if meets else 0.0
         savings_tokens = sum(f.savings_tokens for f in findings) if meets else 0
         if meets:
-            avoidable += savings_usd
+            opportunity += savings_usd
             for finding in findings:
                 week = _week_start(finding.ts)
                 if week is not None:
-                    avoidable_weekly[week] += finding.savings_usd
+                    opportunity_weekly[week] += finding.savings_usd
         exemplar = None
         if meets and findings:
             top = findings[0]
@@ -1036,51 +1058,44 @@ def context_economics_analytics(
             "findings": [_finding_payload(f) for f in findings[:FINDINGS_LIMIT]] if meets else [],
         })
 
-    total_usd = _corpus_total_usd(conn, project_id, timeline, historical=historical) if cost_available else 0.0
-    # avoidable is a subset of carry reads/writes that are themselves part of
-    # total, so it should not exceed total. The clamp is defense-in-depth against
-    # the estimate-vs-actual gap (savings use calibrated token estimates; total
-    # uses billed counts), keeping the headline honest if they ever disagree.
-    avoidable = min(avoidable, total_usd) if cost_available else 0.0
-    unattributed = sum(
-        c.est_tokens for t in threads for c in t.contributors if c.kind == "unattributed"
+    recorded_usd, unpriced_models = _corpus_cost_summary(
+        conn, project_id, timeline, historical=historical,
     )
+    costs_partial = cost_available and bool(unpriced_models)
+    # Detected opportunity is modeled from a subset of recorded carry costs. The
+    # clamp protects the headline from estimate-vs-recorded calibration drift.
+    opportunity = min(opportunity, recorded_usd) if cost_available else 0.0
+    unattributed_usd = max(0.0, recorded_usd - opportunity)
     trend: list[dict[str, Any]] = []
     if cost_available:
         weekly_total = _corpus_weekly_usd(conn, project_id, timeline, historical=historical)
-        weeks = sorted(set(weekly_total) | set(avoidable_weekly))[-TREND_WEEKS:]
+        weeks = sorted(set(weekly_total) | set(opportunity_weekly))[-TREND_WEEKS:]
         trend = [
             {
                 "week_start": week,
                 "total_usd": round(weekly_total.get(week, 0.0), 6),
-                # Same honesty clamp as the headline: avoidable is a subset of
-                # that week's billed spend.
+                # Keep the existing trend wire format while presenting this as
+                # estimated opportunity in the UI.
                 "avoidable_usd": round(
-                    min(avoidable_weekly.get(week, 0.0), weekly_total.get(week, 0.0)), 6),
+                    min(opportunity_weekly.get(week, 0.0), weekly_total.get(week, 0.0)), 6),
             }
             for week in weeks
         ]
     total_tokens = _corpus_total_tokens(conn, project_id)
-    # avoidable_tokens is the token analogue of the avoidable_usd headline: the
-    # supported archetypes' one-time footprint savings, clamped so it can never
-    # exceed the corpus's own throughput (mirrors the avoidable_usd <= total_usd
-    # clamp above).
-    avoidable_tokens = min(
+    opportunity_tokens = min(
         sum(a["savings_tokens"] for a in archetypes), total_tokens
     )
-    avoidable_token_share = (avoidable_tokens / total_tokens) if total_tokens else 0.0
     return {
         "meta": {
             "project_id": project_id,
             "min_support": min_support,
-            "total_usd": round(total_usd, 6),
-            "necessary_usd": round(max(0.0, total_usd - avoidable), 6),
-            "avoidable_usd": round(avoidable, 6),
-            "unattributed_tokens": unattributed,
-            "total_tokens": total_tokens,
-            "avoidable_tokens": avoidable_tokens,
-            "avoidable_token_share": round(avoidable_token_share, 6),
+            "recorded_api_equivalent_usd": round(recorded_usd, 6),
+            "opportunity_usd": round(opportunity, 6),
+            "unattributed_usd": round(unattributed_usd, 6),
+            "opportunity_tokens": opportunity_tokens,
             "cost_available": cost_available,
+            "costs_partial": costs_partial,
+            "unpriced_models": unpriced_models,
             "sessions_analyzed": len({t.session_db_id for t in threads}),
             "sessions_skipped": skipped,
             "trend": trend,

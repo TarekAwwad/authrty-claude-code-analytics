@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
@@ -7,11 +7,17 @@ import type { ContextEconomicsResponse } from "../../api/types";
 
 const corpusPayload: ContextEconomicsResponse = {
   meta: {
-    project_id: null, min_support: 3,
-    total_usd: 660, necessary_usd: 457, avoidable_usd: 203,
-    unattributed_tokens: 1200, cost_available: true,
-    total_tokens: 8_000_000, avoidable_tokens: 1_000_000, avoidable_token_share: 0.125,
-    sessions_analyzed: 64, sessions_skipped: 2,
+    project_id: null,
+    min_support: 3,
+    recorded_api_equivalent_usd: 660,
+    opportunity_usd: 203,
+    unattributed_usd: 457,
+    opportunity_tokens: 1_000_000,
+    cost_available: true,
+    costs_partial: false,
+    unpriced_models: [],
+    sessions_analyzed: 64,
+    sessions_skipped: 2,
     trend: [
       { week_start: "2026-05-25", total_usd: 320, avoidable_usd: 110 },
       { week_start: "2026-06-01", total_usd: 340, avoidable_usd: 93 },
@@ -19,12 +25,14 @@ const corpusPayload: ContextEconomicsResponse = {
   },
   archetypes: [
     {
-      key: "oversized", title: "Oversized tool results",
-      description: "desc", recommendation: "Use limit/offset reads.",
-      meets_support: true, findings_count: 3,
-      // avoidable_usd (203) equals the sum of supported archetypes' savings, as the
-      // backend always guarantees, so the hero bar fills to exactly the headline %.
-      savings_usd: 203, savings_tokens: 1_000_000,
+      key: "oversized",
+      title: "Oversized tool results",
+      description: "desc",
+      recommendation: "Use limit/offset reads.",
+      meets_support: true,
+      findings_count: 3,
+      savings_usd: 203,
+      savings_tokens: 1_000_000,
       thresholds: [{ name: "oversized_tokens", value: 8200, provenance: "p95 of 4,812 tool results" }],
       exemplar: {
         session_id: 7,
@@ -35,24 +43,42 @@ const corpusPayload: ContextEconomicsResponse = {
       },
       findings: [{
         archetype: "oversized",
-        session_id: 7, session_title: "Fix sourcemaps", project_name: "alpha",
-        epoch: 0, entry_turn: 9, label: "Read result: dist/bundle.js (53,000 tok)",
-        carried_turns: 64, carried_tokens: 53_000, savings_tokens: 51_000,
+        session_id: 7,
+        session_title: "Fix sourcemaps",
+        project_name: "alpha",
+        epoch: 0,
+        entry_turn: 9,
+        label: "Read result: dist/bundle.js (53,000 tok)",
+        carried_turns: 64,
+        carried_tokens: 53_000,
+        savings_tokens: 51_000,
         savings_usd: 2.1,
         counterfactual: { model: "capped at median", params: { cap_tokens: 2000 } },
         event_id: 42,
       }],
     },
     {
-      key: "rereads", title: "Redundant re-reads", description: "", recommendation: "",
-      meets_support: false, findings_count: 1, savings_usd: 0, savings_tokens: 0,
-      thresholds: [], exemplar: null, findings: [],
+      key: "rereads",
+      title: "Redundant re-reads",
+      description: "",
+      recommendation: "",
+      meets_support: false,
+      findings_count: 1,
+      savings_usd: 0,
+      savings_tokens: 0,
+      thresholds: [],
+      exemplar: null,
+      findings: [],
     },
   ],
 };
 
+const mocks = vi.hoisted(() => ({
+  getContextEconomics: vi.fn(),
+}));
+
 vi.mock("../../api/client", () => ({
-  getContextEconomics: vi.fn(() => Promise.resolve(corpusPayload)),
+  getContextEconomics: mocks.getContextEconomics,
   getSessionContextEconomics: vi.fn(() => Promise.resolve({ threads: [], cost_available: true })),
 }));
 
@@ -66,14 +92,24 @@ function renderPage() {
 }
 
 describe("ContextEconomics", () => {
-  it("renders the hero verdict and archetype cards", async () => {
+  beforeEach(() => {
+    mocks.getContextEconomics.mockReset();
+    mocks.getContextEconomics.mockResolvedValue(corpusPayload);
+  });
+
+  it("renders the opportunity framing and archetype cards", async () => {
     renderPage();
-    // hero shows three separate stat cells: Total spend / Avoidable / Necessary
-    expect(await screen.findByText("Total spend")).toBeInTheDocument();
-    expect(screen.getByText("Avoidable")).toBeInTheDocument();
+
+    expect(await screen.findByText("Recorded estimated API-equivalent cost")).toBeInTheDocument();
+    expect(screen.getByText("Estimated context opportunity")).toBeInTheDocument();
+    expect(screen.getAllByText("Cost not attributed to detected opportunities").length)
+      .toBeGreaterThan(0);
     expect(screen.getByText("$660")).toBeInTheDocument();
-    // bar aria-label confirms both headline numbers
-    expect(screen.getByRole("group", { name: /\$203 of \$660/i })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: /estimated context opportunity.*\$203 of \$660/i }))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/^Necessary$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Avoidable/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/% of your usage/i)).not.toBeInTheDocument();
     expect(screen.getAllByText("Oversized tool results").length).toBeGreaterThan(0);
     const compactLabel = screen.getByText(/Read result: bundle\.js/);
     expect(compactLabel).toBeInTheDocument();
@@ -82,7 +118,7 @@ describe("ContextEconomics", () => {
 
   it("disables under-supported archetypes in the legend with an evidence hint", async () => {
     renderPage();
-    await screen.findByText("Total spend");
+    await screen.findByText("Estimated context opportunity");
     const chip = screen.getByRole("button", { name: /Redundant re-reads/ });
     expect(chip).toBeDisabled();
     expect(chip).toHaveAttribute("title", expect.stringMatching(/needs more evidence/i));
@@ -90,23 +126,43 @@ describe("ContextEconomics", () => {
 
   it("renders clickable hero segments per archetype", async () => {
     renderPage();
-    await screen.findByText("Total spend");
-    const hero = screen.getByRole("group", { name: /avoidable spend breakdown/i });
-    expect(hero).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Oversized tool results: $203" })).toBeInTheDocument();
+    await screen.findByText("Estimated context opportunity");
+    expect(screen.getByRole("group", { name: /estimated context opportunity breakdown/i }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Oversized tool results: $203" }))
+      .toBeInTheDocument();
   });
 
-  it("renders the weekly trend sparkline", async () => {
+  it("renders the weekly opportunity trend sparkline", async () => {
     renderPage();
-    await screen.findByText("Total spend");
-    expect(screen.getByRole("img", { name: /weekly avoidable spend trend/i })).toBeInTheDocument();
+    await screen.findByText("Estimated context opportunity");
+    expect(screen.getByRole("img", { name: /weekly estimated context opportunity/i }))
+      .toBeInTheDocument();
   });
 
   it("shows the counterfactual explanation when a finding is expanded", async () => {
     renderPage();
-    await screen.findByText("Total spend");
+    await screen.findByText("Estimated context opportunity");
     const toggle = screen.getByRole("button", { name: /how we estimated this/i });
     toggle.click();
     expect(await screen.findByText(/p95 of 4,812 tool results/)).toBeInTheDocument();
+  });
+
+  it("explains partial pricing and does not render an opportunity percentage", async () => {
+    mocks.getContextEconomics.mockResolvedValue({
+      ...corpusPayload,
+      meta: {
+        ...corpusPayload.meta,
+        costs_partial: true,
+        unpriced_models: ["custom-model"],
+      },
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/pricing is partial/i)).toBeInTheDocument();
+    expect(screen.getByText(/custom-model/)).toBeInTheDocument();
+    expect(screen.queryByText(/\(31%\)/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: /opportunity breakdown/i })).not.toBeInTheDocument();
   });
 });

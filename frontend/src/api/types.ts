@@ -517,14 +517,13 @@ export interface ContextTrendBucket {
 export interface ContextEconomicsMeta {
   project_id: number | null;
   min_support: number;
-  total_usd: number;
-  necessary_usd: number;
-  avoidable_usd: number;
-  unattributed_tokens: number;
-  total_tokens: number;
-  avoidable_tokens: number;
-  avoidable_token_share: number;
+  recorded_api_equivalent_usd: number;
+  opportunity_usd: number;
+  unattributed_usd: number;
+  opportunity_tokens: number;
   cost_available: boolean;
+  costs_partial: boolean;
+  unpriced_models: string[];
   sessions_analyzed: number;
   sessions_skipped: number;
   trend: ContextTrendBucket[];
