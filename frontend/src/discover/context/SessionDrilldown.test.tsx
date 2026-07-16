@@ -31,8 +31,17 @@ const finding: ContextFinding = {
   epoch: 0, entry_turn: 1, label: "Read result: dist/bundle.js (49,000 tok)",
   carried_turns: 1, carried_tokens: 49_000, savings_tokens: 47_000,
   savings_usd: 0.04,
-  counterfactual: { model: "capped at median", params: { cap_tokens: 2000 } },
+  counterfactual: {
+    model: "Estimated carry reduction using the Read result median as a cap; token size is calibrated from observed context growth.",
+    params: {
+      observed_size: 196_000,
+      estimated_tokens: 49_000,
+      tool_baseline_tokens: 2_000,
+      modeled_reduction_tokens: 47_000,
+    },
+  },
   event_id: 42,
+  evidence_event_ids: [42],
 };
 
 vi.mock("../../api/client", () => ({
@@ -58,8 +67,11 @@ describe("SessionDrilldown", () => {
     expect(screen.getByRole("button", { name: /open session/i })).toBeInTheDocument();
     // counterfactual overlay legend appears because the finding reconstructs
     expect(screen.getByText(/if fixed/i)).toBeInTheDocument();
-    // inspected-finding ribbon shows the claimed savings
-    expect(screen.getByText(/saves \$0\.04/i)).toBeInTheDocument();
+    // The ribbon qualifies the modeled amount and shows its assumption.
+    expect(screen.getByText(/estimated opportunity \$0\.04/i)).toBeInTheDocument();
+    expect(screen.queryByText(/saves \$0\.04/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/estimated carry reduction using the Read result median as a cap/i))
+      .toBeInTheDocument();
     // ...paired with the token equivalent so Max users get a real signal
     expect(screen.getByText(/47k tok/)).toBeInTheDocument();
   });

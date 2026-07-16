@@ -481,6 +481,7 @@ export interface ContextFinding {
   savings_usd: number;
   counterfactual: ContextCounterfactual;
   event_id: number | null;
+  evidence_event_ids: number[];
 }
 
 export interface ContextThumbnailPoint {

@@ -26,14 +26,18 @@ const corpusPayload: ContextEconomicsResponse = {
   archetypes: [
     {
       key: "oversized",
-      title: "Oversized tool results",
+      title: "Large result carry opportunity",
       description: "desc",
       recommendation: "Use limit/offset reads.",
       meets_support: true,
       findings_count: 3,
       savings_usd: 203,
       savings_tokens: 1_000_000,
-      thresholds: [{ name: "oversized_tokens", value: 8200, provenance: "p95 of 4,812 tool results" }],
+      thresholds: [{
+        name: "Read large-result threshold",
+        value: 8200,
+        provenance: "Read p95 of 4,812 results; 5,000 tok floor",
+      }],
       exemplar: {
         session_id: 7,
         series: [
@@ -53,13 +57,22 @@ const corpusPayload: ContextEconomicsResponse = {
         carried_tokens: 53_000,
         savings_tokens: 51_000,
         savings_usd: 2.1,
-        counterfactual: { model: "capped at median", params: { cap_tokens: 2000 } },
+        counterfactual: {
+          model: "Estimated carry reduction using the Read result median as a cap; token size is calibrated from observed context growth.",
+          params: {
+            observed_size: 212_000,
+            estimated_tokens: 53_000,
+            tool_baseline_tokens: 2_000,
+            modeled_reduction_tokens: 51_000,
+          },
+        },
         event_id: 42,
+        evidence_event_ids: [42],
       }],
     },
     {
       key: "rereads",
-      title: "Redundant re-reads",
+      title: "Repeated same-range reads",
       description: "",
       recommendation: "",
       meets_support: false,
@@ -110,7 +123,8 @@ describe("ContextEconomics", () => {
     expect(screen.queryByText(/^Necessary$/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Avoidable/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/% of your usage/i)).not.toBeInTheDocument();
-    expect(screen.getAllByText("Oversized tool results").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Large result carry opportunity").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Oversized tool results")).not.toBeInTheDocument();
     const compactLabel = screen.getByText(/Read result: bundle\.js/);
     expect(compactLabel).toBeInTheDocument();
     expect(compactLabel).toHaveAttribute("title", "Read result: dist/bundle.js (53,000 tok)");
@@ -119,7 +133,7 @@ describe("ContextEconomics", () => {
   it("disables under-supported archetypes in the legend with an evidence hint", async () => {
     renderPage();
     await screen.findByText("Estimated context opportunity");
-    const chip = screen.getByRole("button", { name: /Redundant re-reads/ });
+    const chip = screen.getByRole("button", { name: /Repeated same-range reads/ });
     expect(chip).toBeDisabled();
     expect(chip).toHaveAttribute("title", expect.stringMatching(/needs more evidence/i));
   });
@@ -129,7 +143,7 @@ describe("ContextEconomics", () => {
     await screen.findByText("Estimated context opportunity");
     expect(screen.getByRole("group", { name: /estimated context opportunity breakdown/i }))
       .toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Oversized tool results: $203" }))
+    expect(screen.getByRole("button", { name: "Large result carry opportunity: $203" }))
       .toBeInTheDocument();
   });
 
@@ -145,7 +159,33 @@ describe("ContextEconomics", () => {
     await screen.findByText("Estimated context opportunity");
     const toggle = screen.getByRole("button", { name: /how we estimated this/i });
     toggle.click();
-    expect(await screen.findByText(/p95 of 4,812 tool results/)).toBeInTheDocument();
+    expect(await screen.findByText(/Read p95 of 4,812 results/)).toBeInTheDocument();
+    expect(screen.getByText(/estimated carry reduction using the Read result median as a cap/i))
+      .toBeInTheDocument();
+  });
+
+  it("exposes both recorded receipts for a repeated-read finding", async () => {
+    const base = corpusPayload.archetypes[0];
+    const finding = base.findings[0];
+    mocks.getContextEconomics.mockResolvedValue({
+      ...corpusPayload,
+      archetypes: [{
+        ...base,
+        key: "rereads",
+        title: "Repeated same-range reads",
+        findings: [{
+          ...finding,
+          archetype: "rereads",
+          evidence_event_ids: [41, 42],
+        }],
+      }],
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/2 receipts/)).toHaveAttribute(
+      "title", "Recorded event receipts: 41, 42",
+    );
   });
 
   it("explains partial pricing and does not render an opportunity percentage", async () => {

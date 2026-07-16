@@ -3,7 +3,7 @@
 Reconstructs per-call context sizes from stored usage, attributes per-turn
 growth to the events between calls (calibrated so estimates sum exactly to the
 observed growth), prices the carry cost of each contributor, and runs four
-corpus-adaptive waste detectors with disjoint counterfactual savings claims.
+corpus-adaptive opportunity detectors with disjoint counterfactual estimates.
 
 Computation is on-demand from the rebuildable SQLite cache, like discovery.py.
 Design doc: docs/superpowers/specs/2026-06-10-context-economics-design.md
@@ -11,8 +11,11 @@ Design doc: docs/superpowers/specs/2026-06-10-context-economics-design.md
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import posixpath
+import re
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -75,6 +78,8 @@ class RawItem:
     event_id: int | None = None
     tool_name: str | None = None
     detail: str | None = None    # e.g. file path for Read results
+    tool_input: dict[str, Any] | None = None
+    result_signature: str | None = None
 
 
 @dataclass
@@ -90,6 +95,9 @@ class ContributorRec:
     event_id: int | None = None
     tool_name: str | None = None
     detail: str | None = None
+    tool_input: dict[str, Any] | None = None
+    result_signature: str | None = None
+    source_size: int = 0
 
 
 @dataclass
@@ -120,6 +128,7 @@ class FindingRec:
     savings_usd: float
     counterfactual: dict[str, Any]
     event_id: int | None
+    evidence_event_ids: list[int] = field(default_factory=list)
     ts: str | None = None  # entry-call timestamp, used for the weekly trend
 
 
@@ -234,6 +243,9 @@ def calibrate_contributors(
                 event_id=item.event_id,
                 tool_name=item.tool_name,
                 detail=item.detail,
+                tool_input=item.tool_input,
+                result_signature=item.result_signature,
+                source_size=item.raw_chars,
             ))
     return contributors
 
@@ -358,6 +370,7 @@ def load_threads(
                    length(e.raw_json) AS raw_len,
                    length(tr.raw_json) AS result_raw_len,
                    tr.id AS tool_result_id, po.size_bytes,
+                   tr.raw_json AS result_json,
                    tc.tool_name, tc.raw_json AS call_json
             FROM events e
             LEFT JOIN tool_results tr ON tr.event_id = e.id
@@ -405,13 +418,50 @@ def load_threads(
     return threads, skipped
 
 
+def _contains_truncated_value(value: Any) -> bool:
+    if isinstance(value, dict):
+        if value.get("_truncated") is True:
+            return True
+        return any(_contains_truncated_value(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_truncated_value(item) for item in value)
+    return False
+
+
+def tool_result_signature(raw_json: str | None) -> str | None:
+    """Stable signature of stored result content, excluding per-call receipt IDs."""
+    if not raw_json:
+        return None
+    try:
+        parsed = json.loads(raw_json)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if isinstance(parsed, dict):
+        if "content" not in parsed:
+            return None
+        content = parsed["content"]
+    else:
+        content = parsed
+    if _contains_truncated_value(content):
+        return None
+    canonical = json.dumps(
+        content, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _raw_item(row: sqlite3.Row) -> RawItem:
     if row["tool_result_id"] is not None:
         tool_name = row["tool_name"] or "Tool"
+        tool_input = None
         detail = None
         if row["call_json"]:
             try:
-                detail = json.loads(row["call_json"]).get("input", {}).get("file_path")
+                parsed_call = json.loads(row["call_json"])
+                parsed_input = parsed_call.get("input") if isinstance(parsed_call, dict) else None
+                if isinstance(parsed_input, dict):
+                    tool_input = parsed_input
+                    detail = parsed_input.get("file_path")
             except (json.JSONDecodeError, AttributeError):
                 detail = None
         label = f"{tool_name} result" + (f": {detail}" if detail else "")
@@ -419,8 +469,11 @@ def _raw_item(row: sqlite3.Row) -> RawItem:
         # must not fall back to the result length. Size by THIS result's own JSON,
         # not the whole event's — parallel sibling results must not share one size.
         chars = row["size_bytes"] if row["size_bytes"] is not None else row["result_raw_len"]
+        result_json = row["result_json"] if "result_json" in row.keys() else None
         return RawItem(kind="tool_result", label=label, raw_chars=chars or 0,
-                       event_id=row["event_id"], tool_name=tool_name, detail=detail)
+                       event_id=row["event_id"], tool_name=tool_name, detail=detail,
+                       tool_input=tool_input,
+                       result_signature=tool_result_signature(result_json))
     kind = "attachment" if row["type"] == "attachment" else "user"
     label = "Attachment" if kind == "attachment" else "User message"
     return RawItem(kind=kind, label=label, raw_chars=row["raw_len"] or 0,
@@ -472,65 +525,172 @@ class Claims:
 # Detector 1: redundant re-reads
 # ---------------------------------------------------------------------------
 
+
+@dataclass(frozen=True)
+class ReadSignature:
+    path: str
+    offset: int
+    limit: int | None
+    result_signature: str | None
+
+
+def normalize_tool_path(value: Any) -> str | None:
+    """Canonicalize a tool path without resolving it against the local machine."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized = posixpath.normpath(value.strip().replace("\\", "/"))
+    if normalized in ("", "."):
+        return None
+    if re.match(r"^[A-Za-z]:/", normalized) or normalized.startswith("//"):
+        normalized = normalized.casefold()
+    return normalized
+
+
+def _normalized_read_bound(
+    tool_input: dict[str, Any], key: str, *, default: int | None,
+) -> tuple[bool, int | None]:
+    value = tool_input.get(key)
+    if value is None:
+        return True, default
+    if isinstance(value, bool):
+        return False, None
+    if isinstance(value, float) and not value.is_integer():
+        return False, None
+    if isinstance(value, str) and not re.fullmatch(r"[+-]?\d+", value.strip()):
+        return False, None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return False, None
+    if normalized < 0 or (key == "limit" and normalized == 0):
+        return False, None
+    return True, normalized
+
+
+def normalize_read_signature(
+    tool_input: dict[str, Any] | None,
+    *,
+    fallback_path: str | None = None,
+    result_signature: str | None = None,
+) -> ReadSignature | None:
+    """Pure normalized identity for one Read request and its stored result."""
+    inputs = tool_input if isinstance(tool_input, dict) else {}
+    path = normalize_tool_path(inputs.get("file_path") or fallback_path)
+    if path is None:
+        return None
+    offset_ok, offset = _normalized_read_bound(inputs, "offset", default=0)
+    limit_ok, limit = _normalized_read_bound(inputs, "limit", default=None)
+    if not offset_ok or not limit_ok or offset is None:
+        return None
+    return ReadSignature(
+        path=path,
+        offset=offset,
+        limit=limit,
+        result_signature=result_signature or None,
+    )
+
+
+def split_read_runs(
+    indexes: list[int],
+    contributors: list[ContributorRec],
+    mutation_calls: list[int],
+) -> list[list[int]]:
+    """Pure partition of equal-signature reads at intervening mutations."""
+    ordered = sorted(indexes, key=lambda i: contributors[i].entry_call)
+    runs: list[list[int]] = []
+    current: list[int] = []
+    for index in ordered:
+        entry = contributors[index].entry_call
+        if current:
+            previous_entry = contributors[current[-1]].entry_call
+            if any(previous_entry < mutation <= entry for mutation in mutation_calls):
+                runs.append(current)
+                current = []
+        current.append(index)
+    if current:
+        runs.append(current)
+    return runs
+
+
 def detect_rereads(threads: list[ThreadRec], claims: Claims) -> list[FindingRec]:
-    """Same file Read repeatedly in one epoch without an intervening edit: every
-    copy after the first (since the last edit) is waste. A Read that follows a
-    Write/Edit of the same path is a legitimate verify-read and is not flagged."""
+    """Repeated identical Read requests/results in one epoch, without an edit."""
     findings: list[FindingRec] = []
     for thread_index, thread in enumerate(threads):
-        reads: dict[tuple[int, str], list[int]] = defaultdict(list)
+        reads: dict[tuple[int, ReadSignature], list[int]] = defaultdict(list)
         mutations: dict[tuple[int, str], list[int]] = defaultdict(list)
         for contributor_index, contributor in enumerate(thread.contributors):
-            if contributor.kind != "tool_result" or not contributor.detail:
+            if contributor.kind != "tool_result":
                 continue
-            key = (contributor.epoch, contributor.detail)
             if contributor.tool_name == "Read":
-                reads[key].append(contributor_index)
+                signature = normalize_read_signature(
+                    contributor.tool_input,
+                    fallback_path=contributor.detail,
+                    result_signature=contributor.result_signature,
+                )
+                if signature is not None:
+                    reads[(contributor.epoch, signature)].append(contributor_index)
             elif contributor.tool_name in ("Write", "Edit"):
-                mutations[key].append(contributor.entry_call)
-        for (epoch, path), indexes in reads.items():
+                tool_input = contributor.tool_input or {}
+                path = normalize_tool_path(tool_input.get("file_path") or contributor.detail)
+                if path is not None:
+                    mutations[(contributor.epoch, path)].append(contributor.entry_call)
+        for (epoch, signature), indexes in reads.items():
             if len(indexes) < 2:
                 continue
-            indexes.sort(key=lambda i: thread.contributors[i].entry_call)
-            mutation_calls = sorted(mutations.get((epoch, path), []))
-            duplicate_indexes: list[int] = []
-            anchor_entry = thread.contributors[indexes[0]].entry_call
-            for i in indexes[1:]:
-                entry = thread.contributors[i].entry_call
-                if any(anchor_entry < m <= entry for m in mutation_calls):
-                    anchor_entry = entry  # legitimate re-read after an edit
+            mutation_calls = sorted(mutations.get((epoch, signature.path), []))
+            runs = split_read_runs(indexes, thread.contributors, mutation_calls)
+            for run in (candidate for candidate in runs if len(candidate) >= 2):
+                duplicate_indexes = run[1:]
+                duplicates = [thread.contributors[i] for i in duplicate_indexes]
+                savings_tokens = sum(duplicate.est_tokens for duplicate in duplicates)
+                savings_usd = sum(duplicate.accrued_usd for duplicate in duplicates)
+                if _has_price_signal(thread) and savings_usd < MIN_FINDING_USD:
+                    continue
+                for i in duplicate_indexes:
+                    claims.claim_contributor(
+                        thread_index, i, thread.contributors[i],
+                        thread.contributors[i].est_tokens,
+                    )
+                first = thread.contributors[run[0]]
+                params: dict[str, float] = {
+                    "copies": len(run),
+                    "first_entry_turn": first.entry_call,
+                    "offset": signature.offset,
+                    "result_signature_match": int(signature.result_signature is not None),
+                }
+                if signature.limit is not None:
+                    params["limit"] = signature.limit
+                if signature.result_signature is not None:
+                    model = (
+                        "Estimated carry reduction if the repeated matching-result copy "
+                        "is removed."
+                    )
                 else:
-                    duplicate_indexes.append(i)
-            if not duplicate_indexes:
-                continue
-            duplicates = [thread.contributors[i] for i in duplicate_indexes]
-            savings_tokens = sum(d.est_tokens for d in duplicates)
-            savings_usd = sum(d.accrued_usd for d in duplicates)
-            if _has_price_signal(thread) and savings_usd < MIN_FINDING_USD:
-                continue
-            for i in duplicate_indexes:
-                claims.claim_contributor(thread_index, i, thread.contributors[i],
-                                         thread.contributors[i].est_tokens)
-            first = thread.contributors[indexes[0]]
-            findings.append(FindingRec(
-                archetype="rereads",
-                session_id=thread.session_db_id,
-                session_title=thread.session_title,
-                project_name=thread.project_name,
-                epoch=epoch,
-                entry_turn=duplicates[0].entry_call,
-                label=f"{path} read {len(indexes)}× in one epoch",
-                carried_turns=max(d.end_call - d.entry_call for d in duplicates),
-                carried_tokens=savings_tokens,
-                savings_tokens=savings_tokens,
-                savings_usd=savings_usd,
-                counterfactual={
-                    "model": "drop duplicate copies; only the first read is kept",
-                    "params": {"copies": len(indexes), "first_entry_turn": first.entry_call},
-                },
-                event_id=duplicates[0].event_id,
-                ts=thread.calls[duplicates[0].entry_call].ts,
-            ))
+                    model = (
+                        "Estimated carry reduction if the repeated same-range read was "
+                        "unnecessary; full result content was unavailable for comparison."
+                    )
+                findings.append(FindingRec(
+                    archetype="rereads",
+                    session_id=thread.session_db_id,
+                    session_title=thread.session_title,
+                    project_name=thread.project_name,
+                    epoch=epoch,
+                    entry_turn=duplicates[0].entry_call,
+                    label=f"{signature.path} same range read {len(run)}× in one epoch",
+                    carried_turns=max(d.end_call - d.entry_call for d in duplicates),
+                    carried_tokens=savings_tokens,
+                    savings_tokens=savings_tokens,
+                    savings_usd=savings_usd,
+                    counterfactual={"model": model, "params": params},
+                    event_id=duplicates[0].event_id,
+                    evidence_event_ids=[
+                        event_id
+                        for i in run
+                        if (event_id := thread.contributors[i].event_id) is not None
+                    ],
+                    ts=thread.calls[duplicates[0].entry_call].ts,
+                ))
     return findings
 
 
@@ -538,36 +698,78 @@ def detect_rereads(threads: list[ThreadRec], claims: Claims) -> list[FindingRec]
 # Detector 2: oversized tool results (corpus-adaptive)
 # ---------------------------------------------------------------------------
 
+
+@dataclass(frozen=True)
+class ResultSizeBaseline:
+    tool_name: str
+    sample_size: int
+    threshold_tokens: float
+    cap_tokens: float
+
+
+def result_size_baseline(tool_name: str, sizes: list[float]) -> ResultSizeBaseline:
+    """Pure tool-specific threshold and conservative median-cap model."""
+    return ResultSizeBaseline(
+        tool_name=tool_name,
+        sample_size=len(sizes),
+        threshold_tokens=max(
+            _percentile(sizes, OVERSIZED_PERCENTILE), float(OVERSIZED_FLOOR_TOKENS),
+        ),
+        cap_tokens=max(_percentile(sizes, 0.5), float(CAP_FLOOR_TOKENS)),
+    )
+
+
+def _baseline_thresholds(baseline: ResultSizeBaseline) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": f"{baseline.tool_name} large-result threshold",
+            "value": baseline.threshold_tokens,
+            "provenance": (
+                f"{baseline.tool_name} p95 of {baseline.sample_size} results; "
+                f"floor {OVERSIZED_FLOOR_TOKENS:,} tok"
+            ),
+        },
+        {
+            "name": f"{baseline.tool_name} baseline cap",
+            "value": baseline.cap_tokens,
+            "provenance": (
+                f"{baseline.tool_name} median result; floor {CAP_FLOOR_TOKENS:,} tok"
+            ),
+        },
+    ]
+
+
 def detect_oversized(
     threads: list[ThreadRec], claims: Claims,
 ) -> tuple[list[FindingRec], list[dict[str, Any]]]:
-    """Single tool results above the corpus p95 (and an absolute floor).
-
-    Counterfactual: the result is capped at the corpus median result size
-    (a limit/offset read or persisted output); the difference stops being
-    carried from its entry call onward.
-    """
-    sizes = [
-        float(c.est_tokens)
-        for thread in threads for c in thread.contributors
-        if c.kind == "tool_result"
-    ]
-    threshold = max(_percentile(sizes, OVERSIZED_PERCENTILE), float(OVERSIZED_FLOOR_TOKENS))
-    cap = max(_percentile(sizes, 0.5), float(CAP_FLOOR_TOKENS))
-    thresholds = [
-        {"name": "oversized_tokens", "value": threshold,
-         "provenance": f"p95 of {len(sizes)} tool results, floor {OVERSIZED_FLOOR_TOKENS:,} tok"},
-        {"name": "cap_tokens", "value": cap,
-         "provenance": f"median tool result size, floor {CAP_FLOOR_TOKENS:,} tok"},
-    ]
+    """Results large relative to other results produced by the same tool."""
+    sizes_by_tool: dict[str, list[float]] = defaultdict(list)
+    for thread in threads:
+        for contributor in thread.contributors:
+            if contributor.kind == "tool_result":
+                sizes_by_tool[contributor.tool_name or "Unknown tool"].append(
+                    float(contributor.est_tokens)
+                )
+    baselines = {
+        tool_name: result_size_baseline(tool_name, sizes)
+        for tool_name, sizes in sizes_by_tool.items()
+    }
+    flagged_tools: set[str] = set()
     findings: list[FindingRec] = []
     for thread_index, thread in enumerate(threads):
         for contributor_index, contributor in enumerate(thread.contributors):
-            if contributor.kind != "tool_result" or contributor.est_tokens < threshold:
+            if contributor.kind != "tool_result":
+                continue
+            tool_name = contributor.tool_name or "Unknown tool"
+            baseline = baselines[tool_name]
+            if (
+                contributor.est_tokens < baseline.threshold_tokens
+                or contributor.est_tokens <= baseline.cap_tokens
+            ):
                 continue
             if (thread_index, contributor_index) in claims.contributors:
                 continue
-            saved_tokens = int(contributor.est_tokens - cap)
+            saved_tokens = int(contributor.est_tokens - baseline.cap_tokens)
             savings_usd = (
                 _carry_usd(thread, saved_tokens, contributor.entry_call, contributor.end_call)
                 + saved_tokens * thread.write_prices[contributor.entry_call]
@@ -575,6 +777,7 @@ def detect_oversized(
             if _has_price_signal(thread) and savings_usd < MIN_FINDING_USD:
                 continue
             claims.claim_contributor(thread_index, contributor_index, contributor, saved_tokens)
+            flagged_tools.add(tool_name)
             findings.append(FindingRec(
                 archetype="oversized",
                 session_id=thread.session_db_id,
@@ -588,12 +791,28 @@ def detect_oversized(
                 savings_tokens=saved_tokens,
                 savings_usd=savings_usd,
                 counterfactual={
-                    "model": "result capped at the corpus median size (limit/offset or persisted output)",
-                    "params": {"cap_tokens": cap, "actual_tokens": contributor.est_tokens},
+                    "model": (
+                        f"Estimated carry reduction using the {tool_name} result median as a cap; "
+                        "token size is calibrated from observed context growth."
+                    ),
+                    "params": {
+                        "observed_size": contributor.source_size,
+                        "estimated_tokens": contributor.est_tokens,
+                        "tool_baseline_tokens": baseline.cap_tokens,
+                        "threshold_tokens": baseline.threshold_tokens,
+                        "modeled_reduction_tokens": saved_tokens,
+                        "tool_sample_size": baseline.sample_size,
+                    },
                 },
                 event_id=contributor.event_id,
+                evidence_event_ids=[contributor.event_id] if contributor.event_id is not None else [],
                 ts=thread.calls[contributor.entry_call].ts,
             ))
+    thresholds = [
+        threshold
+        for tool_name in sorted(flagged_tools)
+        for threshold in _baseline_thresholds(baselines[tool_name])
+    ]
     return findings, thresholds
 
 
@@ -787,11 +1006,11 @@ def detect_stale_continuation(
 # ---------------------------------------------------------------------------
 
 ARCHETYPES: list[dict[str, str]] = [
-    {"key": "rereads", "title": "Redundant re-reads",
-     "description": "The same file was read into the context more than once in one epoch.",
+    {"key": "rereads", "title": "Repeated same-range reads",
+     "description": "The same normalized file range was requested more than once in one context epoch; stored results were compared when complete content was available.",
      "recommendation": "Re-read only the changed region (offset/limit) or rely on the copy already in context."},
-    {"key": "oversized", "title": "Oversized tool results",
-     "description": "Single tool results far above this corpus's norm entered the context and were re-paid every turn.",
+    {"key": "oversized", "title": "Large result carry opportunity",
+     "description": "A result was unusually large relative to other results from the same tool, so carrying it may have increased context cost.",
      "recommendation": "Read large files with limit/offset, filter command output, or offload to a subagent and keep only its summary."},
     {"key": "late_compaction", "title": "Late compaction",
      "description": "The context stayed near the window limit for many turns without compaction.",
@@ -983,6 +1202,7 @@ def _finding_payload(finding: FindingRec) -> dict[str, Any]:
         "savings_usd": round(finding.savings_usd, 6),
         "counterfactual": finding.counterfactual,
         "event_id": finding.event_id,
+        "evidence_event_ids": finding.evidence_event_ids,
     }
 
 

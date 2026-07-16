@@ -307,7 +307,9 @@ def add_session(
     calls: [{"context": int, "output": int, "model": str, "minute": int}]
     gap_items: gap index -> [{"kind": "tool_result"|"user"|"attachment",
                               "chars": int, "tool_name": str|None,
-                              "path": str|None, "persisted_bytes": int|None}]
+                              "path": str|None, "offset": int|None,
+                              "limit": int|None, "result_content": object|None,
+                              "persisted_bytes": int|None}]
     Gap g events are timestamped between call g-1 and call g.
     """
     session_id = int(conn.execute(
@@ -336,13 +338,25 @@ def add_session(
                         " VALUES (?, 'out.txt', ?)",
                         (session_id, item["persisted_bytes"]),
                     ).lastrowid)
+                result_raw = "{}"
+                if "result_content" in item:
+                    result_raw = json.dumps({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": item["result_content"],
+                    })
                 conn.execute(
                     "INSERT INTO tool_results(event_id, session_id, tool_use_id, is_error,"
-                    " persisted_output_id, raw_json) VALUES (?, ?, ?, 0, ?, '{}')",
-                    (event_id, session_id, tool_use_id, persisted_id),
+                    " persisted_output_id, raw_json) VALUES (?, ?, ?, 0, ?, ?)",
+                    (event_id, session_id, tool_use_id, persisted_id, result_raw),
                 )
                 if item.get("tool_name"):
-                    call_raw = json.dumps({"input": {"file_path": item.get("path")}})
+                    tool_input = {"file_path": item.get("path")}
+                    if "offset" in item:
+                        tool_input["offset"] = item["offset"]
+                    if "limit" in item:
+                        tool_input["limit"] = item["limit"]
+                    call_raw = json.dumps({"input": tool_input})
                     anchor = call_event_ids[-1] if call_event_ids else event_id
                     conn.execute(
                         "INSERT INTO tool_calls(event_id, session_id, tool_use_id, tool_name, raw_json)"
@@ -387,6 +401,31 @@ def test_load_threads_reconstructs_calls_and_contributors(conn: sqlite3.Connecti
     reply = next(c for c in thread.contributors if c.kind == "assistant_output")
     # 40k chars = 10k raw + 500 output raw -> scaled to 12k delta.
     assert read.est_tokens + reply.est_tokens == 12_000
+
+
+def test_load_threads_preserves_read_arguments_and_result_signature(
+    conn: sqlite3.Connection,
+) -> None:
+    add_session(conn, uuid="read-evidence", calls=[
+        {"context": 10_000, "minute": 1},
+        {"context": 20_000, "minute": 2},
+    ], gap_items={1: [{
+        "kind": "tool_result",
+        "chars": 40_000,
+        "tool_name": "Read",
+        "path": "./src\\a.py",
+        "offset": 10,
+        "limit": 50,
+        "result_content": "same file chunk",
+        "persisted_bytes": 40_000,
+    }]})
+
+    threads, _ = load_threads(conn)
+    read = next(c for c in threads[0].contributors if c.kind == "tool_result")
+
+    assert read.tool_input == {"file_path": "./src\\a.py", "offset": 10, "limit": 50}
+    assert read.result_signature is not None
+    assert read.source_size == 40_000
 
 
 def test_load_threads_uses_persisted_size_when_available(conn: sqlite3.Connection) -> None:
@@ -479,13 +518,139 @@ def test_detect_rereads_flags_duplicate_reads_of_same_path() -> None:
     assert finding.archetype == "rereads"
     assert "src/a.py" in finding.label and "2×" in finding.label
     duplicate = next(c for c in thread.contributors if c.entry_call == 2 and c.kind == "tool_result")
-    # The duplicate (second) copy is fully avoidable: its whole accrued tax.
+    # The model removes the duplicate (second) copy and its accrued carry.
     assert finding.savings_tokens == duplicate.est_tokens
     assert finding.savings_usd == pytest.approx(duplicate.accrued_usd)
     # Claimed: the duplicate contributor and its token-carry per call.
     assert (0, thread.contributors.index(duplicate)) in claims.contributors
     assert claims.tokens_by_call[0][3] == duplicate.est_tokens
     assert claims.tokens_by_call[0][2] == duplicate.est_tokens
+
+
+def test_normalize_read_signature_canonicalizes_path_and_numeric_arguments() -> None:
+    from ccfr.analysis import context_economics as ce
+
+    left = ce.normalize_read_signature(
+        {"file_path": ".\\src\\nested\\..\\a.py", "offset": "10", "limit": "50"},
+        result_signature="same-result",
+    )
+    right = ce.normalize_read_signature(
+        {"file_path": "src/a.py", "offset": 10, "limit": 50},
+        result_signature="same-result",
+    )
+
+    assert left == right
+    assert ce.normalize_read_signature({"offset": 10, "limit": 50}) is None
+    assert ce.normalize_read_signature({"file_path": "src/a.py", "offset": "bad"}) is None
+
+
+def test_tool_result_signature_uses_content_not_receipt_id() -> None:
+    from ccfr.analysis import context_economics as ce
+
+    first = json.dumps({
+        "type": "tool_result", "tool_use_id": "receipt-1", "content": "same chunk",
+    })
+    second = json.dumps({
+        "type": "tool_result", "tool_use_id": "receipt-2", "content": "same chunk",
+    })
+    changed = json.dumps({
+        "type": "tool_result", "tool_use_id": "receipt-3", "content": "changed chunk",
+    })
+    truncated = json.dumps({
+        "type": "tool_result",
+        "content": {"_truncated": True, "preview": "same", "original_length": 10_000},
+    })
+
+    assert ce.tool_result_signature(first) == ce.tool_result_signature(second)
+    assert ce.tool_result_signature(first) != ce.tool_result_signature(changed)
+    assert ce.tool_result_signature(truncated) is None
+
+
+def test_detect_rereads_does_not_merge_different_file_chunks() -> None:
+    calls = [_call(1, 10_000), _call(2, 20_000), _call(3, 30_000), _call(4, 30_500)]
+    items = {
+        1: [RawItem(
+            kind="tool_result", label="Read result: src/a.py", raw_chars=40_000,
+            event_id=11, tool_name="Read", detail="src/a.py",
+            tool_input={"file_path": "src/a.py", "offset": 1, "limit": 100},
+            result_signature="first-chunk",
+        )],
+        2: [RawItem(
+            kind="tool_result", label="Read result: src/a.py", raw_chars=40_000,
+            event_id=12, tool_name="Read", detail="src/a.py",
+            tool_input={"file_path": "src/a.py", "offset": 101, "limit": 100},
+            result_signature="second-chunk",
+        )],
+    }
+    thread = _priced_thread(calls, items)
+
+    assert detect_rereads([thread], Claims.for_threads([thread])) == []
+
+
+def test_detect_rereads_matches_equivalent_signatures_and_exposes_receipts() -> None:
+    calls = [_call(1, 10_000), _call(2, 20_000), _call(3, 30_000), _call(4, 30_500)]
+    items = {
+        1: [RawItem(
+            kind="tool_result", label="Read result: src/a.py", raw_chars=40_000,
+            event_id=11, tool_name="Read", detail=".\\src\\a.py",
+            tool_input={"file_path": ".\\src\\a.py", "offset": "1", "limit": "100"},
+            result_signature="identical-result",
+        )],
+        2: [RawItem(
+            kind="tool_result", label="Read result: src/a.py", raw_chars=40_000,
+            event_id=12, tool_name="Read", detail="src/a.py",
+            tool_input={"file_path": "src/a.py", "offset": 1, "limit": 100},
+            result_signature="identical-result",
+        )],
+    }
+    thread = _priced_thread(calls, items)
+
+    findings = detect_rereads([thread], Claims.for_threads([thread]))
+
+    assert len(findings) == 1
+    assert findings[0].evidence_event_ids == [11, 12]
+    assert findings[0].counterfactual["params"]["offset"] == 1
+    assert findings[0].counterfactual["params"]["limit"] == 100
+    assert findings[0].counterfactual["params"]["result_signature_match"] == 1
+
+
+def test_detect_rereads_requires_matching_results_when_signatures_exist() -> None:
+    calls = [_call(1, 10_000), _call(2, 20_000), _call(3, 30_000), _call(4, 30_500)]
+    items = {
+        1: [RawItem(
+            kind="tool_result", label="Read result: src/a.py", raw_chars=40_000,
+            event_id=11, tool_name="Read", detail="src/a.py",
+            tool_input={"file_path": "src/a.py"}, result_signature="before",
+        )],
+        2: [RawItem(
+            kind="tool_result", label="Read result: src/a.py", raw_chars=40_000,
+            event_id=12, tool_name="Read", detail="src/a.py",
+            tool_input={"file_path": "src/a.py"}, result_signature="after",
+        )],
+    }
+    thread = _priced_thread(calls, items)
+
+    assert detect_rereads([thread], Claims.for_threads([thread])) == []
+
+
+def test_detect_rereads_matches_two_reads_with_omitted_range_arguments() -> None:
+    calls = [_call(1, 10_000), _call(2, 20_000), _call(3, 30_000), _call(4, 30_500)]
+    items = {
+        gap: [RawItem(
+            kind="tool_result", label="Read result: src/a.py", raw_chars=40_000,
+            event_id=10 + gap, tool_name="Read", detail="src/a.py",
+            tool_input={"file_path": "src/a.py"},
+        )]
+        for gap in (1, 2)
+    }
+    thread = _priced_thread(calls, items)
+
+    findings = detect_rereads([thread], Claims.for_threads([thread]))
+
+    assert len(findings) == 1
+    assert findings[0].counterfactual["params"]["offset"] == 0
+    assert "limit" not in findings[0].counterfactual["params"]
+    assert "full result content was unavailable" in findings[0].counterfactual["model"]
 
 
 def test_detect_rereads_ignores_reads_in_different_epochs() -> None:
@@ -518,6 +683,51 @@ def test_detect_rereads_ignores_read_after_edit() -> None:
     assert findings == []
 
 
+def test_detect_rereads_normalizes_mutated_path_before_resetting_anchor() -> None:
+    calls = [_call(1, 10_000), _call(2, 20_000), _call(3, 30_000), _call(4, 40_000)]
+    items = {
+        1: [RawItem(
+            kind="tool_result", label="Read result: src/a.py", raw_chars=40_000,
+            event_id=11, tool_name="Read", detail="src/a.py",
+            tool_input={"file_path": "src/a.py"},
+        )],
+        2: [RawItem(
+            kind="tool_result", label="Edit result: src/a.py", raw_chars=200,
+            event_id=12, tool_name="Edit", detail=".\\src\\a.py",
+            tool_input={"file_path": ".\\src\\a.py"},
+        )],
+        3: [RawItem(
+            kind="tool_result", label="Read result: src/a.py", raw_chars=40_000,
+            event_id=13, tool_name="Read", detail="src/a.py",
+            tool_input={"file_path": "src/a.py"},
+        )],
+    }
+    thread = _priced_thread(calls, items)
+
+    assert detect_rereads([thread], Claims.for_threads([thread])) == []
+
+
+def test_detect_rereads_separates_receipts_before_and_after_an_edit() -> None:
+    calls = [_call(i, 10_000 * i) for i in range(1, 7)]
+    items = {
+        1: [RawItem(kind="tool_result", label="Read a.py", raw_chars=40_000,
+                    event_id=11, tool_name="Read", detail="a.py")],
+        2: [RawItem(kind="tool_result", label="Read a.py", raw_chars=40_000,
+                    event_id=12, tool_name="Read", detail="a.py")],
+        3: [RawItem(kind="tool_result", label="Edit a.py", raw_chars=200,
+                    event_id=13, tool_name="Edit", detail="a.py")],
+        4: [RawItem(kind="tool_result", label="Read a.py", raw_chars=40_000,
+                    event_id=14, tool_name="Read", detail="a.py")],
+        5: [RawItem(kind="tool_result", label="Read a.py", raw_chars=40_000,
+                    event_id=15, tool_name="Read", detail="a.py")],
+    }
+    thread = _priced_thread(calls, items)
+
+    findings = detect_rereads([thread], Claims.for_threads([thread]))
+
+    assert [finding.evidence_event_ids for finding in findings] == [[11, 12], [14, 15]]
+
+
 # ---------------------------------------------------------------------------
 # Detector 2: oversized tool results
 # ---------------------------------------------------------------------------
@@ -530,8 +740,8 @@ def _corpus_with_one_giant() -> list[ThreadRec]:
     # 20 threads with modest 1k results -> p95 stays low but the floor governs.
     for n in range(20):
         calls = [_call(1, 10_000), _call(2, 11_000), _call(3, 11_200)]
-        items = {1: [RawItem(kind="tool_result", label=f"Read result: f{n}.py",
-                             raw_chars=4_000, tool_name="Read", detail=f"f{n}.py")]}
+        items = {1: [RawItem(kind="tool_result", label=f"Bash result {n}",
+                             raw_chars=4_000, tool_name="Bash")]}
         threads.append(_priced_thread(calls, items))
     giant_calls = [_call(1, 10_000), _call(2, 60_000), _call(3, 60_100), _call(4, 60_200)]
     giant_items = {1: [RawItem(kind="tool_result", label="Bash result", raw_chars=200_000,
@@ -549,11 +759,60 @@ def test_detect_oversized_flags_only_the_giant_result() -> None:
     finding = findings[0]
     assert finding.archetype == "oversized"
     giant = next(c for c in threads[-1].contributors if c.kind == "tool_result")
-    cap = next(t for t in thresholds if t["name"] == "cap_tokens")["value"]
+    cap = next(t for t in thresholds if t["name"] == "Bash baseline cap")["value"]
     assert finding.savings_tokens == giant.est_tokens - cap
     # Savings = saved tokens carried over calls 2..3 plus the entry write, all at $1/M.
     assert finding.savings_usd == pytest.approx((giant.est_tokens - cap) * 3 / 1e6)
-    assert any(t["name"] == "oversized_tokens" and "p95" in t["provenance"] for t in thresholds)
+    assert any(
+        t["name"] == "Bash large-result threshold" and "Bash p95" in t["provenance"]
+        for t in thresholds
+    )
+    assert finding.counterfactual["params"] == {
+        "observed_size": 200_000,
+        "estimated_tokens": giant.est_tokens,
+        "tool_baseline_tokens": cap,
+        "threshold_tokens": next(
+            t["value"] for t in thresholds if t["name"] == "Bash large-result threshold"
+        ),
+        "modeled_reduction_tokens": giant.est_tokens - cap,
+        "tool_sample_size": 21,
+    }
+    assert "estimated" in finding.counterfactual["model"].lower()
+    assert "Bash" in finding.counterfactual["model"]
+    assert "calibrated from observed context growth" in finding.counterfactual["model"]
+
+
+def test_detect_oversized_uses_baseline_from_the_same_tool() -> None:
+    threads: list[ThreadRec] = []
+    # Many small Read results must not drag down the Bash baseline.
+    for n in range(20):
+        read_items = {1: [RawItem(
+            kind="tool_result", label=f"Read {n}", raw_chars=4_000, tool_name="Read",
+        )]}
+        threads.append(_priced_thread(
+            [_call(1, 10_000), _call(2, 11_000), _call(3, 11_100)], read_items,
+        ))
+    # Bash normally returns ~8k calibrated tokens.
+    for n in range(20):
+        bash_items = {1: [RawItem(
+            kind="tool_result", label=f"Bash {n}", raw_chars=32_000, tool_name="Bash",
+        )]}
+        threads.append(_priced_thread(
+            [_call(1, 10_000), _call(2, 18_000), _call(3, 18_100)], bash_items,
+        ))
+    giant_items = {1: [RawItem(
+        kind="tool_result", label="Giant Bash", raw_chars=200_000,
+        event_id=99, tool_name="Bash",
+    )]}
+    threads.append(_priced_thread(
+        [_call(1, 10_000), _call(2, 60_000), _call(3, 60_100)], giant_items,
+    ))
+
+    findings, thresholds = detect_oversized(threads, Claims.for_threads(threads))
+
+    giant = next(f for f in findings if "Giant Bash" in f.label)
+    assert giant.counterfactual["params"]["tool_baseline_tokens"] == pytest.approx(8_000)
+    assert next(t for t in thresholds if t["name"] == "Bash baseline cap")["value"] == pytest.approx(8_000)
 
 
 def test_detect_oversized_skips_contributors_claimed_by_rereads() -> None:
@@ -603,7 +862,9 @@ def test_detect_oversized_adaptive_threshold_governs_above_floor() -> None:
     threads.append(_priced_thread([_call(1, 10_000), _call(2, 60_000), _call(3, 60_100)], giant))
 
     findings, thresholds = detect_oversized(threads, Claims.for_threads(threads))
-    threshold = next(t for t in thresholds if t["name"] == "oversized_tokens")["value"]
+    threshold = next(
+        t for t in thresholds if t["name"] == "Bash large-result threshold"
+    )["value"]
     assert threshold > OVERSIZED_FLOOR_TOKENS  # corpus p95 governs, not the floor
     labels = [f.label for f in findings]
     assert any("Giant" in label for label in labels)
@@ -875,6 +1136,7 @@ def test_corpus_payload_uses_estimated_opportunity_contract(
     assert rereads["meets_support"] is True
     assert rereads["findings_count"] == 3
     assert all(f["savings_usd"] > 0 for f in rereads["findings"])
+    assert all(len(f["evidence_event_ids"]) == 2 for f in rereads["findings"])
     assert rereads["exemplar"] is not None
     assert 0 < len(rereads["exemplar"]["series"]) <= 40
     assert all("provenance" in t for t in rereads["thresholds"])
@@ -1041,7 +1303,7 @@ def test_session_payload_serializes_threads(economics_conn: sqlite3.Connection) 
     assert "baseline" in kinds and "tool_result" in kinds
     assert all(c["accrued_usd"] >= 0 for c in thread["contributors"])
     # Session-local detection still finds the re-read (thresholds use floors).
-    assert any(f["label"].startswith("big.py read") for f in thread["findings"])
+    assert any(f["label"].startswith("big.py same range read") for f in thread["findings"])
 
 
 def test_session_payload_unknown_session_is_empty(economics_conn: sqlite3.Connection) -> None:
@@ -1082,7 +1344,10 @@ def test_session_payload_routes_findings_to_owning_thread(economics_conn: sqlite
     payload = session_context_economics(economics_conn, sid)
     by_agent = {t["agent_id"]: t for t in payload["threads"]}
     assert set(by_agent) == {None, "sub-1"}
-    assert any(f["label"].startswith("big.py read") for f in by_agent[None]["findings"])
+    assert any(
+        f["label"].startswith("big.py same range read")
+        for f in by_agent[None]["findings"]
+    )
     assert by_agent["sub-1"]["findings"] == []  # sidechain owns no re-read finding
 
 
@@ -1113,6 +1378,8 @@ def test_context_economics_endpoints(economics_conn: sqlite3.Connection, tmp_pat
     assert [a["key"] for a in body["archetypes"]] == [
         "rereads", "oversized", "late_compaction", "stale_continuation",
     ]
+    reread = next(archetype for archetype in body["archetypes"] if archetype["key"] == "rereads")
+    assert all(len(finding["evidence_event_ids"]) == 2 for finding in reread["findings"])
     assert session.status_code == 200
     assert session.json()["threads"][0]["calls"]
 

@@ -63,6 +63,10 @@ export default function FindingsPanel({
           const opportunity = costAvailable
             ? `${costsPartial ? "≥" : ""}${formatUsd(finding.savings_usd)}`
             : formatTokens(finding.savings_tokens);
+          const receiptIds = finding.evidence_event_ids ?? [];
+          const receiptNote = receiptIds.length > 1
+            ? ` · ${receiptIds.length} receipts`
+            : "";
           return (
             <button
               key={findingKey(finding)}
@@ -76,8 +80,11 @@ export default function FindingsPanel({
                 <b title={`Estimated opportunity: ${opportunity}`}>{opportunity}</b>
               </span>
               <strong><Blurred>{finding.session_title ?? "Untitled session"}</Blurred></strong>
-              <span className="driver-card-note">
-                turn {finding.entry_turn} · carried {finding.carried_turns} turn{finding.carried_turns === 1 ? "" : "s"}
+              <span
+                className="driver-card-note"
+                title={receiptIds.length ? `Recorded event receipts: ${receiptIds.join(", ")}` : undefined}
+              >
+                turn {finding.entry_turn} · carried {finding.carried_turns} turn{finding.carried_turns === 1 ? "" : "s"}{receiptNote}
               </span>
             </button>
           );

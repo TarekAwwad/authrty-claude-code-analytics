@@ -24,7 +24,7 @@ export function findingKey(finding: ContextFinding): string {
 export default function ContextEconomics({ projects, onOpenSession }: Props) {
   const [projectId, setProjectId] = React.useState<number | null>(null);
   const [minSupport, setMinSupport] = React.useState(3);
-  // Hierarchy: archetype (kind of waste, tabs) → finding (which session/event,
+  // Hierarchy: archetype (kind of opportunity, tabs) → finding (which session/event,
   // list) → investigator (the evidence). Both selections fall back to the
   // first available entry so the board always shows evidence.
   const [archetypeKey, setArchetypeKey] = React.useState<string | null>(null);

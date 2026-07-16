@@ -7,7 +7,7 @@ import type { ContextArchetype, ContextEconomicsMeta } from "../../api/types";
 const archetypes: ContextArchetype[] = [
   {
     key: "oversized",
-    title: "Oversized tool results",
+    title: "Large result carry opportunity",
     description: "",
     recommendation: "",
     meets_support: true,

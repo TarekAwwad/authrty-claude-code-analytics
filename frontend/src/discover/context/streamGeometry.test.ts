@@ -82,6 +82,7 @@ describe("counterfactualSeries", () => {
     savings_usd: 0.02,
     counterfactual: { model: "capped", params: { cap_tokens: 1_500 } },
     event_id: 5,
+    evidence_event_ids: [5],
   };
 
   it("subtracts contributor savings over the carry window", () => {

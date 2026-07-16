@@ -478,6 +478,7 @@ class ContextFinding(BaseModel):
     savings_usd: float = 0
     counterfactual: ContextCounterfactual = Field(default_factory=ContextCounterfactual)
     event_id: int | None = None
+    evidence_event_ids: list[int] = Field(default_factory=list)
 
 
 class ContextThumbnailPoint(BaseModel):

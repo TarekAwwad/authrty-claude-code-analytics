@@ -2069,7 +2069,7 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
   margin-right: 7px;
 }
 
-.archetype-savings {
+.archetype-opportunity {
   flex-shrink: 0;
   font-size: 18px;
   font-weight: 700;
@@ -2445,8 +2445,8 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
   gap: 10px;
   padding: 7px 10px;
   font-size: 12px;
-  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--border));
-  background: color-mix(in srgb, var(--danger) 7%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--warning) 28%, var(--border));
+  background: color-mix(in srgb, var(--warning) 7%, var(--bg));
   border-radius: 8px;
 }
 
@@ -2461,8 +2461,23 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
 
 .drilldown-inspecting strong {
   flex: 0 0 auto;
-  color: var(--success);
+  color: var(--warning);
   font-variant-numeric: tabular-nums;
+}
+
+.drilldown-assumption {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.drilldown-assumption span {
+  margin-right: 6px;
+  color: var(--faint);
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
 }
 
 /* Ballast lanes */

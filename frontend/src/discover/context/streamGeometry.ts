@@ -121,7 +121,7 @@ export function stackedPaths(bands: StreamBand[], width: number, height: number)
  * Reconstruct the per-turn context sizes the session would have had if the
  * finding's counterfactual had been applied. Mirrors the backend's savings
  * models (context_economics.py): outside the affected turns the series equals
- * the observed context, so the gap between the two curves IS the claimed waste.
+ * the observed context, so the gap between the curves is the modeled reduction.
  *
  * Returns null when the counterfactual cannot be reconstructed (missing params
  * or a finding that doesn't map onto this thread).
