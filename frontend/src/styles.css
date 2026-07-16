@@ -1354,13 +1354,6 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
 .subgroup-page-head p[role="note"] {
   margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5;
 }
-.subgroup-experimental-badge {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 7px; border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
-  border-radius: 999px; color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-  font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
-}
 .discover-toolbar {
   display: flex; align-items: flex-start; justify-content: space-between; gap: 12px 18px; flex-wrap: wrap;
 }
@@ -3660,7 +3653,6 @@ html:has(.specimen-dialog[open]) {
 }
 
 .team-dashboard-strip,
-.team-symbols,
 .team-import-list {
   min-width: 0;
   border: 1px solid var(--border);
@@ -3684,7 +3676,7 @@ html:has(.specimen-dialog[open]) {
 }
 
 .team-dashboard-strip span,
-.team-symbols-head span,
+.team-card-head span,
 .team-import-list p,
 .team-import-list li span {
   color: var(--muted);
@@ -3701,6 +3693,13 @@ html:has(.specimen-dialog[open]) {
   color: var(--text-strong);
   font-family: var(--font-mono);
   font-size: 14px;
+}
+
+.team-dashboard-strip small {
+  display: block;
+  margin-top: 4px;
+  color: var(--faint);
+  font-size: 10.5px;
 }
 
 .team-member-flow,
@@ -3835,12 +3834,7 @@ html:has(.specimen-dialog[open]) {
   font-size: 10.5px;
 }
 
-.team-symbols {
-  padding: 14px 16px;
-  flex: none;
-}
-
-.team-symbols-head,
+.team-card-head,
 .team-import-list-head {
   display: flex;
   align-items: baseline;
@@ -3849,21 +3843,13 @@ html:has(.specimen-dialog[open]) {
   margin-bottom: 12px;
 }
 
-.team-symbols h2,
 .team-import-list h2 {
   color: var(--text-strong);
   font-size: 15.5px;
 }
 
-.team-symbols p,
 .team-import-list p {
   margin: 0;
-}
-
-.team-symbols .seq-chip em {
-  margin-left: 4px;
-  color: var(--text-strong);
-  font-style: normal;
 }
 
 .team-import-list-head {
@@ -4149,9 +4135,15 @@ html:has(.specimen-dialog[open]) {
 .team-bar-row {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 140px) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 165px) minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
+}
+
+.team-bar-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
 }
 
 .team-bar-label {
@@ -4162,6 +4154,14 @@ html:has(.specimen-dialog[open]) {
   color: var(--muted);
   font-size: 11.5px;
   text-transform: capitalize;
+}
+
+.team-bar-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--faint);
+  font-size: 9.5px;
 }
 
 .team-bar-track {

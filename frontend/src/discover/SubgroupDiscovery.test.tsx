@@ -126,6 +126,7 @@ describe("SubgroupDiscovery", () => {
 
     expect(await screen.findByRole("heading", { name: "Experimental subgroup associations" }))
       .toBeInTheDocument();
+    expect(screen.queryByText(/^Experimental$/)).not.toBeInTheDocument();
     expect(screen.getByRole("note")).toHaveTextContent(/observed associations, not causal/i);
     expect(await screen.findByRole("heading", { name: "Observed cost association" }))
       .toBeInTheDocument();

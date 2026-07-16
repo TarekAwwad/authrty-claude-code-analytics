@@ -1,15 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { getTeamDashboard } from "../api/client";
-import { compactInt, prettySymbol } from "../contribute/specimen";
+import { compactInt } from "../contribute/specimen";
 import { buildAreaChart } from "./teamCharts";
 import LoadingBar from "../components/LoadingBar";
 
 const CHART_W = 600;
 const CHART_H = 130;
 
-function prettyRisk(category: string): string {
-  return category.replace(/_/g, " ");
+function formatRate(value: number): string {
+  return Number.isFinite(value) ? value.toFixed(2) : "0.00";
+}
+
+function countLabel(value: number, singular: string): string {
+  return `${compactInt(value)} ${singular}${value === 1 ? "" : "s"}`;
 }
 
 interface Props {
@@ -51,7 +55,7 @@ export default function TeamOverview({ onGoToImport }: Props) {
         <Header />
         <div className="team-empty card">
           <strong>No team bundles imported yet.</strong>
-          <p>Import a team bundle to see aggregated usage, risk patterns, and activity.</p>
+          <p>Import a team bundle to see aggregated activity and reliability summaries.</p>
           <button type="button" className="contribute-primary-button" onClick={onGoToImport}>
             <ArrowRight size={15} aria-hidden="true" /> Go to Import
           </button>
@@ -62,7 +66,11 @@ export default function TeamOverview({ onGoToImport }: Props) {
 
   const tokens = summary.tokens;
   const stats = summary.stats;
-  const risks = summary.risk_categories ?? [];
+  const reliability = summary.reliability ?? {
+    error_count: stats?.errors ?? 0,
+    session_count: sessionCount,
+    errors_per_session: sessionCount > 0 ? (stats?.errors ?? 0) / sessionCount : 0,
+  };
   const models = summary.models ?? [];
   const members = summary.members ?? [];
   const projects = summary.projects ?? [];
@@ -74,11 +82,11 @@ export default function TeamOverview({ onGoToImport }: Props) {
   const projectMax = Math.max(...projectRows.map((p) => p.tokens), 1);
   const toolMax = Math.max(...tools.slice(0, 8).map((t) => t.call_count), 1);
   const fileTypeMax = Math.max(...fileTypes.slice(0, 8).map((f) => f.count), 1);
-  const symbols = (summary.sequence ?? []).slice(0, 8);
   const overTime = summary.over_time ?? [];
   const activity = buildAreaChart(overTime.map((p) => ({ label: p.date, value: p.tokens })), CHART_W, CHART_H);
-  const riskMax = Math.max(...risks.map((r) => r.session_count), 1);
-  const modelMax = Math.max(...models.map((m) => m.session_count), 1);
+  const reliabilityRows = [...members].sort((a, b) => a.member_name.localeCompare(b.member_name));
+  const reliabilityMax = Math.max(...reliabilityRows.map((member) => member.errors_per_session), 0);
+  const modelMax = Math.max(...models.map((model) => model.tokens), 0);
 
   return (
     <main className="page team-flow-page team-overview-page">
@@ -98,12 +106,13 @@ export default function TeamOverview({ onGoToImport }: Props) {
             <strong>{compactInt(tokens?.input ?? 0)} in / {compactInt(tokens?.output ?? 0)} out</strong>
           </div>
           <div>
-            <span>Errors</span>
-            <strong>{compactInt(stats?.errors ?? 0)}</strong>
+            <span>Recorded errors / session</span>
+            <strong>{formatRate(reliability.errors_per_session)} per session</strong>
+            <small>{countLabel(reliability.error_count, "error")} / {countLabel(reliability.session_count, "session")}</small>
           </div>
           <div>
-            <span>Loops</span>
-            <strong>{compactInt(stats?.loops ?? 0)}</strong>
+            <span>Recorded tool calls</span>
+            <strong>{compactInt(stats?.tool_calls ?? 0)}</strong>
           </div>
           <div>
             <span>Bundles</span>
@@ -114,8 +123,8 @@ export default function TeamOverview({ onGoToImport }: Props) {
         <div className="team-overview-board">
           {overTime.length > 0 ? (
             <section className="team-activity card" aria-labelledby="team-activity-title">
-              <div className="team-symbols-head">
-                <h2 id="team-activity-title">Activity over time</h2>
+              <div className="team-card-head">
+                <h2 id="team-activity-title">Token activity over time</h2>
                 <span>
                   {meta?.date_from} → {meta?.date_to}
                 </span>
@@ -125,7 +134,7 @@ export default function TeamOverview({ onGoToImport }: Props) {
                 viewBox={`0 0 ${CHART_W} ${CHART_H}`}
                 preserveAspectRatio="none"
                 role="img"
-                aria-label="Activity over time"
+                aria-label="Token activity over time"
               >
                 <path d={activity.areaPath} className="team-activity-area" />
                 <path d={activity.linePath} className="team-activity-line" fill="none" vectorEffect="non-scaling-stroke" />
@@ -135,33 +144,38 @@ export default function TeamOverview({ onGoToImport }: Props) {
 
           <div className="team-breakdowns">
             <TeamBars
-              title="Risk patterns"
-              ariaLabel="Team risk patterns"
-              rows={risks.map((r) => ({ label: prettyRisk(r.category), value: r.session_count }))}
-              max={riskMax}
-              empty="No risk findings across team bundles."
+              title="Recorded errors per session"
+              ariaLabel="Recorded errors per session by member"
+              rows={reliabilityRows.map((member) => ({
+                label: member.member_name,
+                value: member.errors_per_session,
+                valueLabel: formatRate(member.errors_per_session),
+                detail: `${countLabel(member.error_count, "error")} / ${countLabel(member.session_count, "session")}`,
+              }))}
+              max={reliabilityMax}
+              empty="No member-level reliability data recorded."
             />
             <TeamBars
-              title="Model mix"
-              ariaLabel="Team model mix"
-              rows={models.map((m) => ({ label: m.model, value: m.session_count }))}
+              title="Model token mix"
+              ariaLabel="Team model token mix"
+              rows={models.map((model) => ({ label: model.model, value: model.tokens }))}
               max={modelMax}
-              empty="No models recorded."
+              empty="No per-model token breakdown recorded."
             />
           </div>
 
           {(members.length > 0 || projectRows.length > 0) && (
             <div className="team-breakdowns">
               <TeamBars
-                title="Tokens by member"
-                ariaLabel="Tokens by member"
+                title="Token volume by member"
+                ariaLabel="Token volume by member"
                 rows={memberRows.map((m) => ({ label: m.member_name, value: m.tokens }))}
                 max={memberMax}
                 empty="No members yet."
               />
               <TeamBars
-                title="Tokens by project"
-                ariaLabel="Tokens by project"
+                title="Token volume by project"
+                ariaLabel="Token volume by project"
                 rows={projectRows.map((p) => ({ label: p.project_name, value: p.tokens }))}
                 max={projectMax}
                 empty="No projects yet."
@@ -187,26 +201,6 @@ export default function TeamOverview({ onGoToImport }: Props) {
             </div>
           )}
 
-          <section className="team-symbols" aria-labelledby="team-symbols-title">
-            <div className="team-symbols-head">
-              <h2 id="team-symbols-title">Top sequence symbols</h2>
-              <span>{compactInt(meta?.bundle_count ?? 0)} imported bundles</span>
-            </div>
-            {symbols.length > 0 ? (
-              <ol className="seq-strand">
-                {symbols.map(({ sym, count }) => {
-                  const { label, kind } = prettySymbol(sym);
-                  return (
-                    <li className={`seq-chip k-${kind}`} key={sym} title={sym}>
-                      {label} <em>x{compactInt(count)}</em>
-                    </li>
-                  );
-                })}
-              </ol>
-            ) : (
-              <p>No sequence symbols yet.</p>
-            )}
-          </section>
         </div>
       </section>
     </main>
@@ -243,26 +237,27 @@ function TeamBars({
 }: {
   title: string;
   ariaLabel: string;
-  rows: { label: string; value: number }[];
+  rows: { label: string; value: number; valueLabel?: string; detail?: string }[];
   max: number;
   empty: string;
 }) {
   return (
     <section className="team-bars card" aria-label={ariaLabel}>
-      <div className="team-symbols-head">
+      <div className="team-card-head">
         <h2>{title}</h2>
       </div>
       {rows.length > 0 ? (
         <div className="team-bar-rows">
           {rows.map((row) => (
             <div className="team-bar-row" key={row.label}>
-              <span className="team-bar-label" title={row.label}>
-                {row.label}
+              <span className="team-bar-copy">
+                <span className="team-bar-label" title={row.label}>{row.label}</span>
+                {row.detail && <small>{row.detail}</small>}
               </span>
               <span className="team-bar-track">
-                <i style={{ width: `${(row.value / max) * 100}%` }} />
+                <i style={{ width: `${max > 0 ? (row.value / max) * 100 : 0}%` }} />
               </span>
-              <span className="team-bar-val">{compactInt(row.value)}</span>
+              <span className="team-bar-val">{row.valueLabel ?? compactInt(row.value)}</span>
             </div>
           ))}
         </div>

@@ -291,6 +291,42 @@ def test_team_dashboard_counts_subagent_sessions_once_per_session(tmp_path):
     assert custom["event_count"] == 5
 
 
+def test_team_dashboard_uses_observed_units_and_omits_deprecated_inventory(tmp_path):
+    bundle = _bundle_from_sanitized(tmp_path).to_dict()
+    expected_model_tokens: dict[str, int] = {}
+    expected_errors = 0
+    for session in bundle["sessions"]:
+        expected_errors += int(session["stats"].get("errors", 0))
+        for model, tokens in session["tokens_by_model"].items():
+            expected_model_tokens[model] = expected_model_tokens.get(model, 0) + int(
+                tokens.get("input", 0)
+            ) + int(tokens.get("output", 0))
+
+    conn = _team_conn()
+    team_bundles.import_team_bundle(conn, bundle, source_path=Path("bundle.json"))
+
+    dashboard = team_bundles.team_dashboard(conn)
+
+    assert {"risk_categories", "sequence"}.isdisjoint(dashboard)
+    assert {"loops", "max_repeat"}.isdisjoint(dashboard["stats"])
+    assert dashboard["reliability"]["error_count"] == expected_errors
+    assert dashboard["reliability"]["session_count"] == len(bundle["sessions"])
+    assert dashboard["reliability"]["errors_per_session"] == pytest.approx(
+        expected_errors / len(bundle["sessions"])
+    )
+    assert {
+        row["model"]: row["tokens"] for row in dashboard["models"]
+    } == expected_model_tokens
+    assert all(set(row) == {"model", "tokens"} for row in dashboard["models"])
+
+    member = dashboard["members"][0]
+    assert member["error_count"] == expected_errors
+    assert member["session_count"] == len(bundle["sessions"])
+    assert member["errors_per_session"] == pytest.approx(
+        expected_errors / len(bundle["sessions"])
+    )
+
+
 def test_reimport_newer_bundle_replaces_members_previous_sessions(tmp_path):
     bundle = _bundle_from_sanitized(tmp_path).to_dict()
     newer = _redated(bundle, "2026-06-19")

@@ -1,6 +1,6 @@
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ExternalLink, FlaskConical, Target, TrendingUp } from "lucide-react";
+import { ExternalLink, Target, TrendingUp } from "lucide-react";
 import { getDiscoveryAnalytics } from "../api/client";
 import InsightStat from "../components/InsightStat";
 import LoadingBar from "../components/LoadingBar";
@@ -369,9 +369,6 @@ export default function SubgroupDiscovery({ projects, onOpenSession }: Props) {
     <main className={`discover-page discover-section-${activeSection}`}>
       <div className="discover-page-inner">
         <header className="subgroup-page-head">
-          <span className="subgroup-experimental-badge">
-            <FlaskConical size={12} /> Experimental
-          </span>
           <h1>Experimental subgroup associations</h1>
           <p role="note">
             Observed associations, not causal conclusions. Each section declares

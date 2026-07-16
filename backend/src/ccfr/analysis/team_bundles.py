@@ -58,6 +58,14 @@ STAT_KEYS = (
     "max_repeat",
     "persisted_outputs",
 )
+DASHBOARD_STAT_KEYS = (
+    "turns",
+    "tool_calls",
+    "subagents",
+    "errors",
+    "system",
+    "persisted_outputs",
+)
 SESSION_KEYS = {
     "pid",
     "sid",
@@ -721,10 +729,10 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
     sessions = conn.execute(
         """
         SELECT tb.bundle_id, tbs.member_id, tbs.project_id, tbs.project_name, tbs.provider,
-               tbs.first_date, tbs.last_date, tbs.duration_s, tbs.models_json,
-               tbs.tokens_json, tbs.stats_json, tbs.stop_reasons_json,
-               tbs.risk_categories_json, tbs.subagents_json, tbs.tools_json,
-               tbs.file_types_json, tbs.sequence_json
+               tbs.first_date, tbs.last_date, tbs.duration_s,
+               tbs.tokens_json, tbs.tokens_by_model_json, tbs.stats_json,
+               tbs.stop_reasons_json, tbs.subagents_json, tbs.tools_json,
+               tbs.file_types_json
         FROM team_bundle_sessions tbs
         JOIN team_bundles tb ON tb.id = tbs.team_bundle_id
         ORDER BY tbs.first_date, tbs.id
@@ -732,12 +740,10 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
     ).fetchall()
 
     token_totals = {key: 0 for key in TOKEN_KEYS}
-    stat_totals = {key: 0 for key in STAT_KEYS}
+    stat_totals = {key: 0 for key in DASHBOARD_STAT_KEYS}
     provider_counts: Counter[str] = Counter()
-    model_counts: Counter[str] = Counter()
+    model_token_totals: Counter[str] = Counter()
     stop_reason_counts: Counter[str] = Counter()
-    risk_counts: Counter[str] = Counter()
-    sequence_counts: Counter[str] = Counter()
     subagent_events: Counter[str] = Counter()
     subagent_sessions: Counter[str] = Counter()
     over_time: dict[str, dict[str, int]] = defaultdict(lambda: {"session_count": 0, "tokens": 0})
@@ -754,7 +760,7 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
 
     member_summary: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"label": "", "member_ids": set(), "bundle_ids": set(), "project_ids": set(),
-                 "session_count": 0, "tokens": 0}
+                 "session_count": 0, "tokens": 0, "error_count": 0}
     )
     project_summary: dict[str, dict[str, Any]] = {}
     tool_calls_total: Counter[str] = Counter()
@@ -775,29 +781,27 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
     for row in sessions:
         member_id = str(row["member_id"])
         tokens = _loads_dict(row["tokens_json"])
+        tokens_by_model = _loads_dict(row["tokens_by_model_json"])
         stats = _loads_dict(row["stats_json"])
-        models = _loads_list(row["models_json"])
         stop_reasons = _loads_dict(row["stop_reasons_json"])
-        risks = _loads_list(row["risk_categories_json"])
         subagents = _loads_list(row["subagents_json"])
-        sequence = _loads_list(row["sequence_json"])
 
         for key in TOKEN_KEYS:
             token_totals[key] += _nonnegative_int(tokens.get(key))
-        for key in STAT_KEYS:
-            value = _nonnegative_int(stats.get(key))
-            if key == "max_repeat":
-                stat_totals[key] = max(stat_totals[key], value)
-            else:
-                stat_totals[key] += value
+        for key in DASHBOARD_STAT_KEYS:
+            stat_totals[key] += _nonnegative_int(stats.get(key))
 
         provider_counts[str(row["provider"] or DEFAULT_PROVIDER)] += 1
-        for model in models:
-            model_counts[str(model)] += 1
+        for model, model_tokens in tokens_by_model.items():
+            if not isinstance(model_tokens, dict):
+                continue
+            observed_tokens = _nonnegative_int(model_tokens.get("input")) + _nonnegative_int(
+                model_tokens.get("output")
+            )
+            if observed_tokens > 0:
+                model_token_totals[str(model)] += observed_tokens
         for reason, count in stop_reasons.items():
             stop_reason_counts[str(reason)] += _nonnegative_int(count)
-        for category in risks:
-            risk_counts[str(category)] += 1
         seen_types: set[str] = set()
         for subagent in subagents:
             if not isinstance(subagent, dict):
@@ -807,10 +811,6 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
             seen_types.add(agent_type)
         for agent_type in seen_types:
             subagent_sessions[agent_type] += 1
-        for step in sequence:
-            if isinstance(step, dict) and step.get("sym"):
-                sequence_counts[str(step["sym"])] += 1
-
         session_tokens = _nonnegative_int(tokens.get("input")) + _nonnegative_int(tokens.get("output"))
 
         project_key = str(row["project_id"])
@@ -851,6 +851,9 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
         member_summary[_member_key(member_id)]["project_ids"].add(project_key)
         member_summary[_member_key(member_id)]["session_count"] += 1
         member_summary[_member_key(member_id)]["tokens"] += session_tokens
+        member_summary[_member_key(member_id)]["error_count"] += _nonnegative_int(
+            stats.get("errors")
+        )
         if row["first_date"]:
             bucket = str(row["first_date"])
             first_dates.append(bucket)
@@ -870,10 +873,19 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
         },
         "tokens": {**token_totals, "total": token_totals["input"] + token_totals["output"]},
         "stats": stat_totals,
+        "reliability": {
+            "error_count": stat_totals["errors"],
+            "session_count": len(sessions),
+            "errors_per_session": stat_totals["errors"] / len(sessions) if sessions else 0.0,
+        },
         "providers": _count_entries(provider_counts, "provider"),
-        "models": _count_entries(model_counts, "model"),
+        "models": [
+            {"model": model, "tokens": tokens}
+            for model, tokens in sorted(
+                model_token_totals.items(), key=lambda item: (-item[1], item[0])
+            )
+        ],
         "stop_reasons": _count_entries(stop_reason_counts, "reason", count_key="count"),
-        "risk_categories": _count_entries(risk_counts, "category", count_key="session_count"),
         "subagents": [
             {
                 "agent_type": agent_type,
@@ -881,10 +893,6 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
                 "session_count": subagent_sessions[agent_type],
             }
             for agent_type in sorted(subagent_events)
-        ],
-        "sequence": [
-            {"sym": sym, "count": count}
-            for sym, count in sequence_counts.most_common(20)
         ],
         "members": [
             {
@@ -894,6 +902,12 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
                 "project_count": len(summary["project_ids"]),
                 "session_count": int(summary["session_count"]),
                 "tokens": int(summary["tokens"]),
+                "error_count": int(summary["error_count"]),
+                "errors_per_session": (
+                    int(summary["error_count"]) / int(summary["session_count"])
+                    if summary["session_count"]
+                    else 0.0
+                ),
             }
             for _key, summary in sorted(member_summary.items(), key=lambda item: item[1]["label"])
         ],

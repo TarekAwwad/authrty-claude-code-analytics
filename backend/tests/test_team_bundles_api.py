@@ -183,7 +183,7 @@ def test_team_import_accepts_legacy_precanonical_export_hash(client):
     assert resp.json()["imported"] is True
     assert resp.json()["bundle_id"] != bundle["bundle_id"]
     dashboard = c.get("/api/team/dashboard").json()
-    assert {"sym": "CALL:other", "count": 1} in dashboard["sequence"]
+    assert "sequence" not in dashboard
 
 
 def test_team_import_rejects_outside_root_and_invalid_profile_schema(client, tmp_path):
@@ -228,6 +228,13 @@ def test_team_dashboard_aggregates_imported_bundles(client):
     assert body["meta"]["session_count"] == 3
     assert body["tokens"]["input"] > 0
     assert body["tokens"]["output"] > 0
+    assert {"risk_categories", "sequence"}.isdisjoint(body)
+    assert {"loops", "max_repeat"}.isdisjoint(body["stats"])
+    assert body["reliability"]["session_count"] == body["meta"]["session_count"]
+    assert body["reliability"]["errors_per_session"] == pytest.approx(
+        body["reliability"]["error_count"] / body["reliability"]["session_count"]
+    )
+    assert all(set(model) == {"model", "tokens"} for model in body["models"])
     assert {"provider": "claude", "session_count": 3} in body["providers"]
     assert any(item["reason"] == "tool_use" for item in body["stop_reasons"])
     assert any(item["agent_type"] == "general-purpose" for item in body["subagents"])

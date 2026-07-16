@@ -861,15 +861,17 @@ export interface TeamDashboard {
     tool_calls?: number;
     subagents?: number;
     errors?: number;
-    loops?: number;
     [key: string]: number | undefined;
   };
+  reliability?: {
+    error_count: number;
+    session_count: number;
+    errors_per_session: number;
+  };
   providers?: Array<{ provider: string; session_count: number }>;
-  models?: Array<{ model: string; session_count: number }>;
+  models?: Array<{ model: string; tokens: number }>;
   stop_reasons?: Array<{ reason: string; count: number }>;
-  risk_categories?: Array<{ category: string; session_count: number }>;
   subagents?: Array<{ agent_type: string; event_count: number; session_count: number }>;
-  sequence?: Array<{ sym: string; count: number }>;
   members?: {
     member_name: string;
     member_ids: string[];
@@ -877,6 +879,8 @@ export interface TeamDashboard {
     project_count: number;
     session_count: number;
     tokens: number;
+    error_count: number;
+    errors_per_session: number;
   }[];
   projects?: {
     project_key: string;
