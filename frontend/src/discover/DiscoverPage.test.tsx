@@ -29,7 +29,7 @@ beforeEach(() => {
     meta: {
       window: { date_from: null, date_to: null },
       cost_available: true, costs_partial: false,
-      total_hits: 0, total_windows: 0, blocked_minutes: 0,
+      total_hits: 0, total_windows: 0, minutes_until_reset: 0,
       hits_per_week_recent: 0, hit_counts: {}, plan_history: [],
       method_note: "note",
     },

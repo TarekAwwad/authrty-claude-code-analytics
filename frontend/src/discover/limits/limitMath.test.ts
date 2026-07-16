@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { LimitEraEntry, LimitHitEntry, LimitWindowEntry } from "../../api/types";
+import * as limitMath from "./limitMath";
 import {
-  activeEra,
-  buildVerdict,
+  eraHitLevel,
   eraRates,
   formatLimitTick,
   formatLimitValue,
-  meanUsageAtHit,
+  formatResetInterval,
 } from "./limitMath";
 
 function win(start: string, end: string, era: string, hit = false): LimitWindowEntry {
@@ -16,7 +16,7 @@ function win(start: string, end: string, era: string, hit = false): LimitWindowE
 function hit(windowIndex: number | null): LimitHitEntry {
   return {
     ts: "2026-07-01T01:00:00Z", kind: "session", reset_at: null,
-    blocked_minutes: null, usage_at_hit: null, usage_at_hit_tokens: null,
+    minutes_until_reset: null, usage_at_hit: null, usage_at_hit_tokens: null,
     occurrence_count: 1,
     window_index: windowIndex, session_ids: [], session_titles: [],
   };
@@ -24,10 +24,10 @@ function hit(windowIndex: number | null): LimitHitEntry {
 
 function era(overrides: Partial<LimitEraEntry>): LimitEraEntry {
   return {
-    era: "Pro", window_count: 10, session_hit_count: 2, blocked_minutes: 60,
-    cap_median_usd: 10, cap_min_usd: 8, cap_max_usd: 12, near_miss_count: 1,
-    cap_median_tokens: 1000, cap_min_tokens: 800, cap_max_tokens: 1200,
-    near_miss_count_tokens: 2, cap_percentile: 0.7, cap_percentile_tokens: 0.95,
+    era: "Pro", window_count: 10, session_hit_count: 2, minutes_until_reset: 60,
+    hit_level_median_usd: 10, hit_level_min_usd: 8, hit_level_max_usd: 12,
+    hit_level_median_tokens: 1000, hit_level_min_tokens: 800, hit_level_max_tokens: 1200,
+    hit_level_percentile: 0.7, hit_level_percentile_tokens: 0.95,
     usage_at_hit_usd: [8, 12], usage_at_hit_tokens: [800, 1200], ...overrides,
   };
 }
@@ -72,62 +72,24 @@ describe("eraRates", () => {
   });
 });
 
-describe("activeEra and meanUsageAtHit", () => {
-  it("reports the newest window's era and the mean hit usage", () => {
-    const windows = [
-      win("2026-06-01T00:00:00Z", "2026-06-01T05:00:00Z", "Pro"),
-      win("2026-07-01T00:00:00Z", "2026-07-01T05:00:00Z", "Max 5x"),
-    ];
-    expect(activeEra(windows)).toBe("Max 5x");
-    expect(activeEra([])).toBeNull();
-    expect(meanUsageAtHit(era({}))).toBe(10);
-    expect(meanUsageAtHit(era({}), "tokens")).toBe(1000);
-    expect(meanUsageAtHit(era({ usage_at_hit_usd: [] }))).toBeNull();
+describe("eraHitLevel and reset formatting", () => {
+  it("selects matching observed fields for each basis", () => {
+    expect(eraHitLevel(era({}), "cost")).toEqual({
+      values: [8, 12], median: 10, min: 8, max: 12, percentile: 0.7,
+    });
+    expect(eraHitLevel(era({}), "tokens")).toEqual({
+      values: [800, 1200], median: 1000, min: 800, max: 1200, percentile: 0.95,
+    });
+  });
+
+  it("formats the reset-minus-hit interval neutrally", () => {
+    expect(formatResetInterval(49.3)).toBe("0.8h");
+    expect(formatResetInterval(0)).toBe("0h");
   });
 });
 
-describe("buildVerdict", () => {
-  it("calls a hit-free plan comfortably dimensioned", () => {
-    const v = buildVerdict(
-      era({ session_hit_count: 0, blocked_minutes: 0 }),
-      { hitCount: 0, weeks: 4, perWeek: 0 },
-    );
-    expect(v?.tone).toBe("good");
-    expect(v?.text).toMatch(/comfortably dimensioned/);
-  });
-
-  it("flags heavy weekly waiting as outgrown", () => {
-    const v = buildVerdict(era({ blocked_minutes: 1000 }), { hitCount: 5, weeks: 2, perWeek: 2.5 });
-    expect(v?.tone).toBe("tight");
-    expect(v?.text).toMatch(/outgrown/);
-  });
-
-  it("calls a top-decile cap well dimensioned", () => {
-    const v = buildVerdict(
-      era({ cap_percentile: 0.95, blocked_minutes: 30 }),
-      { hitCount: 1, weeks: 4, perWeek: 0.25 },
-    );
-    expect(v?.tone).toBe("good");
-    expect(v?.text).toMatch(/well dimensioned: only your top 5%/);
-  });
-
-  it("uses the selected basis for the percentile verdict", () => {
-    const v = buildVerdict(
-      era({ cap_percentile: 0.5, cap_percentile_tokens: 0.95, blocked_minutes: 30 }),
-      { hitCount: 1, weeks: 4, perWeek: 0.25 },
-      "tokens",
-    );
-    expect(v?.tone).toBe("good");
-    expect(v?.text).toMatch(/top 5%/);
-  });
-
-  it("defaults to the watch verdict in between", () => {
-    const v = buildVerdict(era({}), { hitCount: 2, weeks: 2, perWeek: 1 });
-    expect(v?.tone).toBe("watch");
-    expect(v?.text).toMatch(/watch the trend/);
-  });
-
-  it("returns nothing without an era", () => {
-    expect(buildVerdict(undefined, undefined)).toBeNull();
+describe("automatic verdict removal", () => {
+  it("does not export a plan-fit verdict builder", () => {
+    expect(limitMath).not.toHaveProperty("buildVerdict");
   });
 });

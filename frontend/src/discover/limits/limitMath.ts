@@ -3,7 +3,7 @@ import { formatTokens as formatTokenCount, formatUsd } from "../formatting";
 
 export type LimitBasis = "cost" | "tokens";
 
-export function formatBlocked(minutes: number): string {
+export function formatResetInterval(minutes: number): string {
   if (!minutes) return "0h";
   const hours = minutes / 60;
   return hours >= 10 ? `${Math.round(hours)}h` : `${hours.toFixed(1)}h`;
@@ -72,114 +72,43 @@ export function eraRates(
   return rates;
 }
 
-/** The plan the user is on now: the era of the newest window. */
-export function activeEra(windows: LimitWindowEntry[]): string | null {
-  return windows.length > 0 ? windows[windows.length - 1].era : null;
-}
-
 /** How the selected basis names itself in legends and aria-labels. */
 export function basisLabel(basis: LimitBasis): string {
   return basis === "cost" ? "API-equivalent cost" : "token volume";
 }
 
-export interface EraCap {
+export interface EraHitLevel {
   values: number[];
   median: number | null;
   min: number | null;
   max: number | null;
-  nearMissCount: number;
   percentile: number | null;
 }
 
 /**
- * The era's cap zone on the selected basis. The backend sends both bases side
+ * The era's observed hit levels on the selected basis. The backend sends both bases side
  * by side; picking between them belongs here, not in every chart.
  */
-export function eraCap(era: LimitEraEntry, basis: LimitBasis): EraCap {
+export function eraHitLevel(era: LimitEraEntry, basis: LimitBasis): EraHitLevel {
   if (basis === "cost") {
     return {
       values: era.usage_at_hit_usd,
-      median: era.cap_median_usd,
-      min: era.cap_min_usd,
-      max: era.cap_max_usd,
-      nearMissCount: era.near_miss_count,
-      percentile: era.cap_percentile,
+      median: era.hit_level_median_usd,
+      min: era.hit_level_min_usd,
+      max: era.hit_level_max_usd,
+      percentile: era.hit_level_percentile,
     };
   }
   return {
     values: era.usage_at_hit_tokens,
-    median: era.cap_median_tokens,
-    min: era.cap_min_tokens,
-    max: era.cap_max_tokens,
-    nearMissCount: era.near_miss_count_tokens,
-    percentile: era.cap_percentile_tokens,
+    median: era.hit_level_median_tokens,
+    min: era.hit_level_min_tokens,
+    max: era.hit_level_max_tokens,
+    percentile: era.hit_level_percentile_tokens,
   };
 }
 
 /** The window usage a single hit was measured at, on the selected basis. */
 export function hitUsage(hit: LimitHitEntry, basis: LimitBasis): number | null {
   return basis === "cost" ? hit.usage_at_hit : hit.usage_at_hit_tokens;
-}
-
-export function meanUsageAtHit(
-  era: LimitEraEntry,
-  basis: LimitBasis = "cost",
-): number | null {
-  const values = eraCap(era, basis).values;
-  if (values.length === 0) return null;
-  const sum = values.reduce((s, v) => s + v, 0);
-  return sum / values.length;
-}
-
-export type VerdictTone = "good" | "watch" | "tight";
-
-export interface Verdict {
-  tone: VerdictTone;
-  text: string;
-}
-
-// Waiting this long per week is treated as the plan being outgrown.
-const TIGHT_BLOCKED_MIN_PER_WEEK = 120;
-// A cap that only the top decile of windows can reach is a healthy fit.
-const COMFORTABLE_CAP_PERCENTILE = 0.9;
-
-/**
- * One-sentence reading of the active plan: is it dimensioned for this usage?
- * Decision markers, in order: no hits at all, heavy weekly waiting, cap only
- * reachable by outlier windows, and the in-between "fits but watch it" case.
- */
-export function buildVerdict(
-  era: LimitEraEntry | undefined,
-  rate: EraRate | undefined,
-  basis: LimitBasis = "cost",
-): Verdict | null {
-  if (!era) return null;
-  const plan = era.era || "your plan";
-  const weeks = rate?.weeks ?? 1;
-  const blockedPerWeek = era.blocked_minutes / weeks;
-  if (era.session_hit_count === 0 && era.blocked_minutes === 0) {
-    return {
-      tone: "good",
-      text: `No cap hits recorded on ${plan}. It is comfortably dimensioned for this usage.`,
-    };
-  }
-  if (blockedPerWeek >= TIGHT_BLOCKED_MIN_PER_WEEK) {
-    return {
-      tone: "tight",
-      text: `Caps cost you about ${formatBlocked(blockedPerWeek)} of waiting per week on ${plan}. This usage has outgrown the plan.`,
-    };
-  }
-  const percentile = eraCap(era, basis).percentile;
-  if (percentile != null && percentile >= COMFORTABLE_CAP_PERCENTILE) {
-    const topPct = Math.max(1, Math.round((1 - percentile) * 100));
-    return {
-      tone: "good",
-      text: `${plan} is well dimensioned: only your top ${topPct}% of windows reach the cap, costing about ${formatBlocked(blockedPerWeek)} of waiting per week.`,
-    };
-  }
-  const perWeek = rate ? rate.perWeek : era.session_hit_count;
-  return {
-    tone: "watch",
-    text: `You hit the ${plan} cap about ${perWeek.toFixed(1)} times a week, costing about ${formatBlocked(blockedPerWeek)} of waiting. The plan fits, but watch the trend.`,
-  };
 }

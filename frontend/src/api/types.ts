@@ -687,7 +687,7 @@ export interface LimitHitEntry {
   ts: string;
   kind: string;
   reset_at: string | null;
-  blocked_minutes: number | null;
+  minutes_until_reset: number | null;
   usage_at_hit: number | null;
   usage_at_hit_tokens: number | null;
   occurrence_count: number;
@@ -709,17 +709,15 @@ export interface LimitEraEntry {
   era: string;
   window_count: number;
   session_hit_count: number;
-  blocked_minutes: number;
-  cap_median_usd: number | null;
-  cap_min_usd: number | null;
-  cap_max_usd: number | null;
-  cap_median_tokens: number | null;
-  cap_min_tokens: number | null;
-  cap_max_tokens: number | null;
-  near_miss_count: number;
-  near_miss_count_tokens: number;
-  cap_percentile: number | null;
-  cap_percentile_tokens: number | null;
+  minutes_until_reset: number;
+  hit_level_median_usd: number | null;
+  hit_level_min_usd: number | null;
+  hit_level_max_usd: number | null;
+  hit_level_median_tokens: number | null;
+  hit_level_min_tokens: number | null;
+  hit_level_max_tokens: number | null;
+  hit_level_percentile: number | null;
+  hit_level_percentile_tokens: number | null;
   usage_at_hit_usd: number[];
   usage_at_hit_tokens: number[];
 }
@@ -730,7 +728,7 @@ export interface LimitsMeta {
   costs_partial: boolean;
   total_hits: number;
   total_windows: number;
-  blocked_minutes: number;
+  minutes_until_reset: number;
   hits_per_week_recent: number;
   hit_counts: Record<string, number>;
   plan_history: PlanEra[];
