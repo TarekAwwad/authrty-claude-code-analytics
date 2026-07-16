@@ -140,8 +140,8 @@ def test_detect_merges_same_reset_stamp_and_keeps_earliest_ts() -> None:
     assert hits[0].occurrence_count == 2
     assert hits[0].ts == _utc("2026-07-03T09:40:44Z")
     assert hits[0].reset_at == _utc("2026-07-03T10:30:00Z")
-    assert hits[0].blocked_minutes is not None
-    assert round(hits[0].blocked_minutes, 1) == 49.3
+    assert hits[0].minutes_until_reset is not None
+    assert round(hits[0].minutes_until_reset, 1) == 49.3
     assert hits[0].session_ids == [1]
     assert hits[0].session_titles == ["Session One"]
 
@@ -162,7 +162,23 @@ def test_detect_unparseable_reset_buckets_by_time() -> None:
     hits = detect_limit_hits(conn)
     assert len(hits) == 2
     assert hits[0].reset_at is None
-    assert hits[0].blocked_minutes is None
+    assert hits[0].minutes_until_reset is None
+
+
+def test_minutes_until_reset_is_recorded_delta_not_observed_wait_time() -> None:
+    hit = LimitHit(
+        ts=_utc("2026-07-03T09:40:44Z"),
+        kind="session",
+        reset_at=_utc("2026-07-03T10:30:00Z"),
+    )
+    invalid = LimitHit(
+        ts=_utc("2026-07-03T09:40:44Z"),
+        kind="session",
+        reset_at=_utc("2026-07-03T09:30:00Z"),
+    )
+
+    assert hit.minutes_until_reset == pytest.approx(49.2666667)
+    assert invalid.minutes_until_reset is None
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +309,24 @@ def priced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(limits_mod, "pricing_dir", lambda: tmp_path / "no-sheets")
 
 
+LIMIT_ERA_KEYS = {
+    "era",
+    "window_count",
+    "session_hit_count",
+    "minutes_until_reset",
+    "hit_level_median_usd",
+    "hit_level_min_usd",
+    "hit_level_max_usd",
+    "hit_level_median_tokens",
+    "hit_level_min_tokens",
+    "hit_level_max_tokens",
+    "hit_level_percentile",
+    "hit_level_percentile_tokens",
+    "usage_at_hit_usd",
+    "usage_at_hit_tokens",
+}
+
+
 def test_limits_analytics_full_payload(priced: None) -> None:
     conn = _make_conn()
     # Window 1 (May 20, Pro era): $10 usage then a session hit.
@@ -302,7 +336,7 @@ def test_limits_analytics_full_payload(priced: None) -> None:
     # Window 2 (July 3, Max era): $30 usage then a session hit.
     _add_usage(conn, 1, "2026-07-03T08:00:00Z", 3_000_000)
     _add_limit_hit(conn, 1, "2026-07-03T09:40:00Z")
-    # Window 3 (July 4, Max era): $25 quiet usage. 25 >= 0.6 * 30: a near-miss.
+    # Window 3 (July 4, Max era): $25 quiet usage.
     _add_usage(conn, 1, "2026-07-04T08:00:00Z", 2_500_000)
 
     payload = limits_analytics(conn, plan_history=[
@@ -315,17 +349,18 @@ def test_limits_analytics_full_payload(priced: None) -> None:
     assert payload["meta"]["total_windows"] == 3
     assert payload["meta"]["cost_available"] is True
     assert payload["meta"]["method_note"]
+    assert "blocked_minutes" not in payload["meta"]
+    assert "minutes_until_reset" in payload["meta"]
 
     eras = {era["era"]: era for era in payload["eras"]}
     assert set(eras) == {"Pro", "Max 5x"}
+    assert set(eras["Max 5x"]) == LIMIT_ERA_KEYS
     assert eras["Pro"]["session_hit_count"] == 1
-    assert eras["Pro"]["cap_median_usd"] == 10.0
-    assert eras["Pro"]["cap_median_tokens"] == 1_000_000
-    assert eras["Max 5x"]["cap_median_usd"] == 30.0
-    assert eras["Max 5x"]["cap_median_tokens"] == 3_000_000
-    assert eras["Max 5x"]["near_miss_count"] == 1
-    assert eras["Max 5x"]["near_miss_count_tokens"] == 1
-    assert eras["Max 5x"]["cap_percentile_tokens"] == 1.0
+    assert eras["Pro"]["hit_level_median_usd"] == 10.0
+    assert eras["Pro"]["hit_level_median_tokens"] == 1_000_000
+    assert eras["Max 5x"]["hit_level_median_usd"] == 30.0
+    assert eras["Max 5x"]["hit_level_median_tokens"] == 3_000_000
+    assert eras["Max 5x"]["hit_level_percentile_tokens"] == 1.0
     assert eras["Max 5x"]["window_count"] == 2
 
     assert [w["era"] for w in payload["windows"]] == ["Pro", "Max 5x", "Max 5x"]
@@ -349,10 +384,49 @@ def test_cost_and_token_percentiles_are_computed_independently(priced: None) -> 
 
     era = limits_analytics(conn)["eras"][0]
 
-    assert era["cap_percentile"] == 1.0
-    assert era["cap_percentile_tokens"] == 0.5
-    assert era["near_miss_count"] == 0
-    assert era["near_miss_count_tokens"] == 1
+    assert era["hit_level_percentile"] == 1.0
+    assert era["hit_level_percentile_tokens"] == 0.5
+
+
+def test_non_session_hits_remain_receipts_but_do_not_change_window_statistics(
+    priced: None,
+) -> None:
+    conn = _make_conn()
+    _add_usage(conn, 1, "2026-07-03T08:00:00Z", 1_000_000)
+    _add_limit_hit(conn, 1, "2026-07-03T09:00:00Z",
+                   "You've hit your session limit · resets 1pm (UTC)")
+    _add_limit_hit(conn, 1, "2026-07-03T20:00:00Z",
+                   "You've hit your weekly limit · resets 9pm (UTC)")
+    _add_limit_hit(conn, 1, "2026-07-04T02:00:00Z",
+                   "Your org has hit its monthly usage limit · resets 3am (UTC)")
+    _add_usage(conn, 1, "2026-07-04T08:00:00Z", 2_000_000)
+    _add_limit_hit(conn, 1, "2026-07-04T09:00:00Z",
+                   "You've hit your session limit · resets 1pm (UTC)")
+    _add_limit_hit(conn, 1, "2026-07-04T20:00:00Z",
+                   "Something rate-limited happened · resets 9pm (UTC)")
+
+    payload = limits_analytics(conn)
+    era = payload["eras"][0]
+
+    assert payload["meta"]["total_hits"] == 5
+    assert payload["meta"]["hit_counts"] == {
+        "session": 2,
+        "weekly": 1,
+        "org": 1,
+        "unknown": 1,
+    }
+    assert [hit["kind"] for hit in payload["hits"]] == [
+        "session", "weekly", "org", "session", "unknown",
+    ]
+    assert payload["meta"]["total_windows"] == 2
+    assert era["window_count"] == 2
+    assert era["session_hit_count"] == 2
+    assert era["usage_at_hit_usd"] == [10.0, 20.0]
+    assert era["hit_level_median_usd"] == 15.0
+    assert era["hit_level_percentile"] == 0.5
+    non_session = [hit for hit in payload["hits"] if hit["kind"] != "session"]
+    assert all(hit["window_index"] is None for hit in non_session)
+    assert all(hit["usage_at_hit"] is None for hit in non_session)
 
 
 def test_limits_analytics_without_plan_history_or_hits(priced: None) -> None:
@@ -364,31 +438,29 @@ def test_limits_analytics_without_plan_history_or_hits(priced: None) -> None:
     assert payload["eras"] == [
         {
             "era": "", "window_count": 1, "session_hit_count": 0,
-            "blocked_minutes": 0.0, "cap_median_usd": None, "cap_min_usd": None,
-            "cap_max_usd": None, "cap_median_tokens": None,
-            "cap_min_tokens": None, "cap_max_tokens": None,
-            "near_miss_count": 0, "near_miss_count_tokens": 0,
-            "cap_percentile": None, "cap_percentile_tokens": None,
+            "minutes_until_reset": 0.0,
+            "hit_level_median_usd": None, "hit_level_min_usd": None,
+            "hit_level_max_usd": None, "hit_level_median_tokens": None,
+            "hit_level_min_tokens": None, "hit_level_max_tokens": None,
+            "hit_level_percentile": None, "hit_level_percentile_tokens": None,
             "usage_at_hit_usd": [], "usage_at_hit_tokens": [],
         }
     ]
 
 
-def test_limits_analytics_zero_usage_cap_zone_stays_defined(priced: None) -> None:
+def test_limits_analytics_zero_usage_hit_level_stays_defined(priced: None) -> None:
     conn = _make_conn()
     # A hit as the first logged call of its window: measured usage-at-hit is
     # $0 (the real usage lived outside these logs). The zone is still
-    # reported, but near-miss and percentile are meaningless against a $0
-    # cap and stay unset.
+    # reported, but a percentile is meaningless against a $0 hit level.
     _add_limit_hit(conn, 1, "2026-07-03T09:40:00Z")
     payload = limits_analytics(conn)
     era = payload["eras"][0]
     assert era["session_hit_count"] == 1
-    assert era["cap_median_usd"] == 0.0
-    assert era["cap_median_tokens"] == 0
+    assert era["hit_level_median_usd"] == 0.0
+    assert era["hit_level_median_tokens"] == 0
     assert era["usage_at_hit_usd"] == [0.0]
     assert era["usage_at_hit_tokens"] == [0]
-    assert era["near_miss_count"] == 0
-    assert era["near_miss_count_tokens"] == 0
-    assert era["cap_percentile"] is None
-    assert era["cap_percentile_tokens"] is None
+    assert era["hit_level_percentile"] is None
+    assert era["hit_level_percentile_tokens"] is None
+    assert payload["meta"]["hits_per_week_recent"] == 0.25

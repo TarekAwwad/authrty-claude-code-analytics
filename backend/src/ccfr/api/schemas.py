@@ -703,7 +703,7 @@ class LimitHitOut(BaseModel):
     ts: str
     kind: str
     reset_at: str | None = None
-    blocked_minutes: float | None = None
+    minutes_until_reset: float | None = None
     usage_at_hit: float | None = None
     usage_at_hit_tokens: int | None = None
     occurrence_count: int = 1
@@ -725,17 +725,15 @@ class LimitEraOut(BaseModel):
     era: str = ""
     window_count: int = 0
     session_hit_count: int = 0
-    blocked_minutes: float = 0
-    cap_median_usd: float | None = None
-    cap_min_usd: float | None = None
-    cap_max_usd: float | None = None
-    cap_median_tokens: float | None = None
-    cap_min_tokens: int | None = None
-    cap_max_tokens: int | None = None
-    near_miss_count: int = 0
-    near_miss_count_tokens: int = 0
-    cap_percentile: float | None = None
-    cap_percentile_tokens: float | None = None
+    minutes_until_reset: float = 0
+    hit_level_median_usd: float | None = None
+    hit_level_min_usd: float | None = None
+    hit_level_max_usd: float | None = None
+    hit_level_median_tokens: float | None = None
+    hit_level_min_tokens: int | None = None
+    hit_level_max_tokens: int | None = None
+    hit_level_percentile: float | None = None
+    hit_level_percentile_tokens: float | None = None
     usage_at_hit_usd: list[float] = Field(default_factory=list)
     usage_at_hit_tokens: list[int] = Field(default_factory=list)
 
@@ -746,7 +744,7 @@ class LimitsMeta(BaseModel):
     costs_partial: bool = False
     total_hits: int = 0
     total_windows: int = 0
-    blocked_minutes: float = 0
+    minutes_until_reset: float = 0
     hits_per_week_recent: float = 0
     hit_counts: dict[str, int] = Field(default_factory=dict)
     plan_history: list[dict[str, str]] = Field(default_factory=list)
