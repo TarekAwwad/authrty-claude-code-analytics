@@ -1,8 +1,8 @@
 import React from "react";
 import { AlertTriangle, Braces, Link2 } from "lucide-react";
 import type { EventDetail, SessionCard, SessionFinding, Subagent } from "../api/types";
-import type { SameToolStreakContext } from "../trace/loopContext";
-import { sameToolStreakExplanation } from "../trace/loopContext";
+import type { SameToolStreakContext } from "../trace/sameToolStreak";
+import { sameToolStreakExplanation } from "../trace/sameToolStreak";
 import { Blurred } from "../shell/Blurred";
 import LoadingBar from "../components/LoadingBar";
 

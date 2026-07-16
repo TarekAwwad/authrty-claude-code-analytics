@@ -286,8 +286,6 @@ def list_sessions(
             COALESCE(ss.persisted_output_count, 0) AS persisted_output_count,
             COALESCE(ss.input_tokens, 0) AS input_tokens,
             COALESCE(ss.output_tokens, 0) AS output_tokens,
-            COALESCE(ss.loop_count, 0) AS loop_count,
-            COALESCE(ss.max_repeat, 0) AS max_repeat,
             CAST(
                 ROUND(COALESCE((julianday(s.last_ts) - julianday(s.first_ts)) * 86400, 0)) AS INTEGER
             ) AS duration_seconds,

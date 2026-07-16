@@ -163,27 +163,6 @@ export function effectiveUsdPerMillion(model: ModelCost): number {
   return model.tokens > 0 ? (model.usd / model.tokens) * 1_000_000 : 0;
 }
 
-export function costPerTurn(session: SessionCostEntry): number {
-  return session.usd / Math.max(session.turn_count, 1);
-}
-
-export function reviewSessions(sessions: SessionCostEntry[], limit = 12): SessionCostEntry[] {
-  return sessions
-    .filter((session) => (
-      session.usd > 0
-      && (session.loop_count > 0 || session.error_count > 0 || session.finding_count > 0)
-    ))
-    .sort((a, b) => b.usd - a.usd || b.loop_count - a.loop_count || b.error_count - a.error_count)
-    .slice(0, limit);
-}
-
-export function costPerTurnSessions(sessions: SessionCostEntry[], limit = 12): SessionCostEntry[] {
-  return [...sessions]
-    .filter((session) => session.usd > 0)
-    .sort((a, b) => costPerTurn(b) - costPerTurn(a))
-    .slice(0, limit);
-}
-
 export function turnDistributionSessions(sessions: SessionCostEntry[], limit = 12): SessionCostEntry[] {
   return [...sessions]
     .filter((session) => session.usd > 0 && session.turn_cost_stats.turn_count > 0)
@@ -197,42 +176,29 @@ export function turnDistributionSessions(sessions: SessionCostEntry[], limit = 1
 
 export interface TurnDistributionSummary {
   total: number;
-  attentionCount: number;
-}
-
-interface TurnDistributionTarget {
-  medianMax: number;
-  p95Max: number;
+  medianUsd: number;
+  p95Usd: number;
 }
 
 function turnDistributionRows(sessions: SessionCostEntry[]): SessionCostEntry[] {
   return sessions.filter((session) => session.usd > 0 && session.turn_cost_stats.turn_count > 0);
 }
 
-function turnDistributionTarget(sessions: SessionCostEntry[]): TurnDistributionTarget {
-  const rows = turnDistributionRows(sessions);
-  const maxMedian = Math.max(...rows.map((session) => session.turn_cost_stats.median_usd), 0);
-  const maxP95 = Math.max(...rows.map((session) => session.turn_cost_stats.p95_usd), 0);
-  return {
-    medianMax: (maxMedian > 0 ? maxMedian : 1) / 2,
-    p95Max: (maxP95 > 0 ? maxP95 : 1) / 2,
-  };
-}
-
-function isOutsideTurnTarget(session: SessionCostEntry, target: TurnDistributionTarget): boolean {
-  return (
-    session.turn_cost_stats.median_usd > target.medianMax
-    || session.turn_cost_stats.p95_usd > target.p95Max
-  );
+function medianValue(values: number[]): number {
+  if (values.length === 0) return 0;
+  const ordered = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(ordered.length / 2);
+  return ordered.length % 2 === 0
+    ? (ordered[middle - 1] + ordered[middle]) / 2
+    : ordered[middle];
 }
 
 export function turnDistributionSummary(sessions: SessionCostEntry[]): TurnDistributionSummary {
   const rows = turnDistributionRows(sessions);
-  const target = turnDistributionTarget(sessions);
-  const attentionCount = rows.filter((session) => isOutsideTurnTarget(session, target)).length;
   return {
     total: rows.length,
-    attentionCount,
+    medianUsd: medianValue(rows.map((session) => session.turn_cost_stats.median_usd)),
+    p95Usd: medianValue(rows.map((session) => session.turn_cost_stats.p95_usd)),
   };
 }
 
@@ -241,7 +207,6 @@ export interface TurnBubblePoint {
   x: number;
   y: number;
   r: number;
-  severity: "alert" | "normal";
   outlierCount: number;
   outlierRate: number;
 }
@@ -256,6 +221,8 @@ export interface TurnBubblePlot {
   plotTop: number;
   plotWidth: number;
   plotHeight: number;
+  xReference: { value: number; x: number };
+  yReference: { value: number; y: number };
 }
 
 export function buildTurnBubblePlot(
@@ -273,11 +240,7 @@ export function buildTurnBubblePlot(
   const maxUsd = Math.max(...rows.map((s) => s.usd), 0);
   const xMax = maxMedian > 0 ? maxMedian : 1;
   const yMax = maxP95 > 0 ? maxP95 : 1;
-  const target = turnDistributionTarget(sessions);
-
-  const severityFor = (session: SessionCostEntry): TurnBubblePoint["severity"] => (
-    isOutsideTurnTarget(session, target) ? "alert" : "normal"
-  );
+  const summary = turnDistributionSummary(rows);
 
   const points = rows.map((session) => ({
     outlierCount: session.turn_cost_stats.outlier_count,
@@ -286,7 +249,6 @@ export function buildTurnBubblePlot(
     x: round(plotLeft + (session.turn_cost_stats.median_usd / xMax) * plotWidth),
     y: round(plotTop + plotHeight - (session.turn_cost_stats.p95_usd / yMax) * plotHeight),
     r: round(5 + (maxUsd > 0 ? Math.sqrt(session.usd / maxUsd) * 13 : 0)),
-    severity: severityFor(session),
   }));
 
   const xTicks = [0, xMax / 2, xMax].map((value) => ({
@@ -298,14 +260,35 @@ export function buildTurnBubblePlot(
     label: formatUsd(value),
   }));
 
-  return { points, xTicks, yTicks, width, height, plotLeft, plotTop, plotWidth, plotHeight };
+  return {
+    points,
+    xTicks,
+    yTicks,
+    width,
+    height,
+    plotLeft,
+    plotTop,
+    plotWidth,
+    plotHeight,
+    xReference: {
+      value: summary.medianUsd,
+      x: round(plotLeft + (summary.medianUsd / xMax) * plotWidth),
+    },
+    yReference: {
+      value: summary.p95Usd,
+      y: round(plotTop + plotHeight - (summary.p95Usd / yMax) * plotHeight),
+    },
+  };
 }
 
 export interface AreaModelPath { model: string; areaPath: string; linePath: string }
+export interface SpendAreaPoint { bucket: string; x: number; y: number; total: number }
 export interface SpendArea {
   paths: AreaModelPath[];
+  points: SpendAreaPoint[];
   xLabels: { x: number; label: string }[];
   yTicks: { y: number; label: string }[];
+  maxTotal: number;
   width: number;
   height: number;
 }
@@ -346,5 +329,12 @@ export function buildSpendArea(
     ? [maxTotal, maxTotal / 2, 0].map((v) => ({ y: round(yAt(v)), label: `$${Math.round(v)}` }))
     : [{ y: height, label: "$0" }];
 
-  return { paths, xLabels, yTicks, width, height };
+  const points = overTime.map((item, index) => ({
+    bucket: item.bucket,
+    x: round(xAt(index)),
+    y: round(yAt(totals[index] ?? 0)),
+    total: totals[index] ?? 0,
+  }));
+
+  return { paths, points, xLabels, yTicks, maxTotal, width, height };
 }

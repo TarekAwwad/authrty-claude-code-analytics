@@ -3,8 +3,8 @@ import { Bot, User, Wrench, AlertTriangle } from "lucide-react";
 import type { TimelineItem } from "../api/types";
 import { groupTurns } from "../trace/useTurns";
 import type { Turn } from "../trace/useTurns";
-import type { SameToolStreakContext } from "../trace/loopContext";
-import { sameToolStreakExplanation } from "../trace/loopContext";
+import type { SameToolStreakContext } from "../trace/sameToolStreak";
+import { sameToolStreakExplanation } from "../trace/sameToolStreak";
 import { isErrorItem } from "../session/sessionAnalytics";
 import { Blurred } from "../shell/Blurred";
 

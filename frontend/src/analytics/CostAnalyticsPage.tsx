@@ -1,9 +1,10 @@
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
+import { X } from "lucide-react";
 import { getCostAnalytics, getTeamCostAnalytics } from "../api/client";
-import type { CostAnalyticsFilters, SpendSpike } from "../api/types";
+import type { CostAnalyticsFilters, OverTimeBucket } from "../api/types";
 import type { DataScope } from "../shell/useDataScope";
-import { buildModelColorMap, formatSignedUsd, formatTokens, formatUsd, largestSpike } from "./chartGeometry";
+import { buildModelColorMap, formatSignedUsd, formatTokens, formatUsd } from "./chartGeometry";
 import FilterBar from "./FilterBar";
 import CostByProject from "./CostByProject";
 import SpendOverTime from "./SpendOverTime";
@@ -18,6 +19,8 @@ interface Props {
   onOpenSession: (sessionId: number) => void;
   /** Whether historical (date-effective) pricing is active; drives the pricing-mode note. */
   historical?: boolean;
+  /** Persists the pricing mode through the app's existing settings state. */
+  onHistoricalChange?: (value: boolean) => void;
   /** In team scope, Cost is computed from imported bundles and the session-level
    * panels (which have no team equivalent) are hidden. Defaults to local. */
   scope?: DataScope;
@@ -29,26 +32,42 @@ function defaultFrom(): string {
   return d.toISOString();
 }
 
-function SpikeSessionsPanel({
-  spike,
+function BucketSessionsPanel({
+  bucket,
   onOpenSession,
+  onClose,
 }: {
-  spike: SpendSpike;
+  bucket: OverTimeBucket;
   onOpenSession: (sessionId: number) => void;
+  onClose: () => void;
 }) {
   const rows = React.useMemo(
-    () => [...spike.sessions].sort((a, b) => b.usd - a.usd),
-    [spike.sessions],
+    () => [...bucket.sessions].sort((a, b) => b.usd - a.usd),
+    [bucket.sessions],
   );
+  const total = `${bucket.costs_are_lower_bound ? "≥" : ""}${formatUsd(bucket.total_usd)} total`;
+  const comparison = bucket.is_spike && bucket.delta_usd !== null
+    ? ` - ${formatSignedUsd(bucket.delta_usd)} above baseline`
+    : "";
 
   return (
-    <section className="tile tile-full" aria-label={`Largest spike sessions for ${spike.bucket}`}>
-      <h2>Largest spike sessions</h2>
+    <section className="tile tile-full" aria-label={`Sessions for ${bucket.bucket}`}>
+      <div className="session-visual-heading bucket-sessions-heading">
+        <h2>Sessions on {bucket.bucket}</h2>
+        <button
+          type="button"
+          className="ghost-action bucket-panel-close"
+          onClick={onClose}
+          aria-label={`Close sessions for ${bucket.bucket}`}
+        >
+          <X size={14} aria-hidden={true} />
+        </button>
+      </div>
       <p className="tile-note">
-        {spike.bucket} - {formatSignedUsd(spike.delta_usd)} jump - {formatUsd(spike.total_usd)} total
+        {total}{comparison}
       </p>
       {rows.length === 0 ? (
-        <div className="empty-state">No sessions returned for this spike.</div>
+        <div className="empty-state">No contributor sessions are available for this bucket.</div>
       ) : (
         <ul className="discover-examples">
           {rows.map((session) => (
@@ -70,10 +89,15 @@ function SpikeSessionsPanel({
   );
 }
 
-export default function CostAnalyticsPage({ onOpenSession, historical = true, scope = "local" }: Props) {
+export default function CostAnalyticsPage({
+  onOpenSession,
+  historical = true,
+  onHistoricalChange = () => {},
+  scope = "local",
+}: Props) {
   const isTeam = scope === "team";
   const [filters, setFilters] = React.useState<CostAnalyticsFilters>({ dateFrom: defaultFrom() });
-  const [selectedSpikeBucket, setSelectedSpikeBucket] = React.useState<string | null>(null);
+  const [selectedBucket, setSelectedBucket] = React.useState<string | null>(null);
 
   // projectId/model are scope-namespaced (local ids vs team synthetic ids /
   // bucketed families); carrying them across a scope switch mis-filters the
@@ -95,26 +119,28 @@ export default function CostAnalyticsPage({ onOpenSession, historical = true, sc
     () => buildModelColorMap(payload?.meta.available_models ?? []),
     [payload?.meta.available_models],
   );
-  const currentLargestSpike = React.useMemo(
-    () => (payload ? largestSpike(payload) : null),
-    [payload],
-  );
-  const selectedSpike = selectedSpikeBucket === currentLargestSpike?.bucket ? currentLargestSpike : null;
+  const selectedTrendBucket = payload?.over_time.find((bucket) => bucket.bucket === selectedBucket) ?? null;
 
   React.useEffect(() => {
-    if (selectedSpikeBucket !== null && selectedSpikeBucket !== currentLargestSpike?.bucket) {
-      setSelectedSpikeBucket(null);
+    if (selectedBucket !== null && payload && !payload.over_time.some((bucket) => bucket.bucket === selectedBucket)) {
+      setSelectedBucket(null);
     }
-  }, [currentLargestSpike?.bucket, selectedSpikeBucket]);
+  }, [payload, selectedBucket]);
 
   return (
     <main className="cost-page">
       <div className="cost-page-inner">
-        <FilterBar filters={filters} meta={payload?.meta} onChange={setFilters} />
+        <FilterBar
+          filters={filters}
+          meta={payload?.meta}
+          historical={historical}
+          onChange={setFilters}
+          onHistoricalChange={onHistoricalChange}
+        />
         <p className="cost-pricing-note">
           {historical
-            ? "Spend is priced at the rates in effect on each session's date. Toggle historical pricing in the sidebar to value everything at current rates."
-            : "Spend is priced at current rates for every session. Toggle historical pricing in the sidebar to value each session at the rates in effect on its date."}
+            ? "Estimated API-equivalent cost is priced at the rates in effect on each session's date."
+            : "Estimated API-equivalent cost is priced at current rates for every session."}
         </p>
         {query.isError ? (
           <div className="empty-state panel-error">
@@ -127,15 +153,12 @@ export default function CostAnalyticsPage({ onOpenSession, historical = true, sc
           <>
             <InsightStrip
               payload={payload}
-              selectedSpikeBucket={selectedSpikeBucket}
-              onSelectSpike={(bucket) => setSelectedSpikeBucket((current) => (
+              selectedSpikeBucket={selectedBucket}
+              onSelectSpike={(bucket) => setSelectedBucket((current) => (
                 current === bucket ? null : bucket
               ))}
             />
             <div className="cost-bento">
-              {!isTeam && selectedSpike && (
-                <SpikeSessionsPanel spike={selectedSpike} onOpenSession={onOpenSession} />
-              )}
               <section className="tile">
                 <h2>Cost by project</h2>
                 <CostByProject payload={payload} colors={colors} available={payload.meta.available} />
@@ -145,13 +168,26 @@ export default function CostAnalyticsPage({ onOpenSession, historical = true, sc
                 <TokenCategories payload={payload} />
               </section>
               <section className="tile">
-                <h2>Spend over time</h2>
-                <SpendOverTime payload={payload} colors={colors} />
+                <SpendOverTime
+                  payload={payload}
+                  colors={colors}
+                  selectedBucket={isTeam ? undefined : selectedBucket}
+                  onSelectBucket={isTeam ? undefined : (bucket) => setSelectedBucket((current) => (
+                    current === bucket ? null : bucket
+                  ))}
+                />
               </section>
               <section className="tile">
                 <h2>Cost by model</h2>
                 <CostByModel payload={payload} colors={colors} available={payload.meta.available} />
               </section>
+              {!isTeam && selectedTrendBucket && (
+                <BucketSessionsPanel
+                  bucket={selectedTrendBucket}
+                  onOpenSession={onOpenSession}
+                  onClose={() => setSelectedBucket(null)}
+                />
+              )}
               {!isTeam && (
                 <>
                   <section className="tile tile-full">

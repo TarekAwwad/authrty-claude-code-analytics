@@ -110,8 +110,6 @@ class SessionCard(BaseModel):
     persisted_output_count: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
-    loop_count: int = 0
-    max_repeat: int = 0
     duration_seconds: int = 0
     max_agent_events: int = 0
     finding_count: int = 0
@@ -214,6 +212,15 @@ class TraceLane(BaseModel):
     kind: str
 
 
+class SameToolStreakMetadata(BaseModel):
+    streak_id: str
+    tool_name: str
+    position: int
+    count: int
+    start_event_id: int
+    end_event_id: int
+
+
 class TraceSpan(BaseModel):
     id: str
     event_id: int
@@ -226,12 +233,7 @@ class TraceSpan(BaseModel):
     end_ts: str | None
     tool_use_id: str | None
     tool_name: str | None = None
-    is_loop: bool
-    loop_run_id: str | None = None
-    loop_position: int | None = None
-    loop_count: int | None = None
-    loop_start_event_id: int | None = None
-    loop_end_event_id: int | None = None
+    same_tool_streak: SameToolStreakMetadata | None = None
 
 
 class CostTokens(BaseModel):
@@ -273,6 +275,16 @@ class TreemapProject(BaseModel):
 class OverTimeBucket(BaseModel):
     bucket: str
     per_model: dict[str, float] = Field(default_factory=dict)
+    total_usd: float = 0
+    session_count: int = 0
+    priced_session_count: int = 0
+    unpriced_models: list[str] = Field(default_factory=list)
+    costs_are_lower_bound: bool = False
+    baseline_usd: float | None = None
+    delta_usd: float | None = None
+    delta_pct: float | None = None
+    is_spike: bool = False
+    sessions: list[SpendSpikeSession] = Field(default_factory=list)
 
 
 class CategoryCost(BaseModel):
@@ -323,8 +335,6 @@ class TurnCostDetail(BaseModel):
     tool_call_count: int = 0
     error_count: int = 0
     subagent_count: int = 0
-    loop_count: int = 0
-    max_repeat: int = 0
     models: list[str] = Field(default_factory=list)
     is_outlier: bool = False
 
@@ -351,8 +361,6 @@ class SessionCostEntry(BaseModel):
     tool_call_count: int = 0
     subagent_count: int = 0
     error_count: int = 0
-    loop_count: int = 0
-    max_repeat: int = 0
     finding_count: int = 0
     duration_seconds: int = 0
     turn_cost_stats: TurnCostStats = Field(default_factory=TurnCostStats)
@@ -389,7 +397,9 @@ class SpendSpikeSession(BaseModel):
 class SpendSpike(BaseModel):
     bucket: str
     total_usd: float = 0
+    baseline_usd: float = 0
     delta_usd: float = 0
+    delta_pct: float | None = None
     sessions: list[SpendSpikeSession] = Field(default_factory=list)
 
 
@@ -567,6 +577,8 @@ class AvailableProject(BaseModel):
 class CostAnalyticsMeta(BaseModel):
     available: bool = False
     unpriced_models: list[str] = Field(default_factory=list)
+    costs_partial: bool = False
+    costs_are_lower_bound: bool = False
     total_usd: float = 0
     total_tokens: int = 0
     available_projects: list[AvailableProject] = Field(default_factory=list)

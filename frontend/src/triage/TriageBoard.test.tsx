@@ -9,7 +9,7 @@ function s(partial: Partial<SessionCard>): SessionCard {
     first_ts: null, last_ts: null, cwd: null, version: null, entrypoint: null,
     git_branch: null, event_count: 0, turn_count: 0, tool_call_count: 0,
     subagent_count: 0, error_count: 0, system_count: 0, persisted_output_count: 0,
-    input_tokens: 0, output_tokens: 0, loop_count: 0, max_repeat: 0,
+    input_tokens: 0, output_tokens: 0,
     duration_seconds: 0, max_agent_events: 0, finding_count: 0,
     top_finding_title: null, top_finding_basis: null,
     cost_usd: 0, cost_available: true, ...partial,
@@ -82,8 +82,6 @@ describe("TriageBoard", () => {
         first_ts: "2026-06-01T10:00:00Z",
         event_count: 500,
         error_count: 30,
-        loop_count: 4,
-        max_repeat: 12,
       }),
     ];
     render(<TriageBoard projects={projects} sessions={sessions} loading={false} onOpenSession={() => {}} />);
@@ -243,8 +241,6 @@ describe("TriageBoard", () => {
         event_count: 500,
         error_count: 30,
         system_count: 7,
-        loop_count: 4,
-        max_repeat: 12,
         subagent_count: 6,
       }),
     ];

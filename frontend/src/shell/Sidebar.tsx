@@ -1,5 +1,5 @@
 // frontend/src/shell/Sidebar.tsx
-import { Eye, EyeOff, History, HelpCircle, Monitor, Moon, PanelLeft, PanelLeftClose, Sun, Users } from "lucide-react";
+import { Eye, EyeOff, HelpCircle, Monitor, Moon, PanelLeft, PanelLeftClose, Sun, Users } from "lucide-react";
 import { NAV_ITEMS, navItemLabel, type View } from "./navConfig";
 import type { DataScope } from "./useDataScope";
 import { TECHNIQUES } from "../discover/techniques";
@@ -21,8 +21,6 @@ interface Props {
   onToggleCollapsed: () => void;
   onToggleTheme: () => void;
   onOpenGlossary: () => void;
-  historicalPricing: boolean;
-  onToggleHistoricalPricing: () => void;
   privacyMode: boolean;
   onTogglePrivacyMode: () => void;
   // First-run hint that surfaces the glossary. When true, the help button
@@ -45,8 +43,6 @@ export default function Sidebar({
   onOpenGlossary,
   glossaryHint = false,
   onDismissGlossaryHint,
-  historicalPricing,
-  onToggleHistoricalPricing,
   privacyMode,
   onTogglePrivacyMode,
 }: Props) {
@@ -159,19 +155,6 @@ export default function Sidebar({
             title={privacyMode ? "Privacy mode on — sensitive data is blurred" : "Privacy mode off — click to blur sensitive data"}
           >
             {privacyMode ? <EyeOff size={16} /> : <Eye size={16} />}
-          </button>
-          <button
-            className={`sb-action ${historicalPricing ? "is-active" : ""}`}
-            onClick={onToggleHistoricalPricing}
-            aria-pressed={historicalPricing}
-            aria-label="Historical pricing"
-            title={
-              historicalPricing
-                ? "Historical pricing on — spend uses rates effective on each session's date"
-                : "Historical pricing off — spend uses current rates for all sessions"
-            }
-          >
-            <History size={16} />
           </button>
           <div className="sb-glossary">
             <button

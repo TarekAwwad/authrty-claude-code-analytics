@@ -6,7 +6,9 @@ import { displayModelName, formatTokens, formatUsd } from "./chartGeometry";
 interface Props {
   filters: CostAnalyticsFilters;
   meta: CostAnalyticsMeta | undefined;
+  historical: boolean;
   onChange: (next: CostAnalyticsFilters) => void;
+  onHistoricalChange: (value: boolean) => void;
 }
 
 const RANGE_OPTIONS: { key: string; label: string; days: number | null }[] = [
@@ -37,7 +39,13 @@ function dateBoundaryIso(value: string, boundary: "start" | "end"): string | nul
   return boundary === "start" ? `${value}T00:00:00.000Z` : `${value}T23:59:59.999Z`;
 }
 
-export default function FilterBar({ filters, meta, onChange }: Props) {
+export default function FilterBar({
+  filters,
+  meta,
+  historical,
+  onChange,
+  onHistoricalChange,
+}: Props) {
   const [rangeKey, setRangeKey] = useState("30");
   const dateFromValue = useMemo(() => toDateInputValue(filters.dateFrom), [filters.dateFrom]);
   const dateToValue = useMemo(() => toDateInputValue(filters.dateTo), [filters.dateTo]);
@@ -105,12 +113,33 @@ export default function FilterBar({ filters, meta, onChange }: Props) {
         ))}
       </select>
 
+      <label
+        className="cost-pricing-control"
+        title={historical
+          ? "Use price rates effective on each session's date"
+          : "Use the current price table for every session"}
+      >
+        <input
+          type="checkbox"
+          checked={historical}
+          onChange={(event) => onHistoricalChange(event.target.checked)}
+        />
+        <span>Historical pricing</span>
+      </label>
+
       <div className="cost-total">
-        <b>{meta && meta.available ? formatUsd(meta.total_usd) : "—"}</b>
+        <span>Estimated API-equivalent cost</span>
+        <b>
+          {meta && meta.available
+            ? `${meta.costs_are_lower_bound ? "≥" : ""}${formatUsd(meta.total_usd)}`
+            : "—"}
+        </b>
         <span>
-          {meta ? `${formatTokens(meta.total_tokens)} tokens · est.` : ""}
-          {meta && meta.unpriced_models.length > 0 && (
-            <span className="cost-partial" title={meta.unpriced_models.join(", ")}> · partial</span>
+          {meta ? `${formatTokens(meta.total_tokens)} tokens` : ""}
+          {meta?.costs_partial && (
+            <span className="cost-partial" title={meta.unpriced_models.join(", ")}>
+              {` · lower bound · excludes ${meta.unpriced_models.length} unpriced model${meta.unpriced_models.length === 1 ? "" : "s"}`}
+            </span>
           )}
         </span>
       </div>

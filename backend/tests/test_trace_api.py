@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
+from ccfr.analysis.session_findings import rebuild_session_findings
 from ccfr.api import repository
 from ccfr.ingest import import_export
 from ccfr.storage import init_db
@@ -17,15 +19,13 @@ def _conn(tmp_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def test_list_sessions_includes_new_signal_fields(tmp_path: Path) -> None:
+def test_list_sessions_excludes_retired_loop_statistics(tmp_path: Path) -> None:
     conn = _conn(tmp_path)
     sessions = repository.list_sessions(conn)
     assert sessions
     sample = sessions[0]
     for key in (
         "duration_seconds",
-        "loop_count",
-        "max_repeat",
         "max_agent_events",
         "finding_count",
     ):
@@ -39,7 +39,7 @@ def test_list_sessions_includes_new_signal_fields(tmp_path: Path) -> None:
     # durations, and at least one tool call, so these aggregates must be populated.
     assert any(s["duration_seconds"] > 0 for s in sessions)
     assert any(s["max_agent_events"] > 0 for s in sessions)
-    assert any(s["max_repeat"] >= 1 for s in sessions)
+    assert all({"loop_count", "max_repeat"}.isdisjoint(session) for session in sessions)
 
 
 def test_list_sessions_rounds_known_duration_seconds() -> None:
@@ -88,11 +88,18 @@ def test_get_trace_returns_lanes_and_spans(tmp_path: Path) -> None:
         "lane" in span
         and "kind" in span
         and "tool_name" in span
-        and "loop_run_id" in span
-        and "loop_position" in span
-        and "loop_count" in span
+        and "same_tool_streak" in span
         for span in trace["spans"]
     )
+    retired = {
+        "is_loop",
+        "loop_run_id",
+        "loop_position",
+        "loop_count",
+        "loop_start_event_id",
+        "loop_end_event_id",
+    }
+    assert all(retired.isdisjoint(span) for span in trace["spans"])
     # subagent sessions should produce at least one non-main lane
     assert any(lane["kind"] == "subagent" for lane in trace["lanes"])
 
@@ -100,6 +107,73 @@ def test_get_trace_returns_lanes_and_spans(tmp_path: Path) -> None:
     assert len(span_ids) == len(set(span_ids))  # no duplicate span ids
     event_ids = [s["event_id"] for s in trace["spans"]]
     assert len(event_ids) == len(set(event_ids))  # exactly one span per event
+
+
+def test_distinct_reads_form_neutral_streak_without_a_finding() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    import_id = conn.execute(
+        "INSERT INTO imports(source_path, imported_at, status) VALUES ('fixture', '2026-01-01', 'complete')"
+    ).lastrowid
+    project_id = conn.execute(
+        "INSERT INTO projects(import_id, export_name) VALUES (?, 'fixture-project')",
+        (import_id,),
+    ).lastrowid
+    session_id = int(
+        conn.execute(
+            "INSERT INTO sessions(project_id, session_id) VALUES (?, 'neutral-streak')",
+            (project_id,),
+        ).lastrowid
+    )
+
+    for index, file_path in enumerate(("src/a.py", "src/b.py", "src/c.py"), start=1):
+        tool_use_id = f"read-{index}"
+        event_id = conn.execute(
+            """
+            INSERT INTO events(session_id, source_path, line_no, type, timestamp, raw_json)
+            VALUES (?, 'fixture.jsonl', ?, 'assistant', ?, '{}')
+            """,
+            (session_id, index, f"2026-01-01T00:00:0{index}Z"),
+        ).lastrowid
+        conn.execute(
+            """
+            INSERT INTO tool_calls(
+                event_id, session_id, tool_use_id, tool_name, input_preview, raw_json
+            ) VALUES (?, ?, ?, 'Read', ?, ?)
+            """,
+            (
+                event_id,
+                session_id,
+                tool_use_id,
+                file_path,
+                json.dumps(
+                    {
+                        "type": "tool_use",
+                        "id": tool_use_id,
+                        "name": "Read",
+                        "input": {"file_path": file_path},
+                    }
+                ),
+            ),
+        )
+
+    rebuild_session_findings(conn, session_ids=[session_id])
+    trace = repository.get_trace(conn, session_id)
+
+    read_spans = [
+        span
+        for span in trace["spans"]
+        if span["kind"] == "tool_call" and span["tool_name"] == "Read"
+    ]
+    assert len(read_spans) == 3
+    assert all(span["same_tool_streak"] is not None for span in read_spans)
+    assert {span["same_tool_streak"]["streak_id"] for span in read_spans} == {
+        "main-tool-streak-1"
+    }
+    assert conn.execute(
+        "SELECT COUNT(*) FROM session_findings WHERE session_id = ?", (session_id,)
+    ).fetchone()[0] == 0
 
 
 def test_get_trace_spans_carry_token_usage(tmp_path: Path) -> None:

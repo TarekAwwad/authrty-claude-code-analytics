@@ -95,15 +95,9 @@ export const GLOSSARY_TERMS: GlossaryTerm[] = [
   },
   {
     category: "Activity",
-    term: "Loop",
+    term: "Same-tool streak",
     definition:
-      "A stretch where the agent repeats a similar action without making progress. Flagged on the timeline as a possible stuck pattern worth reviewing.",
-  },
-  {
-    category: "Activity",
-    term: "Loop span",
-    definition:
-      "The highlighted stretch drawn on the timeline that marks a detected loop — the visual span covering the repeated events.",
+      "A neutral visual grouping for at least three consecutive calls to the same tool on one trace lane. It does not imply failure, wasted work, or risk.",
   },
   {
     category: "Activity",
@@ -318,20 +312,14 @@ export const GLOSSARY_TERMS: GlossaryTerm[] = [
   },
   {
     category: "Cost",
-    term: "Cache saved / penalty",
+    term: "Estimated API-equivalent cache savings / penalty",
     definition:
-      "Net effect of caching versus paying full price for the same input: a saving when cache reads outweigh the write surcharge, a penalty when prefixes were cached but rarely reused.",
+      "Estimated API-equivalent difference between observed cache pricing and paying the corresponding input at the uncached rate: savings when cache reads outweigh write surcharges, otherwise a penalty.",
   },
   {
     category: "Cost",
     term: "Spend spike",
     definition:
       "A point in time where cost jumped sharply above the surrounding baseline. The Cost page's \"Largest spike\" names the date bucket and how much it jumped.",
-  },
-  {
-    category: "Cost",
-    term: "Outside target",
-    definition:
-      "From the turn-distribution chart: the count of sessions whose number of turns falls outside the healthy band — unusually short or unusually long — and may be worth a look.",
   },
 ];

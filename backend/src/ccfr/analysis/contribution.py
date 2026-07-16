@@ -265,7 +265,7 @@ def _session_stats(conn: sqlite3.Connection, session_pk: int) -> dict:
     row = conn.execute(
         """
         SELECT turn_count, tool_call_count, subagent_count, error_count,
-               system_count, loop_count, max_repeat, persisted_output_count
+               system_count, persisted_output_count
         FROM session_stats WHERE session_id = ?
         """,
         (session_pk,),
@@ -281,8 +281,8 @@ def _session_stats(conn: sqlite3.Connection, session_pk: int) -> dict:
         "subagents": int(row["subagent_count"]),
         "errors": int(row["error_count"]),
         "system": int(row["system_count"]),
-        "loops": int(row["loop_count"]),
-        "max_repeat": int(row["max_repeat"]),
+        "loops": 0,
+        "max_repeat": 0,
         "persisted_outputs": int(row["persisted_output_count"]),
     }
 

@@ -85,8 +85,6 @@ export interface SessionCard {
   persisted_output_count: number;
   input_tokens: number;
   output_tokens: number;
-  loop_count: number;
-  max_repeat: number;
   duration_seconds: number;
   max_agent_events: number;
   finding_count: number;
@@ -130,12 +128,14 @@ export interface TraceSpan {
   end_ts: string | null;
   tool_use_id: string | null;
   tool_name: string | null;
-  is_loop: boolean;
-  loop_run_id?: string | null;
-  loop_position?: number | null;
-  loop_count?: number | null;
-  loop_start_event_id?: number | null;
-  loop_end_event_id?: number | null;
+  same_tool_streak: {
+    streak_id: string;
+    tool_name: string;
+    position: number;
+    count: number;
+    start_event_id: number;
+    end_event_id: number;
+  } | null;
 }
 
 export interface SessionCost {
@@ -247,6 +247,16 @@ export interface TreemapProject {
 export interface OverTimeBucket {
   bucket: string;
   per_model: Record<string, number>;
+  total_usd: number;
+  session_count: number;
+  priced_session_count: number;
+  unpriced_models: string[];
+  costs_are_lower_bound: boolean;
+  baseline_usd: number | null;
+  delta_usd: number | null;
+  delta_pct: number | null;
+  is_spike: boolean;
+  sessions: SpendSpikeSession[];
 }
 
 export interface CategoryCost {
@@ -284,8 +294,6 @@ export interface SessionCostEntry {
   tool_call_count: number;
   subagent_count: number;
   error_count: number;
-  loop_count: number;
-  max_repeat: number;
   finding_count: number;
   duration_seconds: number;
   turn_cost_stats: {
@@ -313,8 +321,6 @@ export interface TurnCostDetail {
   tool_call_count: number;
   error_count: number;
   subagent_count: number;
-  loop_count: number;
-  max_repeat: number;
   models: string[];
   is_outlier: boolean;
 }
@@ -361,7 +367,9 @@ export interface SpendSpikeSession {
 export interface SpendSpike {
   bucket: string;
   total_usd: number;
+  baseline_usd: number;
   delta_usd: number;
+  delta_pct: number | null;
   sessions: SpendSpikeSession[];
 }
 
@@ -421,6 +429,8 @@ export interface DiscoveryFilters {
 export interface CostAnalyticsMeta {
   available: boolean;
   unpriced_models: string[];
+  costs_partial: boolean;
+  costs_are_lower_bound: boolean;
   total_usd: number;
   total_tokens: number;
   available_projects: { id: number; name: string }[];

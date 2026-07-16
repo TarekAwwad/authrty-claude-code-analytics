@@ -64,8 +64,6 @@ function baseSession(id: number): SessionCard {
     persisted_output_count: 0,
     input_tokens: 1000,
     output_tokens: 500,
-    loop_count: 2,
-    max_repeat: 7,
     duration_seconds: 1320,
     max_agent_events: 100,
     finding_count: 1,

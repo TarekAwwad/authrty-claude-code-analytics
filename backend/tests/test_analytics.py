@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from ccfr.analysis.cost_trends import build_cost_trend
 from ccfr.api import analytics
 from ccfr.api.analytics import bucket_for_range, cost_analytics, session_turn_cost_breakdown
 from ccfr.storage import init_db
@@ -22,6 +23,161 @@ def test_bucket_for_range_weekly_beyond_threshold() -> None:
 def test_bucket_for_range_defaults_to_day_on_missing_or_bad_bounds() -> None:
     assert bucket_for_range(None, "2026-02-01T00:00:00Z") == "day"
     assert bucket_for_range("not-a-date", "also-bad") == "day"
+
+
+def _trend_bucket(
+    total: float,
+    *,
+    session_count: int = 2,
+    unpriced_models: tuple[str, ...] = (),
+) -> dict:
+    return {
+        "per_model": {"claude-opus-4-8": total} if total else {},
+        "session_ids": set(range(1, session_count + 1)),
+        "priced_session_ids": set(range(1, session_count + 1)),
+        "unpriced_models": set(unpriced_models),
+        "sessions": [],
+    }
+
+
+def test_cost_trend_zero_fills_missing_days() -> None:
+    over_time, spikes = build_cost_trend(
+        {
+            "2026-05-01": _trend_bucket(1),
+            "2026-05-03": _trend_bucket(2),
+        },
+        bucket_size="day",
+        range_start="2026-05-01",
+        range_end="2026-05-03",
+    )
+
+    assert [row["bucket"] for row in over_time] == ["2026-05-01", "2026-05-02", "2026-05-03"]
+    assert [row["total_usd"] for row in over_time] == [1, 0, 2]
+    assert over_time[1]["per_model"] == {}
+    assert spikes == []
+
+
+def test_cost_trend_rejects_single_session_outlier() -> None:
+    buckets = {
+        "2026-05-01": _trend_bucket(10),
+        "2026-05-02": _trend_bucket(10),
+        "2026-05-03": _trend_bucket(10),
+        "2026-05-04": _trend_bucket(30, session_count=1),
+    }
+
+    _over_time, spikes = build_cost_trend(
+        buckets,
+        bucket_size="day",
+        range_start="2026-05-01",
+        range_end="2026-05-04",
+    )
+
+    assert spikes == []
+
+
+def test_cost_trend_rejects_ordinary_volatility() -> None:
+    buckets = {
+        "2026-05-01": _trend_bucket(9),
+        "2026-05-02": _trend_bucket(10),
+        "2026-05-03": _trend_bucket(11),
+        "2026-05-04": _trend_bucket(14),
+    }
+
+    _over_time, spikes = build_cost_trend(
+        buckets,
+        bucket_size="day",
+        range_start="2026-05-01",
+        range_end="2026-05-04",
+    )
+
+    assert spikes == []
+
+
+def test_cost_trend_uses_seven_bucket_median_for_qualifying_spike() -> None:
+    buckets = {"2026-05-01": _trend_bucket(100)}
+    buckets.update({f"2026-05-{day:02d}": _trend_bucket(10) for day in range(2, 9)})
+    buckets["2026-05-09"] = _trend_bucket(16)
+
+    over_time, spikes = build_cost_trend(
+        buckets,
+        bucket_size="day",
+        range_start="2026-05-01",
+        range_end="2026-05-09",
+    )
+
+    assert spikes == [{
+        "bucket": "2026-05-09",
+        "total_usd": 16,
+        "baseline_usd": 10,
+        "delta_usd": 6,
+        "delta_pct": 60,
+        "sessions": [],
+    }]
+    assert over_time[-1]["is_spike"] is True
+    assert over_time[-1]["baseline_usd"] == 10
+
+
+def test_cost_trend_allows_zero_baseline_after_three_buckets() -> None:
+    over_time, spikes = build_cost_trend(
+        {"2026-05-04": _trend_bucket(5)},
+        bucket_size="day",
+        range_start="2026-05-01",
+        range_end="2026-05-04",
+    )
+
+    assert spikes[0]["bucket"] == "2026-05-04"
+    assert spikes[0]["baseline_usd"] == 0
+    assert spikes[0]["delta_usd"] == 5
+    assert spikes[0]["delta_pct"] is None
+    assert over_time[-1]["is_spike"] is True
+
+
+def test_cost_trend_requires_three_preceding_buckets() -> None:
+    _over_time, spikes = build_cost_trend(
+        {"2026-05-03": _trend_bucket(30)},
+        bucket_size="day",
+        range_start="2026-05-01",
+        range_end="2026-05-03",
+    )
+
+    assert spikes == []
+
+
+def test_cost_trend_zero_fills_weekly_buckets() -> None:
+    over_time, _spikes = build_cost_trend(
+        {
+            "2026-01": _trend_bucket(3),
+            "2026-03": _trend_bucket(7),
+        },
+        bucket_size="week",
+        range_start="2026-01-05",
+        range_end="2026-01-19",
+    )
+
+    assert [row["bucket"] for row in over_time] == ["2026-01", "2026-02", "2026-03"]
+    assert over_time[1]["total_usd"] == 0
+
+
+def test_cost_trend_marks_partial_buckets_and_suppresses_spikes() -> None:
+    buckets = {
+        "2026-05-01": _trend_bucket(10),
+        "2026-05-02": _trend_bucket(10),
+        "2026-05-03": _trend_bucket(10),
+        "2026-05-04": _trend_bucket(30, unpriced_models=("unknown-model",)),
+    }
+
+    over_time, spikes = build_cost_trend(
+        buckets,
+        bucket_size="day",
+        range_start="2026-05-01",
+        range_end="2026-05-04",
+        suppress_spikes=True,
+    )
+
+    assert spikes == []
+    assert over_time[-1]["costs_are_lower_bound"] is True
+    assert over_time[-1]["unpriced_models"] == ["unknown-model"]
+    assert all(row["is_spike"] is False for row in over_time)
 
 
 def _add_message(conn: sqlite3.Connection, session_id: int, ts: str, model: str, base: int, c5: int, c1: int, cr: int, out: int) -> int:
@@ -102,8 +258,8 @@ def _seed(conn: sqlite3.Connection) -> None:
         """
         INSERT INTO session_stats(
             session_id, event_count, turn_count, tool_call_count, subagent_count, error_count,
-            system_count, persisted_output_count, input_tokens, output_tokens, loop_count, max_repeat
-        ) VALUES (?, 10, 4, 6, 1, 1, 0, 0, 1000000, 1000000, 2, 3)
+            system_count, persisted_output_count, input_tokens, output_tokens
+        ) VALUES (?, 10, 4, 6, 1, 1, 0, 0, 1000000, 1000000)
         """,
         (s1,),
     )
@@ -111,8 +267,8 @@ def _seed(conn: sqlite3.Connection) -> None:
         """
         INSERT INTO session_stats(
             session_id, event_count, turn_count, tool_call_count, subagent_count, error_count,
-            system_count, persisted_output_count, input_tokens, output_tokens, loop_count, max_repeat
-        ) VALUES (?, 8, 2, 4, 0, 0, 0, 0, 1000000, 1000000, 0, 0)
+            system_count, persisted_output_count, input_tokens, output_tokens
+        ) VALUES (?, 8, 2, 4, 0, 0, 0, 0, 1000000, 1000000)
         """,
         (s2,),
     )
@@ -142,6 +298,8 @@ def test_cost_analytics_totals_and_treemap(seeded: sqlite3.Connection) -> None:
     # opus: 1M base*5 + 1M output*25 = $30 ; sonnet: 1M*3 + 1M*15 = $18 ; total $48
     assert payload["meta"]["total_usd"] == 48.0
     assert payload["meta"]["available"] is True
+    assert payload["meta"]["costs_partial"] is False
+    assert payload["meta"]["costs_are_lower_bound"] is False
     assert payload["meta"]["total_tokens"] == 4_000_000  # 2M per session (base + output)
     projects = {p["project_name"]: p for p in payload["treemap"]}
     assert projects["alpha"]["usd"] == 30.0
@@ -172,17 +330,21 @@ def test_cost_analytics_over_time_and_sessions(seeded: sqlite3.Connection) -> No
     assert payload["meta"]["bucket"] == "day"
     buckets = {b["bucket"]: b for b in payload["over_time"]}
     assert buckets["2026-05-01"]["per_model"]["claude-opus-4-8"] == 30.0
+    assert buckets["2026-05-01"]["total_usd"] == 30.0
+    assert buckets["2026-05-01"]["session_count"] == 1
+    assert buckets["2026-05-01"]["priced_session_count"] == 1
+    assert buckets["2026-05-01"]["costs_are_lower_bound"] is False
     assert buckets["2026-05-02"]["per_model"]["claude-sonnet-4-6"] == 18.0
     sessions = payload["sessions"]
     assert sessions[0]["title"] == "Session One" and sessions[0]["usd"] == 30.0
     assert {
         "id", "session_id", "title", "project_name", "usd", "tokens", "turn_count",
-        "tool_call_count", "subagent_count", "error_count", "loop_count", "max_repeat",
+        "tool_call_count", "subagent_count", "error_count",
         "finding_count", "duration_seconds", "turn_cost_stats",
     } <= set(sessions[0])
     assert sessions[0]["turn_count"] == 4
     assert sessions[0]["error_count"] == 1
-    assert sessions[0]["loop_count"] == 2
+    assert {"loop_count", "max_repeat"}.isdisjoint(sessions[0])
     assert sessions[0]["finding_count"] == 1
     assert sessions[0]["turn_cost_stats"] == {
         "turn_count": 1,
@@ -248,13 +410,12 @@ def test_session_turn_cost_breakdown_surfaces_outlier_drivers(seeded: sqlite3.Co
     expensive_turn = max(breakdown["turns"], key=lambda turn: turn["usd"])
     assert expensive_turn["is_outlier"] is True
     assert expensive_turn["tool_call_count"] == 3
-    assert expensive_turn["loop_count"] == 1
-    assert expensive_turn["max_repeat"] == 3
+    assert {"loop_count", "max_repeat"}.isdisjoint(expensive_turn)
     assert expensive_turn["models"] == ["claude-opus-4-8"]
     assert expensive_turn["preview"] == "Prompt"
 
 
-def test_cost_analytics_spikes_identify_contributor_sessions(seeded: sqlite3.Connection) -> None:
+def test_cost_analytics_does_not_call_short_history_a_spike(seeded: sqlite3.Connection) -> None:
     s2_id = next(
         s["id"] for s in cost_analytics(seeded)["sessions"] if s["title"] == "Session Two"
     )
@@ -271,12 +432,43 @@ def test_cost_analytics_spikes_identify_contributor_sessions(seeded: sqlite3.Con
     )
     seeded.commit()
 
-    spikes = cost_analytics(seeded)["spikes"]
-    assert spikes[0]["bucket"] == "2026-05-03"
-    assert spikes[0]["total_usd"] == 60.0
-    assert spikes[0]["delta_usd"] == 42.0
-    assert spikes[0]["sessions"][0]["id"] == s2_id
-    assert spikes[0]["sessions"][0]["usd"] == 60.0
+    payload = cost_analytics(seeded)
+    assert payload["spikes"] == []
+    may3 = next(bucket for bucket in payload["over_time"] if bucket["bucket"] == "2026-05-03")
+    assert may3["is_spike"] is False
+    assert may3["baseline_usd"] is None
+
+
+def test_cost_analytics_marks_partial_costs_and_suppresses_spikes(
+    seeded: sqlite3.Connection,
+) -> None:
+    s2_id = next(
+        s["id"] for s in cost_analytics(seeded)["sessions"] if s["title"] == "Session Two"
+    )
+    _add_message(
+        seeded,
+        s2_id,
+        "2026-05-02T00:20:00Z",
+        "claude-unknown-9",
+        1_000_000,
+        0,
+        0,
+        0,
+        0,
+    )
+    seeded.commit()
+
+    payload = cost_analytics(seeded)
+
+    assert payload["meta"]["costs_partial"] is True
+    assert payload["meta"]["costs_are_lower_bound"] is True
+    assert payload["meta"]["unpriced_models"] == ["claude-unknown-9"]
+    assert payload["spikes"] == []
+    may2 = next(bucket for bucket in payload["over_time"] if bucket["bucket"] == "2026-05-02")
+    assert may2["costs_are_lower_bound"] is True
+    assert may2["unpriced_models"] == ["claude-unknown-9"]
+    assert may2["session_count"] == 1
+    assert may2["priced_session_count"] == 0
 
 
 def test_cost_analytics_project_and_model_filters(seeded: sqlite3.Connection) -> None:
@@ -306,6 +498,8 @@ def test_cost_analytics_no_price_table(tmp_path: Path, monkeypatch: pytest.Monke
     _seed(conn)
     payload = cost_analytics(conn)
     assert payload["meta"]["available"] is False
+    assert payload["meta"]["costs_partial"] is False
+    assert payload["meta"]["costs_are_lower_bound"] is False
     assert payload["meta"]["total_usd"] == 0.0
     # token analytics still populated
     assert payload["categories"]["base_input"]["tokens"] == 2_000_000

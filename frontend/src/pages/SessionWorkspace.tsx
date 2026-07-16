@@ -7,7 +7,7 @@ import type { SessionCard } from "../api/types";
 import TimelinePanel from "../timeline/TimelinePanel";
 import InspectorPanel from "../inspector/InspectorPanel";
 import TraceView from "../trace/TraceView";
-import { buildSameToolStreakContextMap } from "../trace/loopContext";
+import { buildSameToolStreakContextMap } from "../trace/sameToolStreak";
 import SessionInsightStrip from "../session/SessionInsightStrip";
 import ToolUsageTile from "../session/ToolUsageTile";
 import SubagentHeatTile from "../session/SubagentHeatTile";

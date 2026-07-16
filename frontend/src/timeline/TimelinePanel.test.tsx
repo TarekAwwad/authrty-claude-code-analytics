@@ -70,7 +70,7 @@ describe("TimelinePanel", () => {
         sameToolStreakContexts={new Map([
           [3, {
             eventId: 3,
-            runId: "main-tool-loop-1",
+            runId: "main-tool-streak-1",
             toolName: "Read",
             position: 2,
             count: 3,

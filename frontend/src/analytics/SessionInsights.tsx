@@ -132,33 +132,31 @@ function buildTurnInsights(detail: TurnCostBreakdown, turn: TurnCostDetail): str
 
   const totalTokens = turnTokenTotal(turn);
   if (totalTokens > 0 && medianTokens > 0 && totalTokens >= medianTokens * 1.5) {
-    reasons.push(`Token volume is ${(totalTokens / medianTokens).toFixed(1)}x the session median (${formatTokens(totalTokens)} vs ${formatTokens(Math.round(medianTokens))}), which is the clearest cost driver here.`);
+    reasons.push(`Token volume is ${(totalTokens / medianTokens).toFixed(1)}x the session median (${formatTokens(totalTokens)} vs ${formatTokens(Math.round(medianTokens))}).`);
   }
 
   const rate = turnEffectiveRate(turn);
   if (rate > 0 && medianRate > 0 && rate >= medianRate * 1.25) {
-    reasons.push(`Its effective rate is ${formatUsdPerMillion(rate)} versus a turn median of ${formatUsdPerMillion(medianRate)}, which points to pricier model usage or less cache relief.`);
+    reasons.push(`Its effective rate is ${formatUsdPerMillion(rate)} versus a turn median of ${formatUsdPerMillion(medianRate)}.`);
   }
 
-  if (turn.loop_count > 0 || turn.max_repeat > 1) {
-    reasons.push(`Repeated tool activity appears in this turn (${turn.loop_count} loop run${turn.loop_count === 1 ? "" : "s"}, max repeat ${turn.max_repeat}), which often means retries or iterative recovery.`);
-  } else if (turn.tool_call_count > 0) {
-    reasons.push(`It includes ${turn.tool_call_count} tool call${turn.tool_call_count === 1 ? "" : "s"}, so orchestration overhead may be part of the spike.`);
+  if (turn.tool_call_count > 0) {
+    reasons.push(`It includes ${turn.tool_call_count} tool call${turn.tool_call_count === 1 ? "" : "s"}.`);
   }
 
   if (turn.subagent_count > 0) {
-    reasons.push(`Subagents handled ${turn.subagent_count} event${turn.subagent_count === 1 ? "" : "s"} in this turn, which can add extra model calls.`);
+    reasons.push(`It records ${turn.subagent_count} subagent event${turn.subagent_count === 1 ? "" : "s"}.`);
   }
 
   if (turn.error_count > 0) {
-    reasons.push(`It contains ${turn.error_count} tool error${turn.error_count === 1 ? "" : "s"}, a common sign that retries or fallback work pushed spend up.`);
+    reasons.push(`It records ${turn.error_count} tool error${turn.error_count === 1 ? "" : "s"}.`);
   }
 
   if (turn.models.length > 0) {
     reasons.push(`Priced model work in this turn comes from ${modelSummary(turn.models)}.`);
   }
 
-  return reasons.slice(0, 4);
+  return reasons.slice(0, 5);
 }
 
 function metricLabel(session: SessionCostEntry, mode: Mode): string {
@@ -175,8 +173,6 @@ function metaLabel(session: SessionCostEntry, mode: Mode): string {
 
 function badges(session: SessionCostEntry): string[] {
   const values = [];
-  if (session.loop_count > 0) values.push(`loops ${session.loop_count}`);
-  if (session.max_repeat > 0) values.push(`repeat ${session.max_repeat}`);
   if (session.error_count > 0) values.push(`errors ${session.error_count}`);
   if (session.subagent_count > 0) values.push(`subs ${session.subagent_count}`);
   if (session.finding_count > 0) values.push(`findings ${session.finding_count}`);
@@ -197,19 +193,10 @@ function TurnDistributionPlot({
     return <div className="empty-state">No turn distribution data in range.</div>;
   }
 
-  const targetX = plot.xTicks[1]?.x ?? plot.plotLeft + plot.plotWidth * 0.5;
-  const targetY = plot.yTicks[1]?.y ?? plot.plotTop + plot.plotHeight * 0.5;
-  const targetWidth = Math.max(targetX - plot.plotLeft, 0);
-  const targetHeight = Math.max(plot.plotTop + plot.plotHeight - targetY, 0);
-
   return (
     <div className="turn-bubble">
       <svg viewBox={`0 0 ${plot.width} ${plot.height}`} role="img" aria-label="Turn cost distribution">
         <rect className="tb-plot-bg" x={plot.plotLeft} y={plot.plotTop} width={plot.plotWidth} height={plot.plotHeight} rx={8} />
-        <g className="tb-target" aria-label="Target zone">
-          <rect className="tb-target-zone" x={plot.plotLeft} y={targetY} width={targetWidth} height={targetHeight} rx={8} />
-          <rect className="tb-target-outline" x={plot.plotLeft} y={targetY} width={targetWidth} height={targetHeight} rx={8} />
-        </g>
         {plot.yTicks.map((tick) => (
           <g key={`y-${tick.label}`}>
             <line className="tb-grid" x1={plot.plotLeft} x2={plot.plotLeft + plot.plotWidth} y1={tick.y} y2={tick.y} />
@@ -222,6 +209,20 @@ function TurnDistributionPlot({
             <text className="tb-xlabel" x={tick.x} y={plot.plotTop + plot.plotHeight + 18}>{tick.label}</text>
           </g>
         ))}
+        <line
+          className="tb-reference tb-reference-x"
+          x1={plot.xReference.x}
+          x2={plot.xReference.x}
+          y1={plot.plotTop}
+          y2={plot.plotTop + plot.plotHeight}
+        />
+        <line
+          className="tb-reference tb-reference-y"
+          x1={plot.plotLeft}
+          x2={plot.plotLeft + plot.plotWidth}
+          y1={plot.yReference.y}
+          y2={plot.yReference.y}
+        />
         <text className="tb-axis-label x" x={plot.plotLeft + plot.plotWidth / 2} y={plot.height - 4}>median $/turn</text>
         <text className="tb-axis-label y" x={12} y={plot.plotTop + plot.plotHeight / 2} transform={`rotate(-90 12 ${plot.plotTop + plot.plotHeight / 2})`}>p95 $/turn</text>
         {plot.points.map((point) => {
@@ -233,7 +234,7 @@ function TurnDistributionPlot({
           return (
             <g
               key={point.session.id}
-              className={`tb-point sev-${point.severity} ${selectedSessionId === point.session.id ? "is-active" : ""}`}
+              className={`tb-point ${selectedSessionId === point.session.id ? "is-active" : ""}`}
               onClick={inspectSession}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
@@ -266,9 +267,8 @@ function TurnDistributionPlot({
         })}
       </svg>
       <div className="tb-legend card-bottom-legend">
-        <span><i className="sev-target" /> target zone</span>
-        <span><i className="sev-normal" /> stable</span>
-        <span><i className="sev-alert" /> outside target</span>
+        <span><i className="sev-session" /> observed session</span>
+        <span><i className="sev-reference" /> observed medians</span>
         <span><i className="sev-outlier" /> outlier turns</span>
         <em>Bubble size = total session cost</em>
       </div>
@@ -282,16 +282,16 @@ function TurnDistributionGuide({ sessions }: { sessions: SessionCostEntry[] }) {
   return (
     <aside className="turn-explainer" aria-label="Turn distribution guide">
       <div className="turn-explainer-stat">
-        <span>Outside target</span>
-        <strong>{summary.attentionCount} of {summary.total}</strong>
-        <small>sessions land outside the cheap-and-steady zone</small>
+        <span>Observed sample</span>
+        <strong>{summary.total} session{summary.total === 1 ? "" : "s"}</strong>
+        <small>Median {formatUsd(summary.medianUsd)} per turn · median p95 {formatUsd(summary.p95Usd)}</small>
       </div>
       <div className="turn-explainer-hints">
-        <p><strong>Lower-left:</strong> cheap and steady</p>
-        <p><strong>Right:</strong> baseline cost is high</p>
-        <p><strong>Up:</strong> a few turns spike</p>
-        <p><strong>Ring:</strong> session contains unusually costly turns</p>
-        <p><strong>Click:</strong> inspect the costly turns before leaving this page</p>
+        <p><strong>Right:</strong> higher typical turn cost</p>
+        <p><strong>Up:</strong> higher upper-tail turn cost</p>
+        <p><strong>Dashed lines:</strong> medians across the displayed sessions</p>
+        <p><strong>Ring:</strong> session contains turns above its within-session outlier threshold</p>
+        <p><strong>Click:</strong> inspect the measured turn details</p>
       </div>
     </aside>
   );
@@ -458,7 +458,7 @@ function TurnOutlierInspector({
               <div className="turn-detail-metric">
                 <span>Orchestration</span>
                 <b>{focusTurn.tool_call_count} tools · {focusTurn.subagent_count} subs</b>
-                <small>{focusTurn.loop_count} loop runs · max repeat {focusTurn.max_repeat}</small>
+                <small>{focusTurn.models.length} priced model{focusTurn.models.length === 1 ? "" : "s"}</small>
               </div>
               <div className="turn-detail-metric">
                 <span>Session share</span>
@@ -467,8 +467,8 @@ function TurnOutlierInspector({
               </div>
             </div>
           </div>
-          <div className="turn-detail-causes">
-            <strong>Likely drivers</strong>
+          <div className="turn-detail-context">
+            <strong>Observed context</strong>
             {insights.map((insight) => (
               <p key={insight}>{insight}</p>
             ))}

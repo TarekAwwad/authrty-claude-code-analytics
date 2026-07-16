@@ -94,6 +94,5 @@ def test_discovery_finds_a_significant_subgroup(tmp_path, monkeypatch):
 
 def test_triage_signals_present(tmp_path, monkeypatch):
     conn = _priced_conn(tmp_path, monkeypatch)
-    assert conn.execute("SELECT MAX(loop_count) FROM session_stats").fetchone()[0] >= 1
     assert conn.execute("SELECT MAX(error_count) FROM session_stats").fetchone()[0] >= 1
     assert conn.execute("SELECT COUNT(*) FROM subagents").fetchone()[0] >= 24

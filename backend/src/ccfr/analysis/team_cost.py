@@ -17,6 +17,7 @@ import sqlite3
 from datetime import date
 from typing import Any
 
+from ccfr.analysis.cost_trends import build_cost_trend
 from ccfr.analysis.pricing import (
     ModelPrice,
     TokenBreakdown,
@@ -132,7 +133,7 @@ def team_cost_analytics(
         params.append(id_pid.get(project_id, ""))  # unknown/stale id matches nothing
     clause = (" WHERE " + " AND ".join(where)) if where else ""
     rows = conn.execute(
-        f"SELECT project_id, first_date, tokens_by_model_json FROM team_bundle_sessions{clause} ORDER BY first_date, id",
+        f"SELECT id, project_id, first_date, tokens_by_model_json FROM team_bundle_sessions{clause} ORDER BY first_date, id",
         params,
     ).fetchall()
 
@@ -155,7 +156,7 @@ def team_cost_analytics(
         "cache_write_tokens": 0,
         "by_model": {},
     }
-    over_time: dict[str, dict[str, Any]] = {}
+    trend_buckets: dict[str, dict[str, Any]] = {}
     available_models: set[str] = set()
     unpriced: set[str] = set()
     total_usd = 0.0
@@ -183,6 +184,29 @@ def team_cost_analytics(
             usd = cost_usd(price, breakdown) if price else 0.0
             if price is None and used:
                 unpriced.add(family)
+
+            key = _bucket_key(first_date, bucket)
+            if used and key is not None:
+                trend = trend_buckets.setdefault(
+                    key,
+                    {
+                        "per_model": {},
+                        "session_ids": set(),
+                        "priced_session_ids": set(),
+                        "unpriced_session_ids": set(),
+                        "unpriced_models": set(),
+                        "sessions": [],
+                    },
+                )
+                trend["session_ids"].add(row["id"])
+                if price is None:
+                    trend["unpriced_session_ids"].add(row["id"])
+                    if price_available:
+                        trend["unpriced_models"].add(family)
+                else:
+                    trend["priced_session_ids"].add(row["id"])
+                    if usd != 0:
+                        trend["per_model"][family] = trend["per_model"].get(family, 0.0) + usd
 
             for cat in _CATEGORIES:
                 tok = getattr(breakdown, cat)
@@ -243,12 +267,6 @@ def team_cost_analytics(
             bm["cache_read_tokens"] += breakdown.cache_read
             bm["cache_write_tokens"] += _cache_write_tokens_total(breakdown)
 
-            if price is not None and usd != 0:
-                key = _bucket_key(first_date, bucket)
-                if key is not None:
-                    over = over_time.setdefault(key, {"bucket": key, "per_model": {}})
-                    over["per_model"][family] = round(over["per_model"].get(family, 0.0) + usd, 6)
-
     treemap_out = [
         {
             "project_id": proj["project_id"],
@@ -277,7 +295,14 @@ def team_cost_analytics(
     categories_out = {
         cat: {"tokens": categories[cat]["tokens"], "usd": round(categories[cat]["usd"], 6)} for cat in _CATEGORIES
     }
-    over_time_out = [over_time[key] for key in sorted(over_time)]
+    costs_partial = price_available and bool(unpriced)
+    over_time_out, spikes_out = build_cost_trend(
+        trend_buckets,
+        bucket_size=bucket,
+        range_start=date_from or (min(first_dates) if first_dates else None),
+        range_end=date_to or (max(first_dates) if first_dates else None),
+        suppress_spikes=not price_available or bool(unpriced),
+    )
     cache_economics_out = {
         "observed_input_usd": round(cache_economics["observed_input_usd"], 6),
         "no_cache_input_usd": round(cache_economics["no_cache_input_usd"], 6),
@@ -299,18 +324,6 @@ def team_cost_analytics(
         ],
     }
 
-    bucket_totals = {item["bucket"]: round(sum(item["per_model"].values()), 6) for item in over_time_out}
-    spikes = []
-    bucket_keys = sorted(bucket_totals)
-    for index, key in enumerate(bucket_keys):
-        if index == 0:
-            continue
-        delta = round(bucket_totals[key] - bucket_totals[bucket_keys[index - 1]], 6)
-        if delta <= 0:
-            continue
-        spikes.append({"bucket": key, "total_usd": bucket_totals[key], "delta_usd": delta, "sessions": []})
-    spikes_out = sorted(spikes, key=lambda item: item["delta_usd"], reverse=True)[:5]
-
     available_projects = sorted(
         ({"id": pid_id[pid], "name": name_by_pid[pid]} for pid in all_pids), key=lambda item: item["name"]
     )
@@ -319,6 +332,8 @@ def team_cost_analytics(
         "meta": {
             "available": price_available,
             "unpriced_models": sorted(unpriced),
+            "costs_partial": costs_partial,
+            "costs_are_lower_bound": costs_partial,
             "total_usd": round(total_usd, 6),
             "total_tokens": total_tokens,
             "available_projects": available_projects,

@@ -1,7 +1,7 @@
 import React from "react";
 import { ArrowLeft } from "lucide-react";
 import type { TraceResponse, TraceSpan } from "../api/types";
-import { buildSameToolStreakContextMap, sameToolStreakExplanation } from "./loopContext";
+import { buildSameToolStreakContextMap, sameToolStreakExplanation } from "./sameToolStreak";
 import { buildTokenModelChart, sessionMaxForMetric, sessionSumForMetric } from "./tokenModelChart";
 import type { TokenMetric } from "./tokenHeatmap";
 import { distinctModels, modelColor, shortModelName } from "./modelLane";
@@ -15,7 +15,7 @@ interface Props {
 }
 
 type DistributionMode = "raw" | "compressed" | "normalized";
-type LegendFilterKey = "user_turn" | "assistant" | "tool" | "subagent_event" | "system" | "loop";
+type LegendFilterKey = "user_turn" | "assistant" | "tool" | "subagent_event" | "system" | "streak";
 
 const TRACK_WIDTH = 900;
 const LANE_HEIGHT = 28;
@@ -42,7 +42,7 @@ const LEGEND_ITEMS: Array<{ key: LegendFilterKey; label: string }> = [
   { key: "tool", label: "Tool call/result" },
   { key: "subagent_event", label: "Subagent" },
   { key: "system", label: "System / tool error" },
-  { key: "loop", label: "Same-tool streak" },
+  { key: "streak", label: "Same-tool streak" },
 ];
 
 const DISTRIBUTION_OPTIONS: Array<{ value: DistributionMode; label: string }> = [
@@ -75,7 +75,7 @@ interface ProjectedSpan extends TraceSpan {
   anchorCoord: number;
 }
 
-interface LoopRegion {
+interface StreakRegion {
   id: string;
   firstEventId: number;
   spans: ProjectedSpan[];
@@ -119,9 +119,10 @@ function spanEndMs(span: TraceSpan, fallback: number): number {
   return toMs(span.end_ts) ?? spanStartMs(span, fallback);
 }
 
-function isSameLoopRun(a: TraceSpan, b: TraceSpan): boolean {
-  if (a.loop_run_id && b.loop_run_id) return a.loop_run_id === b.loop_run_id;
-  return a.is_loop && b.is_loop && a.lane === b.lane && a.tool_name === b.tool_name;
+function isSameStreak(a: TraceSpan, b: TraceSpan): boolean {
+  const aStreak = a.same_tool_streak;
+  const bStreak = b.same_tool_streak;
+  return Boolean(aStreak && bStreak && aStreak.streak_id === bStreak.streak_id);
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -258,28 +259,28 @@ function buildProjection(trace: TraceResponse, distributionMode: DistributionMod
 }
 
 /**
- * Group loop spans within a lane into runs (>= 2 events) so each run can be
+ * Group same-tool streak spans within a lane so each streak can be
  * marked with a single background region. Every span still renders individually;
  * the region is only a contextual highlight, never a replacement.
  */
-function buildLoopRegions(spans: ProjectedSpan[]): LoopRegion[] {
+function buildStreakRegions(spans: ProjectedSpan[]): StreakRegion[] {
   const byRunId = new Map<string, ProjectedSpan[]>();
   const looseRuns: ProjectedSpan[][] = [];
   let current: ProjectedSpan[] | null = null;
 
   for (const span of spans) {
-    if (!span.is_loop) {
+    if (!span.same_tool_streak) {
       current = null;
       continue;
     }
-    if (span.loop_run_id) {
-      const run = byRunId.get(span.loop_run_id) ?? [];
+    if (span.same_tool_streak.streak_id) {
+      const run = byRunId.get(span.same_tool_streak.streak_id) ?? [];
       run.push(span);
-      byRunId.set(span.loop_run_id, run);
+      byRunId.set(span.same_tool_streak.streak_id, run);
       current = null;
       continue;
     }
-    if (current && isSameLoopRun(current[current.length - 1], span)) {
+    if (current && isSameStreak(current[current.length - 1], span)) {
       current.push(span);
     } else {
       current = [span];
@@ -290,7 +291,7 @@ function buildLoopRegions(spans: ProjectedSpan[]): LoopRegion[] {
   const runs: Array<{ id: string; spans: ProjectedSpan[] }> = [
     ...Array.from(byRunId.entries()).map(([id, runSpans]) => ({ id, spans: runSpans })),
     ...looseRuns.map((runSpans) => ({
-      id: `loop-${runSpans[0].lane}-${runSpans[0].event_id}-${runSpans[runSpans.length - 1].event_id}`,
+      id: `streak-${runSpans[0].lane}-${runSpans[0].event_id}-${runSpans[runSpans.length - 1].event_id}`,
       spans: runSpans,
     })),
   ];
@@ -313,7 +314,7 @@ function spanIntersectsWindow(span: ProjectedSpan, windowStart: number, windowEn
   return span.endCoord >= windowStart && span.startCoord <= windowEnd;
 }
 
-function regionIntersectsWindow(region: LoopRegion, windowStart: number, windowEnd: number): boolean {
+function regionIntersectsWindow(region: StreakRegion, windowStart: number, windowEnd: number): boolean {
   return region.endCoord >= windowStart && region.startCoord <= windowEnd;
 }
 
@@ -398,7 +399,7 @@ function buildSpanBatches(spans: ProjectedSpan[], layoutForSpan: (span: Projecte
 
 function spanMatchesFilter(span: ProjectedSpan, filter: LegendFilterKey): boolean {
   if (filter === "tool") return span.kind === "tool_call" || span.kind === "tool_result";
-  if (filter === "loop") return span.is_loop;
+  if (filter === "streak") return span.same_tool_streak !== null;
   return span.kind === filter;
 }
 
@@ -679,16 +680,16 @@ function TraceView({ trace, selectedEventId, playheadTimestamp, subagentLabels, 
     );
   };
 
-  const renderLoopRegion = (region: LoopRegion) => {
+  const renderStreakRegion = (region: StreakRegion) => {
     const { left, width } = geometry(region.startCoord, region.endCoord);
     const selected = region.spans.some((span) => span.event_id === selectedEventId);
     const context = sameToolStreakContexts.get(region.firstEventId);
     return (
       <g
         key={region.id}
-        data-loop-region={region.id}
-        data-loop-count={region.spans.length}
-        className="trace-loop-band"
+        data-streak-region={region.id}
+        data-streak-count={region.spans.length}
+        className="trace-streak-band"
         onClick={() => onSelect(region.firstEventId)}
       >
         <title>{context ? sameToolStreakExplanation(context) : `same-tool streak \u00d7${region.spans.length}`}</title>
@@ -698,7 +699,7 @@ function TraceView({ trace, selectedEventId, playheadTimestamp, subagentLabels, 
           width={width}
           height={LANE_HEIGHT - 6}
           rx={5}
-          className={`trace-loopband ${selected ? "is-selected" : ""}`}
+          className={`trace-streakband ${selected ? "is-selected" : ""}`}
         />
       </g>
     );
@@ -778,7 +779,7 @@ function TraceView({ trace, selectedEventId, playheadTimestamp, subagentLabels, 
               x2={xForOverview(span.anchorCoord)}
               y1={2}
               y2={24}
-              className={`mini-tick ${span.is_loop ? "k-loop" : `k-${span.kind}`}`}
+              className={`mini-tick ${span.same_tool_streak ? "k-streak" : `k-${span.kind}`}`}
             />
           ))}
           {brushRect && brushRect.width > 0 && (
@@ -809,7 +810,7 @@ function TraceView({ trace, selectedEventId, playheadTimestamp, subagentLabels, 
                   kindClass: `k-${span.kind}`,
                 };
               });
-            const laneRegions = buildLoopRegions(laneSpans)
+            const laneRegions = buildStreakRegions(laneSpans)
               .filter((region) => regionIntersectsWindow(region, windowStart, windowEnd));
             return (
               <div className="trace-lane" key={lane.lane_id}>
@@ -817,7 +818,7 @@ function TraceView({ trace, selectedEventId, playheadTimestamp, subagentLabels, 
                   {lane.kind === "subagent" ? subagentLabels?.get(lane.lane_id) ?? lane.label : lane.label}
                 </span>
                 <svg className="lane-track" width="100%" height={LANE_HEIGHT} viewBox={`0 0 ${TRACK_WIDTH} ${LANE_HEIGHT}`} preserveAspectRatio="none">
-                  {laneRegions.map(renderLoopRegion)}
+                  {laneRegions.map(renderStreakRegion)}
                   {laneBatches.map((batch) => {
                     const expanded = batch.spans.length === 1
                       || expandedBatches.has(batch.id)

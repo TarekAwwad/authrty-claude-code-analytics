@@ -17,6 +17,9 @@ export default function CostByProject({ payload, colors, available }: Props) {
 
   return (
     <div className="cbp">
+      {payload.meta.costs_partial && (
+        <p className="tile-note">Priced usage only; unpriced models are excluded.</p>
+      )}
       {top.map((project) => {
         const segments = stackedSegments(project.children, order, project.usd);
         return (

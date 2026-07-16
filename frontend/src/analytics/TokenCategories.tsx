@@ -10,7 +10,10 @@ export default function TokenCategories({ payload }: Props) {
   if (rows.length === 0) return <div className="empty-state">No token usage in range.</div>;
   const cachePct = cacheReadPctOfInput(payload.categories);
   const cache = payload.cache_economics;
-  const cacheDeltaLabel = cache.net_savings_usd >= 0 ? "saved" : "penalty";
+  const partial = payload.meta.costs_partial;
+  const cacheDeltaLabel = cache.net_savings_usd >= 0
+    ? "Estimated API-equivalent cache savings"
+    : "Estimated API-equivalent cache penalty";
 
   return (
     <div className="tcat">
@@ -31,16 +34,16 @@ export default function TokenCategories({ payload }: Props) {
       </div>
       <div className="cache-economics">
         <div>
-          <span>Actual input</span>
-          <b>{formatUsd(cache.observed_input_usd)}</b>
+          <span>Estimated observed input cost</span>
+          <b>{partial ? `≥${formatUsd(cache.observed_input_usd)}` : formatUsd(cache.observed_input_usd)}</b>
         </div>
         <div>
-          <span>No-cache input</span>
-          <b>{formatUsd(cache.no_cache_input_usd)}</b>
+          <span>Estimated no-cache input cost</span>
+          <b>{partial ? `≥${formatUsd(cache.no_cache_input_usd)}` : formatUsd(cache.no_cache_input_usd)}</b>
         </div>
-        <div className={cache.net_savings_usd >= 0 ? "positive" : "negative"}>
-          <span>Cache {cacheDeltaLabel}</span>
-          <b>{formatUsd(Math.abs(cache.net_savings_usd))}</b>
+        <div className={!partial ? (cache.net_savings_usd >= 0 ? "positive" : "negative") : ""}>
+          <span>{partial ? "Cache comparison unavailable" : cacheDeltaLabel}</span>
+          <b>{partial ? "Partial pricing" : formatUsd(Math.abs(cache.net_savings_usd))}</b>
         </div>
       </div>
       {cachePct > 0 && (

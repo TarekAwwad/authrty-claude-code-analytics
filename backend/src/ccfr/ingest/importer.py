@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from ccfr.analysis.metrics import compute_loop_stats
 from ccfr.analysis.sequence_features import rebuild_sequence_features
 from ccfr.analysis.session_findings import rebuild_session_findings
 from ccfr.ingest.file_ext import file_ext_from_tool_input
@@ -1049,26 +1048,13 @@ def _refresh_session_stats(conn: sqlite3.Connection, session_ids: list[int]) -> 
             """,
             (session_pk,),
         ).fetchone()
-        # Main-chain only: repeated tool calls inside sub-agents are a separate concern.
-        tool_name_rows = conn.execute(
-            """
-            SELECT tc.tool_name
-            FROM tool_calls tc
-            JOIN events e ON e.id = tc.event_id
-            WHERE tc.session_id = ? AND e.is_sidechain = 0
-            ORDER BY COALESCE(e.timestamp, ''), e.id
-            """,
-            (session_pk,),
-        ).fetchall()
-        loop_count, max_repeat = compute_loop_stats([r["tool_name"] for r in tool_name_rows])
         conn.execute(
             """
             INSERT INTO session_stats(
                 session_id, event_count, turn_count, tool_call_count, subagent_count,
-                error_count, system_count, persisted_output_count, input_tokens, output_tokens,
-                loop_count, max_repeat
+                error_count, system_count, persisted_output_count, input_tokens, output_tokens
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 event_count = excluded.event_count,
                 turn_count = excluded.turn_count,
@@ -1078,9 +1064,7 @@ def _refresh_session_stats(conn: sqlite3.Connection, session_ids: list[int]) -> 
                 system_count = excluded.system_count,
                 persisted_output_count = excluded.persisted_output_count,
                 input_tokens = excluded.input_tokens,
-                output_tokens = excluded.output_tokens,
-                loop_count = excluded.loop_count,
-                max_repeat = excluded.max_repeat
+                output_tokens = excluded.output_tokens
             """,
             (
                 session_pk,
@@ -1093,8 +1077,6 @@ def _refresh_session_stats(conn: sqlite3.Connection, session_ids: list[int]) -> 
                 persisted_output_count,
                 int(tokens["input_tokens"]),
                 int(tokens["output_tokens"]),
-                loop_count,
-                max_repeat,
             ),
         )
 

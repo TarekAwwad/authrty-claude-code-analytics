@@ -55,7 +55,7 @@ vi.mock("./api/client", () => ({
     event_count: 0, subagent_count: 0, memory_count: 0, persisted_output_count: 0,
   })),
   getCostAnalytics: vi.fn(async () => ({
-    meta: { available: false, unpriced_models: [], total_usd: 0, total_tokens: 0,
+    meta: { available: false, unpriced_models: [], costs_partial: false, costs_are_lower_bound: false, total_usd: 0, total_tokens: 0,
       available_projects: [], available_models: [], bucket: "day" },
     treemap: [], over_time: [],
     categories: { base_input: { tokens: 0, usd: 0 }, cache_write_5m: { tokens: 0, usd: 0 },
@@ -133,11 +133,28 @@ vi.mock("./pages/SessionWorkspace", () => ({
 }));
 
 vi.mock("./analytics/CostAnalyticsPage", () => ({
-  default: ({ onOpenSession }: { onOpenSession: (sessionId: number) => void }) => (
+  default: ({
+    onOpenSession,
+    historical,
+    onHistoricalChange,
+  }: {
+    onOpenSession: (sessionId: number) => void;
+    historical: boolean;
+    onHistoricalChange: (value: boolean) => void;
+  }) => (
     <main>
       <button type="button" onClick={() => onOpenSession(7)}>
         Open cost session
       </button>
+      <label>
+        <input
+          type="checkbox"
+          aria-label="Historical pricing"
+          checked={historical}
+          onChange={(event) => onHistoricalChange(event.target.checked)}
+        />
+        Historical pricing
+      </label>
     </main>
   ),
 }));
@@ -179,8 +196,6 @@ function appSession(id: number): SessionCard {
     persisted_output_count: 0,
     input_tokens: 1000,
     output_tokens: 500,
-    loop_count: 2,
-    max_repeat: 7,
     duration_seconds: 1320,
     max_agent_events: 100,
     finding_count: 1,
@@ -247,6 +262,21 @@ describe("App", () => {
   it("shows the Cost tab in the top nav", async () => {
     renderApp();
     expect(await screen.findByRole("button", { name: "Cost" })).toBeInTheDocument();
+  });
+
+  it("keeps historical pricing on the Cost page and persists it through settings", async () => {
+    renderApp();
+    expect(await screen.findByRole("button", { name: "Cost" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Historical pricing" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cost" }));
+    const control = await screen.findByRole("checkbox", { name: "Historical pricing" });
+    expect(control).toBeChecked();
+    fireEvent.click(control);
+
+    await waitFor(() => expect(vi.mocked(client.updateSettings).mock.calls.some(([settings]) => (
+      settings.historical_pricing === false && settings.privacy_mode === false
+    ))).toBe(true));
   });
 
   it("shows the Explore nav item and switches to the discovery view", async () => {

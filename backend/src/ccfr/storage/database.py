@@ -189,9 +189,7 @@ CREATE TABLE IF NOT EXISTS session_stats (
     system_count INTEGER NOT NULL DEFAULT 0,
     persisted_output_count INTEGER NOT NULL DEFAULT 0,
     input_tokens INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    loop_count INTEGER NOT NULL DEFAULT 0,
-    max_repeat INTEGER NOT NULL DEFAULT 0
+    output_tokens INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS import_errors (
@@ -353,6 +351,7 @@ def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
 def migrate_db(conn: sqlite3.Connection) -> None:
     """Apply lightweight migrations for databases created by older app versions."""
     _drop_legacy_risk_tables(conn)
+    _migrate_session_stats(conn)
 
     existing_message_columns = _column_names(conn, "messages")
     for name, definition in MESSAGE_COST_COLUMNS.items():
@@ -415,6 +414,43 @@ def _drop_legacy_risk_tables(conn: sqlite3.Connection) -> None:
     """Remove obsolete inferred-pattern caches while preserving receipt findings."""
     for table in ("risk_findings", "pattern_hits", "sequence_patterns"):
         conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+
+def _migrate_session_stats(conn: sqlite3.Connection) -> None:
+    columns = _column_names(conn, "session_stats")
+    if not {"loop_count", "max_repeat"} & columns:
+        return
+
+    conn.execute("DROP TABLE IF EXISTS session_stats_without_loops")
+    conn.execute(
+        """
+        CREATE TABLE session_stats_without_loops (
+            session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+            event_count INTEGER NOT NULL DEFAULT 0,
+            turn_count INTEGER NOT NULL DEFAULT 0,
+            tool_call_count INTEGER NOT NULL DEFAULT 0,
+            subagent_count INTEGER NOT NULL DEFAULT 0,
+            error_count INTEGER NOT NULL DEFAULT 0,
+            system_count INTEGER NOT NULL DEFAULT 0,
+            persisted_output_count INTEGER NOT NULL DEFAULT 0,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO session_stats_without_loops(
+            session_id, event_count, turn_count, tool_call_count, subagent_count,
+            error_count, system_count, persisted_output_count, input_tokens, output_tokens
+        )
+        SELECT session_id, event_count, turn_count, tool_call_count, subagent_count,
+               error_count, system_count, persisted_output_count, input_tokens, output_tokens
+        FROM session_stats
+        """
+    )
+    conn.execute("DROP TABLE session_stats")
+    conn.execute("ALTER TABLE session_stats_without_loops RENAME TO session_stats")
 
 
 def _backfill_tool_call_file_ext(conn: sqlite3.Connection) -> None:

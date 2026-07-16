@@ -43,8 +43,13 @@ def test_cost_analytics_endpoint_returns_payload(client: TestClient) -> None:
     body = resp.json()
     assert body["meta"]["total_usd"] == 48.0
     assert body["meta"]["bucket"] == "day"
+    assert body["meta"]["costs_partial"] is False
+    assert body["meta"]["costs_are_lower_bound"] is False
     assert len(body["treemap"]) == 2
     assert body["by_model"][0]["model"] == "claude-opus-4-8"
+    assert body["over_time"][0]["total_usd"] == 30.0
+    assert body["over_time"][0]["session_count"] == 1
+    assert body["over_time"][0]["priced_session_count"] == 1
 
 
 def test_cost_analytics_endpoint_applies_model_filter(client: TestClient) -> None:
@@ -96,8 +101,8 @@ def test_session_card_exposes_score_free_finding_summary(client: TestClient) -> 
     assert session["top_finding_basis"] == "observed"
     assert "pattern_risk_score" not in session
     assert "top_finding_severity" not in session
-    assert "loop_count" in session
-    assert "max_repeat" in session
+    assert "loop_count" not in session
+    assert "max_repeat" not in session
 
 
 @pytest.fixture()

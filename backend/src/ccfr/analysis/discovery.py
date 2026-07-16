@@ -303,7 +303,6 @@ def _session_subjects(conn: sqlite3.Connection, *, project_id: int | None, histo
             COALESCE(ss.turn_count, 0) AS turn_count,
             COALESCE(ss.tool_call_count, 0) AS tool_call_count,
             COALESCE(ss.subagent_count, 0) AS subagent_count,
-            COALESCE(ss.loop_count, 0) AS loop_count,
             CAST(
                 ROUND(COALESCE((julianday(s.last_ts) - julianday(s.first_ts)) * 86400, 0)) AS INTEGER
             ) AS duration_seconds
@@ -363,18 +362,12 @@ def _session_descriptors(
         _descriptor("turns", _count_bin(row["turn_count"]), f"{_count_bin(row['turn_count'])} turns"),
         _descriptor("tools", _count_bin(row["tool_call_count"]), f"{_count_bin(row['tool_call_count'])} tool calls"),
         _descriptor("subagents", _count_bin(row["subagent_count"]), f"{_count_bin(row['subagent_count'])} subagents", fanout=True),
-        _descriptor("loops", _count_bin(row["loop_count"]), f"{_count_bin(row['loop_count'])} loop runs"),
         _descriptor("duration", _duration_bin(row["duration_seconds"]), _duration_label(row["duration_seconds"])),
     }
     if int(row["subagent_count"] or 0) > 0:
         descriptors.add(_descriptor("fanout", "has_subagents", "Has subagents", fanout=True))
     else:
         descriptors.add(_descriptor("fanout", "no_subagents", "No subagents"))
-    if int(row["loop_count"] or 0) > 0:
-        descriptors.add(_descriptor("loop_presence", "has_loops", "Has loop activity"))
-    else:
-        descriptors.add(_descriptor("loop_presence", "no_loops", "No loop activity"))
-
     top_model = model_counts.most_common(1)[0][0] if model_counts else "none"
     descriptors.add(_descriptor("top_model", top_model, f"Top model {top_model}"))
     for model in model_counts:

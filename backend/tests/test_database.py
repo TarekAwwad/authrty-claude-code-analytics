@@ -350,6 +350,58 @@ def test_init_db_drops_legacy_risk_tables_without_losing_session_findings() -> N
     assert tuple(finding) == ("keep-me", "Keep me")
 
 
+def test_init_db_rebuilds_legacy_session_stats_without_loop_columns() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    session_id = _insert_session(conn, "legacy-stats")
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(session_stats)")}
+    if "loop_count" not in columns:
+        conn.execute("ALTER TABLE session_stats ADD COLUMN loop_count INTEGER NOT NULL DEFAULT 0")
+    if "max_repeat" not in columns:
+        conn.execute("ALTER TABLE session_stats ADD COLUMN max_repeat INTEGER NOT NULL DEFAULT 0")
+    conn.execute(
+        """
+        INSERT INTO session_stats(
+            session_id, event_count, turn_count, tool_call_count, subagent_count,
+            error_count, system_count, persisted_output_count, input_tokens,
+            output_tokens, loop_count, max_repeat
+        ) VALUES (?, 11, 7, 5, 3, 2, 1, 4, 123, 456, 6, 9)
+        """,
+        (session_id,),
+    )
+    conn.commit()
+
+    init_db(conn)
+
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(session_stats)")}
+    assert columns == {
+        "session_id",
+        "event_count",
+        "turn_count",
+        "tool_call_count",
+        "subagent_count",
+        "error_count",
+        "system_count",
+        "persisted_output_count",
+        "input_tokens",
+        "output_tokens",
+    }
+    row = conn.execute("SELECT * FROM session_stats WHERE session_id = ?", (session_id,)).fetchone()
+    assert dict(row) == {
+        "session_id": session_id,
+        "event_count": 11,
+        "turn_count": 7,
+        "tool_call_count": 5,
+        "subagent_count": 3,
+        "error_count": 2,
+        "system_count": 1,
+        "persisted_output_count": 4,
+        "input_tokens": 123,
+        "output_tokens": 456,
+    }
+
+
 def test_init_db_backfills_existing_cache_once_even_when_later_receipts_change() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row

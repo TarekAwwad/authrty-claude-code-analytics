@@ -169,10 +169,9 @@ def _add_session(
         """
         INSERT INTO session_stats(
             session_id, event_count, turn_count, tool_call_count, subagent_count,
-            error_count, system_count, persisted_output_count, input_tokens, output_tokens,
-            loop_count, max_repeat
+            error_count, system_count, persisted_output_count, input_tokens, output_tokens
         )
-        VALUES (?, 4, 2, ?, ?, 0, 0, 0, ?, 0, 0, 0)
+        VALUES (?, 4, 2, ?, ?, 0, 0, 0, ?, 0)
         """,
         (session_id, 1 if tool_name else 0, subagents, base_tokens),
     )

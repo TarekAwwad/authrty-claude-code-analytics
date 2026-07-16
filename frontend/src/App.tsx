@@ -196,8 +196,6 @@ function App() {
         onToggleCollapsed={toggleCollapsed}
         onToggleTheme={toggle}
         onOpenGlossary={openGlossary}
-        historicalPricing={historicalPricing}
-        onToggleHistoricalPricing={() => setHistoricalPricing(!historicalPricing)}
         privacyMode={privacyMode}
         onTogglePrivacyMode={() => setPrivacyMode(!privacyMode)}
         glossaryHint={!glossaryHintSeen}
@@ -224,6 +222,7 @@ function App() {
             scope={scope}
             onOpenSession={scope === "team" ? () => {} : (sessionId) => openSessionById(sessionId, null, "cost")}
             historical={historicalPricing}
+            onHistoricalChange={setHistoricalPricing}
           />
         )}
         {view === "discover" && scope === "local" && (
