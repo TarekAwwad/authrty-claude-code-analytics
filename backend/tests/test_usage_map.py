@@ -23,7 +23,7 @@ from ccfr.analysis.usage_map import (
     detect_delegation,
     detect_plan_before_burst,
     detect_tdd_loop,
-    event_phase_weights,
+    event_phase_activity,
     load_events,
     run_habit_detectors,
     usage_map_analytics,
@@ -99,27 +99,58 @@ def _event(event_id: int, tools: list[ToolCallRec], cost: float = 2.0,
 
 
 # ---------------------------------------------------------------------------
-# Phase weights + aggregation
+# Phase activity + aggregation
 # ---------------------------------------------------------------------------
 
+def test_observed_activity_counts_actual_calls_and_text_steps() -> None:
+    mixed = _event(1, [
+        ToolCallRec(tool_name="Read"),
+        ToolCallRec(tool_name="Edit"),
+    ], cost=99.0, tokens=9_999_999)
+    text_only = _event(2, [], cost=0.01, tokens=1)
+
+    assert usage_map.event_phase_activity(mixed) == {
+        "explore": 1,
+        "implement": 1,
+    }
+    assert usage_map.event_phase_activity(text_only) == {"converse": 1}
+
+
+def test_aggregate_phases_conserves_observed_activity() -> None:
+    events = [
+        _event(1, [ToolCallRec(tool_name="Read")], cost=100.0),
+        _event(2, [ToolCallRec(tool_name="Edit"), ToolCallRec(tool_name="Read")],
+               cost=0.01),
+        _event(3, [], cost=50.0),
+    ]
+
+    acc = aggregate_phases(events)
+
+    assert sum(bucket["activity_count"] for bucket in acc.values()) == 4
+    assert acc["explore"]["activity_count"] == 2
+    assert acc["implement"]["activity_count"] == 1
+    assert acc["converse"]["activity_count"] == 1
+    assert acc["explore"]["tools"]["Read"]["activity_count"] == 2
+
+
 def test_text_only_event_is_all_converse() -> None:
-    assert event_phase_weights(_event(1, [])) == {"converse": 1.0}
+    assert event_phase_activity(_event(1, [])) == {"converse": 1}
 
 
-def test_weights_split_equally_across_tool_calls() -> None:
+def test_each_tool_call_counts_once_in_its_phase() -> None:
     event = _event(1, [
         ToolCallRec(tool_name="Read"),
         ToolCallRec(tool_name="Edit"),
     ])
-    assert event_phase_weights(event) == {"explore": 0.5, "implement": 0.5}
+    assert event_phase_activity(event) == {"explore": 1, "implement": 1}
 
 
-def test_weights_merge_same_phase() -> None:
+def test_activity_counts_merge_in_the_same_phase() -> None:
     event = _event(1, [ToolCallRec(tool_name="Read"), ToolCallRec(tool_name="Grep")])
-    assert event_phase_weights(event) == {"explore": 1.0}
+    assert event_phase_activity(event) == {"explore": 2}
 
 
-def test_aggregate_phases_sums_to_total_cost() -> None:
+def test_aggregate_phases_counts_every_observed_activity() -> None:
     events = [
         _event(1, [ToolCallRec(tool_name="Read")], cost=3.0),
         _event(2, [ToolCallRec(tool_name="Edit"), ToolCallRec(tool_name="Bash", command="git add .")],
@@ -127,11 +158,11 @@ def test_aggregate_phases_sums_to_total_cost() -> None:
         _event(3, [], cost=1.0),
     ]
     acc = aggregate_phases(events)
-    assert sum(bucket["cost_usd"] for bucket in acc.values()) == pytest.approx(6.0)
-    assert acc["explore"]["cost_usd"] == pytest.approx(3.0)
-    assert acc["implement"]["cost_usd"] == pytest.approx(1.0)
-    assert acc["operate"]["cost_usd"] == pytest.approx(1.0)
-    assert acc["converse"]["cost_usd"] == pytest.approx(1.0)
+    assert sum(bucket["activity_count"] for bucket in acc.values()) == 4
+    assert acc["explore"]["activity_count"] == 1
+    assert acc["implement"]["activity_count"] == 1
+    assert acc["operate"]["activity_count"] == 1
+    assert acc["converse"]["activity_count"] == 1
 
 
 def test_aggregate_phases_counts_tools_and_sessions() -> None:
@@ -145,7 +176,7 @@ def test_aggregate_phases_counts_tools_and_sessions() -> None:
     assert acc["plan"]["tool_count"] == 0
 
 
-def test_aggregate_phases_accumulates_per_tool() -> None:
+def test_aggregate_phases_accumulates_tool_activity() -> None:
     events = [
         _event(1, [ToolCallRec(tool_name="Read")], cost=3.0, session=1),
         _event(2, [ToolCallRec(tool_name="Read"), ToolCallRec(tool_name="Grep")],
@@ -153,13 +184,10 @@ def test_aggregate_phases_accumulates_per_tool() -> None:
     ]
     acc = aggregate_phases(events)
     tools = acc["explore"]["tools"]
-    assert tools["Read"]["cost_usd"] == pytest.approx(4.0)   # 3.0 + 2.0/2
-    assert tools["Read"]["count"] == 2
+    assert tools["Read"]["activity_count"] == 2
     assert tools["Read"]["sessions"] == {1, 2}
-    assert tools["Grep"]["cost_usd"] == pytest.approx(1.0)
-    # Conservation: tool costs inside a phase sum to the phase cost.
-    assert sum(t["cost_usd"] for t in tools.values()) == pytest.approx(
-        acc["explore"]["cost_usd"])
+    assert tools["Grep"]["activity_count"] == 1
+    assert sum(t["activity_count"] for t in tools.values()) == 3
 
 
 def test_aggregate_phases_splits_bash_per_phase() -> None:
@@ -168,15 +196,15 @@ def test_aggregate_phases_splits_bash_per_phase() -> None:
         _event(2, [ToolCallRec(tool_name="Bash", command="git push")], cost=2.0),
     ]
     acc = aggregate_phases(events)
-    assert acc["verify"]["tools"]["Bash"]["cost_usd"] == pytest.approx(2.0)
-    assert acc["operate"]["tools"]["Bash"]["cost_usd"] == pytest.approx(2.0)
+    assert acc["verify"]["tools"]["Bash"]["activity_count"] == 1
+    assert acc["operate"]["tools"]["Bash"]["activity_count"] == 1
 
 
 def test_aggregate_phases_null_tool_name_gets_no_tool_entry() -> None:
     events = [_event(1, [ToolCallRec(tool_name=None)], cost=2.0)]
     acc = aggregate_phases(events)
     assert acc["converse"]["tools"] == {}
-    assert acc["converse"]["cost_usd"] == pytest.approx(2.0)  # cost stays on the phase
+    assert acc["converse"]["activity_count"] == 1
     assert acc["converse"]["tool_count"] == 1
 
 
@@ -389,8 +417,8 @@ def test_blind_retry_flags_three_identical_failures() -> None:
     assert finding.habit_key == "blind-retry"
     assert finding.phase == "operate"        # phase of the retried tool
     assert finding.count == 3
-    assert finding.cost_usd == pytest.approx(4.0)  # every attempt after the first
     assert finding.exemplar_event_ids == (1,)
+    assert "all failing" in finding.detail
 
 
 def test_blind_retry_requires_identical_input() -> None:
@@ -441,7 +469,6 @@ def test_blind_retry_counts_longer_runs() -> None:
     events = [_flat_event(i, "Bash", {"command": "x"}, True) for i in range(1, 5)]
     findings = detect_blind_retry(events)
     assert findings[0].count == 4
-    assert findings[0].cost_usd == pytest.approx(6.0)  # 3 repeats x $2
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +487,6 @@ def test_tdd_loop_detects_fail_edit_pass_cycle() -> None:
     assert finding.habit_key == "tdd-loop"
     assert finding.phase == "verify"
     assert finding.count == 1
-    assert finding.cost_usd == pytest.approx(4.0)  # the two verify turns
     assert finding.exemplar_event_ids == (1,)
 
 
@@ -533,7 +559,6 @@ def test_delegation_counts_dispatches() -> None:
     finding = findings[0]
     assert (finding.habit_key, finding.phase) == ("delegation", "delegate")
     assert finding.count == 2
-    assert finding.cost_usd == pytest.approx(4.0)  # the two dispatch turns
     assert finding.exemplar_event_ids == (1, 3)
 
 
@@ -550,8 +575,6 @@ def test_plan_before_burst_flags_planned_edit_run() -> None:
     finding = findings[0]
     assert (finding.habit_key, finding.phase) == ("plan-before-burst", "plan")
     assert finding.count == 6
-    # plan turn ($2) + six edit turns ($12)
-    assert finding.cost_usd == pytest.approx(14.0)
     assert finding.exemplar_event_ids == (1,)
 
 
@@ -622,7 +645,7 @@ def test_detect_context_habits_maps_rereads() -> None:
     rereads = [f for f in findings if f.habit_key == "re-reads"]
     assert len(rereads) == 1
     assert rereads[0].phase == "explore"
-    assert rereads[0].cost_usd > 0
+    assert rereads[0].count == 1
     assert rereads[0].session_db_id == 1
 
 
@@ -648,8 +671,15 @@ def test_registry_covers_the_v1_catalog() -> None:
         "blind-retry", "re-reads", "oversized-context", "late-compaction",
     }
     for spec in HABIT_BY_KEY.values():
-        assert spec["polarity"] in ("good", "anti")
         assert spec["rule"]  # every leaf can show why it exists
+
+
+def test_habit_catalog_is_neutral_observation_metadata() -> None:
+    for spec in HABIT_BY_KEY.values():
+        assert "polarity" not in spec
+        assert "good" not in spec
+        assert "anti" not in spec
+
 
 
 def test_run_habit_detectors_finds_session_habits() -> None:
@@ -687,7 +717,7 @@ def test_run_habit_detectors_isolates_failures_per_session(monkeypatch) -> None:
                              session_db_id=head.session_db_id,
                              session_title=head.session_title,
                              project_name=head.project_name,
-                             cost_usd=1.0, count=1,
+                             count=1,
                              exemplar_event_ids=(head.event_id,), detail="d")]
     monkeypatch.setattr(usage_map, "SESSION_DETECTORS", [flaky])
     conn = _conn()
@@ -703,11 +733,11 @@ def test_run_habit_detectors_isolates_failures_per_session(monkeypatch) -> None:
 
 
 def test_aggregate_habits_groups_by_key_and_phase() -> None:
-    def finding(session: int, key: str = "blind-retry", phase: str = "operate",
-                cost: float = 1.0) -> HabitFinding:
+    def finding(session: int, key: str = "blind-retry",
+                phase: str = "operate") -> HabitFinding:
         return HabitFinding(habit_key=key, phase=phase, session_db_id=session,
                             session_title="S", project_name="alpha",
-                            cost_usd=cost, count=2, exemplar_event_ids=(1,),
+                            count=2, exemplar_event_ids=(1,),
                             detail="d")
     leaves = aggregate_habits([
         finding(1), finding(2),
@@ -715,19 +745,17 @@ def test_aggregate_habits_groups_by_key_and_phase() -> None:
         finding(3, key="tdd-loop", phase="verify"),
     ])
     by_id = {(leaf["key"], leaf["phase"]): leaf for leaf in leaves}
-    assert by_id[("blind-retry", "operate")]["cost_usd"] == pytest.approx(2.0)
     assert by_id[("blind-retry", "operate")]["session_count"] == 2
-    assert by_id[("blind-retry", "operate")]["count"] == 4
-    assert by_id[("blind-retry", "operate")]["polarity"] == "anti"
-    assert by_id[("blind-retry", "explore")]["cost_usd"] == pytest.approx(1.0)
-    assert by_id[("tdd-loop", "verify")]["polarity"] == "good"
-    assert all(leaf["status"] == "confirmed" for leaf in leaves)
+    assert by_id[("blind-retry", "operate")]["activity_count"] == 4
+    assert by_id[("blind-retry", "explore")]["activity_count"] == 2
+    assert by_id[("tdd-loop", "verify")]["activity_count"] == 2
+    assert all({"polarity", "status", "cost_usd"}.isdisjoint(leaf) for leaf in leaves)
 
 
 def test_aggregate_habits_skips_unknown_keys() -> None:
     rogue = HabitFinding(habit_key="not-registered", phase="plan",
                          session_db_id=1, session_title="S", project_name="a",
-                         cost_usd=1.0, count=1, exemplar_event_ids=(), detail="d")
+                         count=1, exemplar_event_ids=(), detail="d")
     assert aggregate_habits([rogue]) == []
 
 
@@ -764,15 +792,42 @@ def test_usage_map_analytics_payload_shape_and_honest_totals(tmp_path, monkeypat
     assert meta["sessions_analyzed"] == 1
     assert meta["events_classified"] == 3
     assert meta["total_usd"] == pytest.approx(6.0)
-    assert meta["share_basis"] == "cost"
+    assert meta["total_activity_count"] == 3
+    assert meta["activity_basis"] == "tool_calls_and_assistant_steps"
 
     phases = {p["key"]: p for p in payload["phases"]}
     assert set(phases) == set(usage_map.PHASE_KEYS)  # all phases always present
-    # Every dollar lands in exactly one phase: shares sum to 1, costs to total.
-    assert sum(p["cost_usd"] for p in payload["phases"]) == pytest.approx(6.0)
-    assert sum(p["share"] for p in payload["phases"]) == pytest.approx(1.0, abs=1e-4)
-    assert phases["explore"]["share"] == pytest.approx(1 / 3, abs=1e-4)
+    assert sum(p["activity_count"] for p in payload["phases"]) == 3
+    assert sum(p["activity_share"] for p in payload["phases"]) == pytest.approx(1.0, abs=1e-4)
+    assert phases["explore"]["activity_share"] == pytest.approx(1 / 3, abs=1e-4)
     assert phases["explore"]["session_count"] == 1
+
+
+def test_usage_map_payload_is_activity_based_and_neutral(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(usage_map, "pricing_path", lambda: _pricing_csv(tmp_path))
+    conn = _conn()
+    _seed_base(conn)
+    _add_assistant_event(conn, 1, 1, "2026-06-01T10:00:00Z", [
+        ("Read", {"file_path": "a.py"}, False),
+        ("Task", {"prompt": "go"}, False),
+    ])
+    _add_assistant_event(conn, 2, 1, "2026-06-01T10:01:00Z", [])
+
+    payload = usage_map_analytics(conn)
+    phases = payload["phases"]
+    delegate = next(p for p in phases if p["key"] == "delegate")
+    explore = next(p for p in phases if p["key"] == "explore")
+
+    assert payload["meta"]["total_activity_count"] == 3
+    assert payload["meta"]["activity_basis"] == "tool_calls_and_assistant_steps"
+    assert "not cost attribution" in payload["meta"]["methodology"].lower()
+    assert sum(p["activity_count"] for p in phases) == 3
+    assert sum(p["activity_share"] for p in phases) == pytest.approx(1.0, abs=1e-5)
+    assert explore["tools"][0]["activity_count"] == 1
+    assert {"cost_usd", "tokens", "main_cost_usd", "subagent_cost_usd", "share"}.isdisjoint(explore)
+    assert delegate["habits"]
+    assert {"polarity", "status", "cost_usd"}.isdisjoint(delegate["habits"][0])
+
 
 
 def test_usage_map_analytics_attaches_habit_leaves(tmp_path, monkeypatch) -> None:
@@ -784,7 +839,8 @@ def test_usage_map_analytics_attaches_habit_leaves(tmp_path, monkeypatch) -> Non
     payload = usage_map_analytics(conn)
     delegate = next(p for p in payload["phases"] if p["key"] == "delegate")
     assert [h["key"] for h in delegate["habits"]] == ["delegation"]
-    assert delegate["habits"][0]["polarity"] == "good"
+    assert delegate["habits"][0]["activity_count"] == 1
+    assert {"polarity", "status", "cost_usd"}.isdisjoint(delegate["habits"][0])
 
 
 def test_usage_map_analytics_payload_includes_tools(tmp_path, monkeypatch) -> None:
@@ -801,12 +857,10 @@ def test_usage_map_analytics_payload_includes_tools(tmp_path, monkeypatch) -> No
     payload = usage_map_analytics(conn)
 
     explore = next(p for p in payload["phases"] if p["key"] == "explore")
-    # Sorted by cost desc; exact values; session_count resolved from the set.
+    # Sorted by observed call count; session_count resolved from the set.
     assert explore["tools"] == [
-        {"key": "Grep", "label": "Grep", "cost_usd": 4.0, "tokens": 480_000,
-         "count": 2, "session_count": 1},
-        {"key": "Read", "label": "Read", "cost_usd": 2.0, "tokens": 240_000,
-         "count": 1, "session_count": 1},
+        {"key": "Grep", "label": "Grep", "activity_count": 2, "session_count": 1},
+        {"key": "Read", "label": "Read", "activity_count": 1, "session_count": 1},
     ]
     # Phases without tool calls carry an empty list, not a missing key.
     plan = next(p for p in payload["phases"] if p["key"] == "plan")
@@ -824,7 +878,7 @@ def test_usage_map_analytics_mcp_tool_lands_in_converse(tmp_path, monkeypatch) -
     assert [t["key"] for t in converse["tools"]] == ["mcp__notion__search"]
 
 
-def test_usage_map_analytics_token_fallback_without_pricing(tmp_path, monkeypatch) -> None:
+def test_usage_map_activity_is_independent_of_pricing(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(usage_map, "pricing_path", lambda: tmp_path / "missing.csv")
     conn = _conn()
     _seed_base(conn)
@@ -834,11 +888,11 @@ def test_usage_map_analytics_token_fallback_without_pricing(tmp_path, monkeypatc
                          [("Grep", {"pattern": "x"}, False)], base=400_000)
     payload = usage_map_analytics(conn)
     assert payload["meta"]["cost_available"] is False
-    assert payload["meta"]["share_basis"] == "tokens"
+    assert payload["meta"]["activity_basis"] == "tool_calls_and_assistant_steps"
     explore = next(p for p in payload["phases"] if p["key"] == "explore")
-    assert explore["share"] == pytest.approx(1.0, abs=1e-4)
-    assert explore["tokens"] == 680_000
-    # All costs are 0.0 here, so tools order by token weight, not name.
+    assert explore["activity_share"] == pytest.approx(1.0, abs=1e-4)
+    assert explore["activity_count"] == 2
+    # Equal call counts sort stably by tool name, regardless of token volume.
     assert [t["key"] for t in explore["tools"]] == ["Grep", "Read"]
 
 
@@ -848,14 +902,15 @@ def test_usage_map_analytics_empty_corpus(tmp_path, monkeypatch) -> None:
     payload = usage_map_analytics(conn)
     assert payload["meta"]["sessions_analyzed"] == 0
     assert payload["meta"]["total_usd"] == 0.0
-    assert all(p["share"] == 0.0 for p in payload["phases"])
+    assert payload["meta"]["total_activity_count"] == 0
+    assert all(p["activity_share"] == 0.0 for p in payload["phases"])
 
 
 # ---------------------------------------------------------------------------
 # Evidence drill-down
 # ---------------------------------------------------------------------------
 
-def test_phase_evidence_lists_sessions_by_cost(tmp_path, monkeypatch) -> None:
+def test_phase_evidence_lists_sessions_by_activity(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(usage_map, "pricing_path", lambda: _pricing_csv(tmp_path))
     conn = _conn()
     _seed_base(conn)
@@ -871,9 +926,10 @@ def test_phase_evidence_lists_sessions_by_cost(tmp_path, monkeypatch) -> None:
     assert payload["node"] == "phase:explore"
     assert payload["label"] == "Explore"
     assert payload["rule"]
-    assert payload["cost_usd"] == pytest.approx(6.0)
-    assert [s["session_id"] for s in payload["sessions"]] == [2, 1]  # cost desc
-    assert payload["sessions"][0]["cost_usd"] == pytest.approx(4.0)
+    assert payload["activity_count"] == 3
+    assert [s["session_id"] for s in payload["sessions"]] == [2, 1]
+    assert payload["sessions"][0]["activity_count"] == 2
+    assert payload["sessions"][0]["session_cost_usd"] == pytest.approx(4.0)
     assert payload["sessions"][0]["exemplar_event_ids"] == [2, 3]
 
 
@@ -934,7 +990,7 @@ def test_habit_evidence_unknown_phase_qualifier_is_empty_not_404(tmp_path, monke
     assert payload["sessions"] == []
 
 
-def test_tool_evidence_lists_sessions_by_cost(tmp_path, monkeypatch) -> None:
+def test_tool_evidence_lists_sessions_by_activity(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(usage_map, "pricing_path", lambda: _pricing_csv(tmp_path))
     conn = _conn()
     _seed_base(conn)
@@ -950,10 +1006,10 @@ def test_tool_evidence_lists_sessions_by_cost(tmp_path, monkeypatch) -> None:
     assert payload["node"] == "tool:Read@explore"
     assert payload["label"] == "Read"
     assert "Explore" in payload["rule"]
-    assert payload["cost_usd"] == pytest.approx(6.0)
-    assert [s["session_id"] for s in payload["sessions"]] == [2, 1]  # cost desc
-    assert payload["sessions"][0]["cost_usd"] == pytest.approx(4.0)
-    assert payload["sessions"][0]["count"] == 2
+    assert payload["activity_count"] == 3
+    assert [s["session_id"] for s in payload["sessions"]] == [2, 1]
+    assert payload["sessions"][0]["session_cost_usd"] == pytest.approx(4.0)
+    assert payload["sessions"][0]["activity_count"] == 2
     assert payload["sessions"][0]["exemplar_event_ids"] == [2, 3]
 
 
@@ -966,13 +1022,13 @@ def test_tool_evidence_scopes_bash_to_the_phase(tmp_path, monkeypatch) -> None:
     _add_assistant_event(conn, 2, 1, "2026-06-01T10:01:00Z",
                          [("Bash", {"command": "git push"}, False)])
     verify = usage_map_evidence(conn, node="tool:Bash@verify")
-    assert verify["cost_usd"] == pytest.approx(2.0)
-    assert verify["sessions"][0]["count"] == 1
+    assert verify["activity_count"] == 1
+    assert verify["sessions"][0]["activity_count"] == 1
     operate = usage_map_evidence(conn, node="tool:Bash@operate")
-    assert operate["cost_usd"] == pytest.approx(2.0)
+    assert operate["activity_count"] == 1
 
 
-def test_tool_evidence_uses_equal_share_on_mixed_events(tmp_path, monkeypatch) -> None:
+def test_tool_evidence_counts_the_matching_call_in_mixed_events(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(usage_map, "pricing_path", lambda: _pricing_csv(tmp_path))
     conn = _conn()
     _seed_base(conn)
@@ -980,7 +1036,27 @@ def test_tool_evidence_uses_equal_share_on_mixed_events(tmp_path, monkeypatch) -
                          [("Read", {"file_path": "a.py"}, False),
                           ("Edit", {"file_path": "a.py"}, False)])
     payload = usage_map_evidence(conn, node="tool:Read@explore")
-    assert payload["cost_usd"] == pytest.approx(1.0)  # half of the $2 event
+    assert payload["activity_count"] == 1
+    assert payload["sessions"][0]["session_cost_usd"] == pytest.approx(2.0)
+
+
+def test_tool_evidence_reports_activity_and_full_session_cost_separately(
+    tmp_path, monkeypatch,
+) -> None:
+    monkeypatch.setattr(usage_map, "pricing_path", lambda: _pricing_csv(tmp_path))
+    conn = _conn()
+    _seed_base(conn)
+    _add_assistant_event(conn, 1, 1, "2026-06-01T10:00:00Z", [
+        ("Read", {"file_path": "a.py"}, False),
+        ("Edit", {"file_path": "a.py"}, False),
+    ])
+
+    payload = usage_map_evidence(conn, node="tool:Read@explore")
+
+    assert payload["activity_count"] == 1
+    assert "cost_usd" not in payload
+    assert payload["sessions"][0]["activity_count"] == 1
+    assert payload["sessions"][0]["session_cost_usd"] == pytest.approx(2.0)
 
 
 def test_tool_evidence_unknown_tool_is_empty_not_error(tmp_path, monkeypatch) -> None:
@@ -991,7 +1067,7 @@ def test_tool_evidence_unknown_tool_is_empty_not_error(tmp_path, monkeypatch) ->
                          [("Read", {"file_path": "a.py"}, False)])
     payload = usage_map_evidence(conn, node="tool:Nonexistent@explore")
     assert payload["sessions"] == []
-    assert payload["cost_usd"] == 0.0
+    assert payload["activity_count"] == 0
 
 
 def test_load_events_captures_agent_id_and_input_context() -> None:
@@ -1022,17 +1098,16 @@ def test_load_events_captures_agent_id_and_input_context() -> None:
     assert third.input_context_tokens == 135  # 100 + 10 + 5 + 20, output excluded
 
 
-def test_aggregate_phases_splits_cost_by_origin() -> None:
+def test_aggregate_phases_splits_activity_by_origin() -> None:
     main = _event(1, [ToolCallRec(tool_name="Read")], cost=3.0)          # agent_id None
     sub = _event(2, [ToolCallRec(tool_name="Read")], cost=1.0)
     sub = dataclasses.replace(sub, agent_id="a1")
     acc = aggregate_phases([main, sub])
     bucket = acc["explore"]
-    assert bucket["main_cost"] == pytest.approx(3.0)
-    assert bucket["subagent_cost"] == pytest.approx(1.0)
-    # Conservation: origin split sums to the phase cost.
-    assert bucket["main_cost"] + bucket["subagent_cost"] == pytest.approx(bucket["cost_usd"])
-    assert bucket["main_tokens"] + bucket["subagent_tokens"] == pytest.approx(bucket["tokens"])
+    assert bucket["main_activity_count"] == 1
+    assert bucket["subagent_activity_count"] == 1
+    assert (bucket["main_activity_count"] + bucket["subagent_activity_count"]
+            == bucket["activity_count"])
 
 
 def test_tool_evidence_requires_a_valid_phase_qualifier(tmp_path, monkeypatch) -> None:

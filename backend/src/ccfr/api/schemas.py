@@ -600,9 +600,7 @@ class CostAnalyticsResponse(BaseModel):
 class UsageTool(BaseModel):
     key: str
     label: str
-    cost_usd: float = 0
-    tokens: int = 0
-    count: int = 0
+    activity_count: int = 0
     session_count: int = 0
 
 
@@ -610,23 +608,18 @@ class UsageHabit(BaseModel):
     key: str
     phase: str
     label: str
-    polarity: str = "anti"
-    status: str = "confirmed"
-    cost_usd: float = 0
-    count: int = 0
+    activity_count: int = 0
     session_count: int = 0
 
 
 class UsagePhase(BaseModel):
     key: str
     label: str
-    cost_usd: float = 0
-    tokens: int = 0
-    main_cost_usd: float = 0
-    subagent_cost_usd: float = 0
-    main_tokens: int = 0
-    subagent_tokens: int = 0
-    share: float = 0
+    activity_count: int = 0
+    main_activity_count: int = 0
+    subagent_activity_count: int = 0
+    text_assistant_step_count: int = 0
+    activity_share: float = 0
     tool_count: int = 0
     session_count: int = 0
     habits: list[UsageHabit] = Field(default_factory=list)
@@ -647,7 +640,11 @@ class UsageMapMeta(BaseModel):
     costs_partial: bool = False
     sessions_analyzed: int = 0
     events_classified: int = 0
-    share_basis: str = "cost"
+    total_activity_count: int = 0
+    tool_call_count: int = 0
+    text_assistant_step_count: int = 0
+    activity_basis: str = "tool_calls_and_assistant_steps"
+    methodology: str = ""
 
 
 class UsageMapResponse(BaseModel):
@@ -659,8 +656,8 @@ class UsageEvidenceSession(BaseModel):
     session_id: int
     title: str = ""
     project_name: str = ""
-    cost_usd: float = 0
-    count: int = 0
+    activity_count: int = 0
+    session_cost_usd: float = 0
     exemplar_event_ids: list[int] = Field(default_factory=list)
     detail: str | None = None
 
@@ -669,7 +666,7 @@ class UsageMapEvidenceResponse(BaseModel):
     node: str
     label: str = ""
     rule: str = ""
-    cost_usd: float = 0
+    activity_count: int = 0
     sessions: list[UsageEvidenceSession] = Field(default_factory=list)
 
 

@@ -578,32 +578,25 @@ export interface UsageHabit {
   key: string;
   phase: string;
   label: string;
-  polarity: "good" | "anti";
-  status: string;
-  cost_usd: number;
-  count: number;
+  activity_count: number;
   session_count: number;
 }
 
 export interface UsageTool {
   key: string;
   label: string;
-  cost_usd: number;
-  tokens: number;
-  count: number;
+  activity_count: number;
   session_count: number;
 }
 
 export interface UsagePhase {
   key: string;
   label: string;
-  cost_usd: number;
-  tokens: number;
-  main_cost_usd: number;
-  subagent_cost_usd: number;
-  main_tokens: number;
-  subagent_tokens: number;
-  share: number;
+  activity_count: number;
+  main_activity_count: number;
+  subagent_activity_count: number;
+  text_assistant_step_count: number;
+  activity_share: number;
   tool_count: number;
   session_count: number;
   habits: UsageHabit[];
@@ -619,7 +612,11 @@ export interface UsageMapMeta {
   costs_partial: boolean;
   sessions_analyzed: number;
   events_classified: number;
-  share_basis: "cost" | "tokens";
+  total_activity_count: number;
+  tool_call_count: number;
+  text_assistant_step_count: number;
+  activity_basis: "tool_calls_and_assistant_steps";
+  methodology: string;
 }
 
 export interface UsageMapResponse {
@@ -631,8 +628,8 @@ export interface UsageEvidenceSession {
   session_id: number;
   title: string;
   project_name: string;
-  cost_usd: number;
-  count: number;
+  activity_count: number;
+  session_cost_usd: number;
   exemplar_event_ids: number[];
   detail: string | null;
 }
@@ -641,7 +638,7 @@ export interface UsageMapEvidenceResponse {
   node: string;
   label: string;
   rule: string;
-  cost_usd: number;
+  activity_count: number;
   sessions: UsageEvidenceSession[];
 }
 

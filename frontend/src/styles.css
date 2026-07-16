@@ -2598,7 +2598,7 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
   .opportunity-meter-trend { margin-left: 0; align-items: flex-start; }
 }
 
-/* --- Usage map (force-directed) -------------------------------------------- */
+/* --- Experimental activity map (force-directed) ---------------------------- */
 
 .mindmap-stage {
   position: relative; flex: 1 1 0; min-height: 440px;
@@ -2615,8 +2615,6 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
 
 .mindmap-edge { fill: none; stroke-linecap: round; transition: opacity .15s; }
 .mindmap-edge.is-structure { stroke: var(--border-2); opacity: .9; }
-.mindmap-edge.is-good { stroke: var(--success); opacity: .45; }
-.mindmap-edge.is-anti { stroke: var(--danger); opacity: .45; }
 .mindmap-edge.is-dimmed { opacity: .08; }
 
 .mindmap-node { cursor: pointer; outline: none; transition: opacity .15s; }
@@ -2627,10 +2625,6 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
   fill: color-mix(in srgb, var(--accent) 16%, var(--surface)); stroke: var(--accent); }
 .mindmap-node.is-habit .mindmap-body {
   fill: color-mix(in srgb, var(--muted) 16%, var(--surface)); stroke: var(--muted); }
-.mindmap-node.is-habit.is-good .mindmap-body {
-  fill: color-mix(in srgb, var(--success) 16%, var(--surface)); stroke: var(--success); }
-.mindmap-node.is-habit.is-anti .mindmap-body {
-  fill: color-mix(in srgb, var(--danger) 16%, var(--surface)); stroke: var(--danger); }
 .mindmap-node.is-tool .mindmap-body {
   fill: color-mix(in srgb, var(--info) 16%, var(--surface)); stroke: var(--info); }
 
@@ -2640,17 +2634,42 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
 .mindmap-node.is-center .mindmap-ring { stroke: var(--border-2); }
 .mindmap-node.is-phase .mindmap-ring { stroke: var(--accent); }
 .mindmap-node.is-habit .mindmap-ring { stroke: var(--muted); }
-.mindmap-node.is-habit.is-good .mindmap-ring { stroke: var(--success); }
-.mindmap-node.is-habit.is-anti .mindmap-ring { stroke: var(--danger); }
 .mindmap-node.is-tool .mindmap-ring { stroke: var(--info); }
 
-.mindmap-node-label { font-size: 11px; font-weight: 600; fill: var(--text); pointer-events: none; }
-.mindmap-node-share { font-size: 10px; font-weight: 600; fill: var(--muted); pointer-events: none; }
-.mindmap-node.is-phase .mindmap-node-share { fill: var(--accent); }
-.mindmap-node.is-habit.is-good .mindmap-node-share { fill: var(--success); }
-.mindmap-node.is-habit.is-anti .mindmap-node-share { fill: var(--danger); }
-.mindmap-node.is-tool .mindmap-node-share { fill: var(--info); }
-.mindmap-delta { font-size: 10px; fill: var(--muted); pointer-events: none; }
+.mindmap-center-kicker,
+.mindmap-center-unit {
+  fill: var(--muted); font-size: 7.5px; font-weight: 700; letter-spacing: .08em;
+  pointer-events: none; text-transform: uppercase;
+}
+.mindmap-center-value {
+  fill: var(--text-strong); font-size: 15px; font-weight: 750;
+  font-variant-numeric: tabular-nums; pointer-events: none;
+}
+.mindmap-node-metric {
+  fill: var(--text-strong); font-size: 9px; font-weight: 750;
+  font-variant-numeric: tabular-nums; pointer-events: none;
+}
+.mindmap-node.is-phase .mindmap-node-metric { fill: var(--accent); font-size: 10px; }
+.mindmap-node.is-tool .mindmap-node-metric { fill: var(--info); }
+.mindmap-label-plate { pointer-events: all; }
+.mindmap-label-plate rect {
+  fill: color-mix(in srgb, var(--surface) 94%, var(--raised));
+  stroke: color-mix(in srgb, var(--border-2) 72%, transparent);
+  stroke-width: 1;
+}
+.mindmap-label-plate text {
+  fill: var(--text); font-weight: 600; letter-spacing: .01em;
+}
+.mindmap-label-dot { fill: var(--muted); }
+.mindmap-node.is-phase .mindmap-label-dot { fill: var(--accent); }
+.mindmap-node.is-tool .mindmap-label-dot { fill: var(--info); }
+.mindmap-node:hover .mindmap-label-plate rect,
+.mindmap-node.is-selected .mindmap-label-plate rect,
+.mindmap-node:focus-visible .mindmap-label-plate rect {
+  fill: var(--raised); stroke: var(--border-2);
+}
+.mindmap-delta { font-size: 7.5px; font-weight: 700; fill: var(--muted); pointer-events: none; }
+.mindmap-methodology-label { font-size: 9px; fill: var(--faint); pointer-events: none; }
 
 .mindmap-legend { position: absolute; top: 12px; left: 12px; display: flex; gap: 6px; z-index: 3; }
 .mindmap-legend span {
@@ -2659,8 +2678,7 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
   padding: 2px 9px; }
 .mindmap-legend i { width: 7px; height: 7px; border-radius: 50%; }
 .mindmap-legend i.is-phase { background: var(--accent); }
-.mindmap-legend i.is-good { background: var(--success); }
-.mindmap-legend i.is-anti { background: var(--danger); }
+.mindmap-legend i.is-pattern { background: var(--muted); }
 .mindmap-legend i.is-tool { background: var(--info); }
 
 .mindmap-zoom {
@@ -2674,7 +2692,8 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
 .mindmap-zoom button + button { border-top: 1px solid var(--border); }
 
 .mindmap-evidence {
-  position: absolute; right: 12px; top: 12px; width: 240px; z-index: 3;
+  position: absolute; right: 12px; top: 12px; width: min(300px, calc(100% - 24px));
+  max-height: calc(100% - 24px); overflow-y: auto; z-index: 3;
   background: var(--raised); border: 1px solid var(--border); border-radius: 10px;
   padding: 12px 14px; }
 .mindmap-evidence h3 {
@@ -2682,15 +2701,11 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
 .mindmap-evidence h3 i { width: 8px; height: 8px; border-radius: 50%; flex: none;
   background: var(--muted); }
 .mindmap-evidence.is-phase h3 i { background: var(--accent); }
-.mindmap-evidence.is-good h3 i { background: var(--success); }
-.mindmap-evidence.is-anti h3 i { background: var(--danger); }
 .mindmap-evidence.is-tool h3 i { background: var(--info); }
 .mindmap-evidence-rule { font-size: 11px; color: var(--faint); margin: 0 0 8px; line-height: 1.45; }
 .mindmap-evidence-bar {
   height: 5px; background: var(--grid); border-radius: 3px; margin: 8px 0 4px; overflow: hidden; }
 .mindmap-evidence-bar i { display: block; height: 5px; border-radius: 3px; background: var(--accent); }
-.mindmap-evidence.is-good .mindmap-evidence-bar i { background: var(--success); }
-.mindmap-evidence.is-anti .mindmap-evidence-bar i { background: var(--danger); }
 .mindmap-evidence.is-tool .mindmap-evidence-bar i { background: var(--info); }
 .mindmap-evidence-row {
   display: flex; justify-content: space-between; font-size: 12px; color: var(--muted);
@@ -2698,6 +2713,33 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
 .mindmap-evidence-row b { color: var(--text); font-weight: 600; }
 .mindmap-evidence-grouped { list-style: none; margin: 0; padding: 0; font-size: 12px;
   color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.mindmap-evidence-receipts { margin-top: 5px; border-top: 1px solid var(--border); }
+.mindmap-evidence-receipts > p { margin: 6px 0 0; color: var(--faint); font-size: 9.5px; }
+.mindmap-evidence-receipts-toggle {
+  display: inline-flex; align-items: center; gap: 3px; margin: 4px 0 0; padding: 2px 0;
+  border: 0; background: transparent; color: var(--faint); cursor: pointer;
+  font: inherit; font-size: 9.5px; line-height: 1.3;
+}
+.mindmap-evidence-receipts-toggle:hover,
+.mindmap-evidence-receipts-toggle:focus-visible { color: var(--muted); }
+.mindmap-evidence-receipts-toggle:focus-visible {
+  outline: 1px solid var(--border-2); outline-offset: 2px; border-radius: 2px;
+}
+.mindmap-receipts-chevron {
+  display: inline-block; font-size: 12px; line-height: 1;
+  transform: rotate(0deg); transition: transform .12s ease;
+}
+.mindmap-evidence-receipts-toggle[aria-expanded="true"] .mindmap-receipts-chevron {
+  transform: rotate(90deg);
+}
+.mindmap-evidence-receipts-content { padding-top: 6px; }
+.mindmap-evidence-receipts ul {
+  list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.mindmap-evidence-receipts li {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 8px;
+  color: var(--faint); font-size: 10px; }
+.mindmap-evidence-receipts li > .link-button { flex: 1 1 100%; text-align: left; }
+.mindmap-evidence-events { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 
 .mindmap-compare-toggle { display: inline-flex; align-items: center; gap: 6px;
   font-size: 12px; color: var(--muted); white-space: nowrap; }

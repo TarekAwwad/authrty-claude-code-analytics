@@ -1,26 +1,28 @@
 import { describe, expect, it } from "vitest";
 import type { UsageHabit, UsagePhase, UsageTool } from "../../api/types";
 import {
-  buildForceModel, deriveOriginPhases, groupSmallLeaves, habitRadius, labelTier,
-  phaseNode, phaseRadius,
+  buildForceModel, bubbleMetric, deriveOriginPhases, groupSmallLeaves,
+  habitRadius, labelPlate, labelTier, nodeCollisionRadius, phaseNode,
+  phaseRadius,
 } from "./forceModel";
 
-function habit(key: string, costUsd: number, polarity: "good" | "anti" = "anti"): UsageHabit {
-  return { key, phase: "explore", label: key, polarity, status: "confirmed",
-           cost_usd: costUsd, count: 3, session_count: 2 };
+function habit(key: string, activityCount: number): UsageHabit {
+  return { key, phase: "explore", label: key,
+           activity_count: activityCount, session_count: 2 };
 }
 
 function phase(key: string, share: number, habits: UsageHabit[] = [],
                tools: UsageTool[] = [], split?: Partial<UsagePhase>): UsagePhase {
-  const cost = share * 100;
-  return { key, label: key[0].toUpperCase() + key.slice(1), cost_usd: cost,
-           tokens: 1000, share, tool_count: 10, session_count: 3, habits, tools,
-           main_cost_usd: cost, subagent_cost_usd: 0,
-           main_tokens: 1000, subagent_tokens: 0, ...split };
+  const activity = share * 100;
+  return { key, label: key[0].toUpperCase() + key.slice(1),
+           activity_count: activity, activity_share: share,
+           main_activity_count: activity, subagent_activity_count: 0,
+           text_assistant_step_count: 0,
+           tool_count: 10, session_count: 3, habits, tools, ...split };
 }
 
-function tool(key: string, costUsd: number, count = 3): UsageTool {
-  return { key, label: key, cost_usd: costUsd, tokens: 1000, count, session_count: 2 };
+function tool(key: string, activityCount: number): UsageTool {
+  return { key, label: key, activity_count: activityCount, session_count: 2 };
 }
 
 describe("labelTier", () => {
@@ -29,6 +31,31 @@ describe("labelTier", () => {
     expect(labelTier(29.9)).toBe("split");
     expect(labelTier(22)).toBe("split");
     expect(labelTier(21.9)).toBe("below");
+  });
+});
+
+describe("bubble label layout", () => {
+  it("truncates long labels into a compact plate while preserving short labels", () => {
+    expect(labelPlate("Explore")).toEqual({
+      text: "Explore",
+      width: 56,
+    });
+    const long = labelPlate("Repeated file re-reads");
+    expect(long.text).toBe("Repeated file…");
+    expect(long.width).toBeLessThanOrEqual(94);
+  });
+
+  it("puts a compact quantitative value in the bubble", () => {
+    expect(bubbleMetric({ kind: "phase", sublabel: "52%" })).toBe("52%");
+    expect(bubbleMetric({ kind: "tool", sublabel: "1445 calls" })).toBe("1.4k");
+    expect(bubbleMetric({ kind: "habit", sublabel: "8 observations" })).toBe("8");
+    expect(bubbleMetric({ kind: "habit", sublabel: "" })).toBe("");
+  });
+
+  it("reserves collision space for the label plate instead of only the circle", () => {
+    const node = phaseNode(phase("explore", 0.01));
+    node.label = "Repeated file re-reads";
+    expect(nodeCollisionRadius(node)).toBeGreaterThan(node.r + 20);
   });
 });
 
@@ -44,21 +71,16 @@ describe("radii", () => {
 });
 
 describe("groupSmallLeaves", () => {
-  it("keeps the top 4 by cost and groups the rest", () => {
+  it("keeps the top 4 by observed activity and groups the rest", () => {
     const habits = [1, 2, 3, 4, 5, 6].map((n) => habit(`h${n}`, n * 10));
     const { visible, grouped } = groupSmallLeaves(habits, 100);
     expect(visible.map((h) => h.key)).toEqual(["h6", "h5", "h4", "h3"]);
     expect(grouped.map((h) => h.key)).toEqual(["h2", "h1"]);
   });
-  it("groups habits below 1% of total cost regardless of count", () => {
+  it("groups patterns below 1% of observed activity", () => {
     const { visible, grouped } = groupSmallLeaves([habit("tiny", 0.5)], 100);
     expect(visible).toHaveLength(0);
     expect(grouped.map((h) => h.key)).toEqual(["tiny"]);
-  });
-  it("keeps everything within the cap when there is no cost basis", () => {
-    const { visible, grouped } = groupSmallLeaves([habit("a", 0), habit("b", 0)], 0);
-    expect(visible).toHaveLength(2);
-    expect(grouped).toHaveLength(0);
   });
 });
 
@@ -81,17 +103,17 @@ describe("buildForceModel", () => {
   ];
 
   it("builds a pinned center plus nodes/links for active phases only", () => {
-    const model = buildForceModel(phases, { totalUsd: 100, costAvailable: true });
+    const model = buildForceModel(phases, { totalActivity: 100 });
     const ids = model.nodes.map((n) => n.id);
     expect(ids).toEqual(["center", "phase:explore", "habit:re-reads@explore", "phase:implement"]);
     const center = model.nodes[0];
     expect(center.fx).toBe(0);
     expect(center.fy).toBe(0);
-    expect(center.sublabel).toBe("$100");
+    expect(center.sublabel).toBe("100 activities");
   });
 
   it("links scale distance and width with share", () => {
-    const model = buildForceModel(phases, { totalUsd: 100, costAvailable: true });
+    const model = buildForceModel(phases, { totalActivity: 100 });
     const explore = model.links.find((l) => l.targetId === "phase:explore")!;
     const implement = model.links.find((l) => l.targetId === "phase:implement")!;
     expect(explore.distance).toBeCloseTo(120 + 90 * 0.5);
@@ -100,52 +122,31 @@ describe("buildForceModel", () => {
     expect(explore.kind).toBe("structure");
   });
 
-  it("habit links carry polarity and habit nodes carry exact share", () => {
-    const model = buildForceModel(phases, { totalUsd: 100, costAvailable: true });
+  it("pattern links are neutral and nodes carry observed counts", () => {
+    const model = buildForceModel(phases, { totalActivity: 100 });
     const leaf = model.nodes.find((n) => n.id === "habit:re-reads@explore")!;
-    expect(leaf.polarity).toBe("anti");
     expect(leaf.share).toBeCloseTo(0.05);
-    expect(leaf.sublabel).toBe("5%");
+    expect(leaf.sublabel).toBe("5 observations");
     const link = model.links.find((l) => l.targetId === leaf.id)!;
-    expect(link.kind).toBe("anti");
+    expect(link.kind).toBe("structure");
     expect(link.sourceId).toBe("phase:explore");
   });
 
   it("collapses overflow habits into a grouped leaf", () => {
     const many = phase("explore", 0.5, [1, 2, 3, 4, 5].map((n) => habit(`h${n}`, n * 5)));
-    const model = buildForceModel([many], { totalUsd: 100, costAvailable: true });
+    const model = buildForceModel([many], { totalActivity: 100 });
     const other = model.nodes.find((n) => n.id === "habit:other@explore")!;
     expect(other.label).toBe("+1 more");
     expect(other.grouped?.map((h) => h.key)).toEqual(["h1"]);
   });
 
-  it("falls back to counts when cost is unavailable", () => {
-    const model = buildForceModel(phases, { totalUsd: 0, costAvailable: false });
-    expect(model.nodes[0].sublabel).toBe("");
-    const leaf = model.nodes.find((n) => n.id === "habit:re-reads@explore")!;
-    expect(leaf.sublabel).toBe("3x");
-  });
-
   it("seeds deterministic non-zero starting positions", () => {
-    const a = buildForceModel(phases, { totalUsd: 100, costAvailable: true });
-    const b = buildForceModel(phases, { totalUsd: 100, costAvailable: true });
+    const a = buildForceModel(phases, { totalActivity: 100 });
+    const b = buildForceModel(phases, { totalActivity: 100 });
     expect(a.nodes.map((n) => [n.x, n.y])).toEqual(b.nodes.map((n) => [n.x, n.y]));
     expect(a.nodes[1].x !== 0 || a.nodes[1].y !== 0).toBe(true);
   });
 
-  it("keeps every leaf visible when cost is unavailable (token basis)", () => {
-    const tokenPhases = phases.map((p) => ({
-      ...p,
-      cost_usd: 0,
-      habits: p.habits.map((h) => ({ ...h, cost_usd: 0 })),
-      tools: p.tools.map((t) => ({ ...t, cost_usd: 0 })),
-    }));
-    // Regression: the page passes the TOKEN total here in token-basis mode.
-    const model = buildForceModel(tokenPhases, { totalUsd: 5_000_000, costAvailable: false });
-    const habitNodes = model.nodes.filter((n) => n.kind === "habit");
-    expect(habitNodes.length).toBeGreaterThan(0);
-    expect(habitNodes.every((n) => n.habitKey !== undefined)).toBe(true); // no "+N more" group node
-  });
 });
 
 describe("buildForceModel tool lens", () => {
@@ -156,7 +157,7 @@ describe("buildForceModel tool lens", () => {
 
   it("hangs tool leaves off phases and omits habit leaves", () => {
     const model = buildForceModel(phases,
-      { totalUsd: 100, costAvailable: true, leafMode: "tools" });
+      { totalActivity: 100, leafMode: "tools" });
     const ids = model.nodes.map((n) => n.id);
     expect(ids).toContain("tool:Read@explore");
     expect(ids).toContain("tool:Grep@explore");
@@ -165,21 +166,20 @@ describe("buildForceModel tool lens", () => {
   });
 
   it("defaults to the habits lens", () => {
-    const model = buildForceModel(phases, { totalUsd: 100, costAvailable: true });
+    const model = buildForceModel(phases, { totalActivity: 100 });
     expect(model.nodes.some((n) => n.id === "habit:re-reads@explore")).toBe(true);
     expect(model.nodes.some((n) => n.kind === "tool")).toBe(false);
   });
 
-  it("tool nodes carry exact share and neutral structure links", () => {
+  it("tool nodes carry observed call counts and neutral structure links", () => {
     const model = buildForceModel(phases,
-      { totalUsd: 100, costAvailable: true, leafMode: "tools" });
+      { totalActivity: 100, leafMode: "tools" });
     const leaf = model.nodes.find((n) => n.id === "tool:Read@explore")!;
     expect(leaf.kind).toBe("tool");
     expect(leaf.share).toBeCloseTo(0.3);
-    expect(leaf.sublabel).toBe("30%");
+    expect(leaf.sublabel).toBe("30 calls");
     expect(leaf.toolKey).toBe("Read");
     expect(leaf.phaseKey).toBe("explore");
-    expect(leaf.polarity).toBeUndefined();
     const link = model.links.find((l) => l.targetId === leaf.id)!;
     expect(link.kind).toBe("structure");
     expect(link.sourceId).toBe("phase:explore");
@@ -189,57 +189,54 @@ describe("buildForceModel tool lens", () => {
     const many = phase("explore", 0.5, [],
       [1, 2, 3, 4, 5].map((n) => tool(`T${n}`, n * 5)));
     const model = buildForceModel([many],
-      { totalUsd: 100, costAvailable: true, leafMode: "tools" });
+      { totalActivity: 100, leafMode: "tools" });
     const other = model.nodes.find((n) => n.id === "tool:other@explore")!;
     expect(other.label).toBe("+1 more");
     expect(other.grouped?.map((t) => t.key)).toEqual(["T1"]);
   });
 
-  it("falls back to counts when cost is unavailable", () => {
-    const model = buildForceModel(phases,
-      { totalUsd: 0, costAvailable: false, leafMode: "tools" });
-    const leaf = model.nodes.find((n) => n.id === "tool:Read@explore")!;
-    expect(leaf.sublabel).toBe("3x");
-  });
-
   it("keeps a zero-share phase visible in the lens that has leaves for it", () => {
-    const zeroShare = phase("operate", 0, [], [tool("Bash", 0, 7)]);
+    const zeroShare = phase("operate", 0, [], [tool("Bash", 0)]);
     const tools = buildForceModel([zeroShare],
-      { totalUsd: 100, costAvailable: true, leafMode: "tools" });
+      { totalActivity: 100, leafMode: "tools" });
     expect(tools.nodes.some((n) => n.id === "phase:operate")).toBe(true);
     expect(tools.nodes.some((n) => n.id === "tool:Bash@operate")).toBe(false); // 0% < 1% floor -> grouped
     expect(tools.nodes.some((n) => n.id === "tool:other@operate")).toBe(true);
     const habits = buildForceModel([zeroShare],
-      { totalUsd: 100, costAvailable: true, leafMode: "habits" });
+      { totalActivity: 100, leafMode: "habits" });
     expect(habits.nodes.some((n) => n.id === "phase:operate")).toBe(false);
   });
 });
 
 describe("deriveOriginPhases", () => {
   const phases: UsagePhase[] = [
-    phase("explore", 0.8, [], [], { main_cost_usd: 20, subagent_cost_usd: 60 }),
-    phase("implement", 0.2, [], [], { main_cost_usd: 20, subagent_cost_usd: 0 }),
+    phase("explore", 0.8, [], [], {
+      main_activity_count: 20, subagent_activity_count: 60,
+    }),
+    phase("implement", 0.2, [], [], {
+      main_activity_count: 20, subagent_activity_count: 0,
+    }),
   ];
 
   it("returns phases unchanged for 'all'", () => {
-    const { phases: out, total } = deriveOriginPhases(phases, "all", "cost");
-    expect(total).toBe(100);            // cost_usd 80 + 20
-    expect(out[0].share).toBe(0.8);
+    const { phases: out, total } = deriveOriginPhases(phases, "all");
+    expect(total).toBe(100);
+    expect(out[0].activity_share).toBe(0.8);
   });
 
   it("rescales to the subagent subset", () => {
-    const { phases: out, total } = deriveOriginPhases(phases, "subagent", "cost");
+    const { phases: out, total } = deriveOriginPhases(phases, "subagent");
     expect(total).toBe(60);             // 60 + 0
-    expect(out[0].cost_usd).toBe(60);
-    expect(out[0].share).toBe(1);       // all subagent cost is in explore
-    expect(out[1].share).toBe(0);
+    expect(out[0].activity_count).toBe(60);
+    expect(out[0].activity_share).toBe(1);
+    expect(out[1].activity_share).toBe(0);
     expect(out[0].habits).toEqual([]);  // leaves hidden in split mode
   });
 
   it("rescales to the main subset", () => {
-    const { phases: out, total } = deriveOriginPhases(phases, "main", "cost");
+    const { phases: out, total } = deriveOriginPhases(phases, "main");
     expect(total).toBe(40);             // 20 + 20
-    expect(out[0].share).toBe(0.5);
-    expect(out[1].share).toBe(0.5);
+    expect(out[0].activity_share).toBe(0.5);
+    expect(out[1].activity_share).toBe(0.5);
   });
 });
