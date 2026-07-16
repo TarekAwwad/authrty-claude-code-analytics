@@ -137,31 +137,7 @@ export function counterfactualSeries(
   const cf = actual.slice();
   const epoch = thread.epochs[finding.epoch];
   const epochEnd = Math.min(epoch ? epoch.end_turn : n - 1, n - 1);
-  const params = finding.counterfactual?.params ?? {};
-
-  if (finding.archetype === "late_compaction") {
-    // Compaction at the eligible turn keeps `retained_tokens`; the dropped
-    // ballast is a fixed count carried through the rest of the epoch.
-    const retained = params.retained_tokens;
-    if (retained === undefined) return null;
-    const dropped = actual[entry] - retained;
-    if (dropped <= 0) return null;
-    for (let i = entry; i <= epochEnd; i += 1) cf[i] = Math.max(0, actual[i] - dropped);
-    return cf;
-  }
-
-  if (finding.archetype === "stale_continuation") {
-    // The follow-up runs in a fresh session at baseline context: the ballast
-    // carried across the idle gap disappears for every tail call.
-    const baseline = params.baseline_tokens;
-    if (baseline === undefined || entry === 0) return null;
-    const avoidable = actual[entry - 1] - baseline;
-    if (avoidable <= 0) return null;
-    for (let i = entry; i < n; i += 1) cf[i] = Math.max(0, actual[i] - avoidable);
-    return cf;
-  }
-
-  // Contributor-level archetypes (rereads, oversized): the saved tokens stop
+  // Contributor opportunities: the modeled reduction stops
   // being carried from the entry turn through the end of the carry window.
   if (finding.savings_tokens <= 0) return null;
   const end = Math.min(entry + Math.max(0, finding.carried_turns), epochEnd);

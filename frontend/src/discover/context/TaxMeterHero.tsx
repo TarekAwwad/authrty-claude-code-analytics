@@ -5,8 +5,6 @@ import { formatTokens, formatUsd } from "./ContextEconomics";
 export const ARCHETYPE_COLORS: Record<string, string> = {
   rereads: "var(--info)",
   oversized: "var(--warning)",
-  late_compaction: "var(--success)",
-  stale_continuation: "var(--subagent)",
 };
 
 function TrendSparkline({

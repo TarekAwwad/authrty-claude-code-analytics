@@ -274,15 +274,15 @@ export const GLOSSARY_TERMS: GlossaryTerm[] = [
   },
   {
     category: "Discovery",
-    term: "Avoidable spend",
+    term: "Estimated context opportunity",
     definition:
-      "The portion of total spend claimed by Context Economics findings under explicit counterfactuals (capped reads, deduplicated re-reads, earlier compaction, fresh sessions). Claims are disjoint: a token-carry is never counted twice.",
+      "The modeled carry-cost reduction from repeated same-range reads and unusually large tool results under each finding's stated counterfactual. It is an estimate, not proven waste.",
   },
   {
     category: "Discovery",
     term: "Calibration",
     definition:
-      "Contributor sizes are estimated from stored content (~4 chars/token) and then scaled so they sum exactly to the observed context growth of that turn. Growth that nothing explains is shown as 'unattributed' and never counted as avoidable.",
+      "Contributor sizes are estimated from stored content (~4 chars/token) and then scaled so they sum exactly to the observed context growth of that turn. Growth that nothing explains is shown as 'unattributed' and never counted as an opportunity.",
   },
 
   // Cost — token usage and spend.

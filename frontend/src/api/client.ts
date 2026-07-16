@@ -212,10 +212,9 @@ export function getDiscoveryAnalytics(filters: DiscoveryFilters = {}) {
   return request<DiscoveryResponse>(`/analytics/discovery${query ? `?${query}` : ""}`);
 }
 
-export function getContextEconomics(filters: { projectId?: number | null; minSupport?: number } = {}) {
+export function getContextEconomics(filters: { projectId?: number | null } = {}) {
   const params = new URLSearchParams();
   if (filters.projectId != null) params.set("project_id", String(filters.projectId));
-  if (filters.minSupport != null) params.set("min_support", String(filters.minSupport));
   const query = params.toString();
   return request<ContextEconomicsResponse>(`/analytics/context-economics${query ? `?${query}` : ""}`);
 }

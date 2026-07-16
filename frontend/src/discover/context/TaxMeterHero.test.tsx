@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import React from "react";
-import TaxMeterHero from "./TaxMeterHero";
+import TaxMeterHero, { ARCHETYPE_COLORS } from "./TaxMeterHero";
 import type { ContextArchetype, ContextEconomicsMeta } from "../../api/types";
 
 const archetypes: ContextArchetype[] = [
@@ -39,6 +39,10 @@ function meta(overrides: Partial<ContextEconomicsMeta> = {}): ContextEconomicsMe
 }
 
 describe("TaxMeterHero opportunity framing", () => {
+  it("defines colors only for production context opportunities", () => {
+    expect(Object.keys(ARCHETYPE_COLORS)).toEqual(["rereads", "oversized"]);
+  });
+
   it("shows the complete-priced opportunity without claiming token usage share", () => {
     render(<TaxMeterHero meta={meta()} archetypes={archetypes} />);
 

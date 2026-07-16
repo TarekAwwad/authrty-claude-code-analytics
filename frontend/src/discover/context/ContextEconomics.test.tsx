@@ -130,6 +130,14 @@ describe("ContextEconomics", () => {
     expect(compactLabel).toHaveAttribute("title", "Read result: dist/bundle.js (53,000 tok)");
   });
 
+  it("keeps support calibration out of the default controls", async () => {
+    renderPage();
+
+    await screen.findByText("Estimated context opportunity");
+    expect(screen.queryByRole("combobox", { name: /minimum support/i })).not.toBeInTheDocument();
+    expect(mocks.getContextEconomics).toHaveBeenCalledWith({ projectId: null });
+  });
+
   it("disables under-supported archetypes in the legend with an evidence hint", async () => {
     renderPage();
     await screen.findByText("Estimated context opportunity");

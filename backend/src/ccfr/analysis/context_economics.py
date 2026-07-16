@@ -2,7 +2,7 @@
 
 Reconstructs per-call context sizes from stored usage, attributes per-turn
 growth to the events between calls (calibrated so estimates sum exactly to the
-observed growth), prices the carry cost of each contributor, and runs four
+observed growth), prices the carry cost of each contributor, and runs two
 corpus-adaptive opportunity detectors with disjoint counterfactual estimates.
 
 Computation is on-demand from the rebuildable SQLite cache, like discovery.py.
@@ -36,16 +36,6 @@ COMPACTION_DROP_RATIO = 0.6      # context below 60% of previous call = epoch bo
 OVERSIZED_PERCENTILE = 0.95      # corpus-relative threshold for "oversized"
 OVERSIZED_FLOOR_TOKENS = 5_000   # never flag results smaller than this
 CAP_FLOOR_TOKENS = 500           # counterfactual cap is corpus median, at least this
-
-CONTEXT_WINDOW_TOKENS = 200_000  # assumed model context window (documented assumption)
-COMPACTION_PRESSURE_RATIO = 0.5  # eligible to compact above 50% of the window
-COMPACTION_RETAINED_RATIO = 0.3  # assumed fraction retained by a compaction
-COMPACTION_MIN_TAIL = 5          # calls that must follow eligibility to flag
-
-STALE_GAP_PERCENTILE = 0.90      # corpus-relative wall-clock gap threshold
-STALE_GAP_FLOOR_SECONDS = 1_800
-STALE_CONTEXT_PERCENTILE = 0.75  # context must be corpus-large at the gap
-STALE_MAX_TAIL_FRACTION = 0.25   # follow-up burst must be short
 
 MIN_FINDING_USD = 0.01           # findings cheaper than this are noise
 FINDINGS_LIMIT = 20              # per archetype in the corpus payload
@@ -817,191 +807,6 @@ def detect_oversized(
 
 
 # ---------------------------------------------------------------------------
-# Detector 3: late compaction
-# ---------------------------------------------------------------------------
-
-def detect_late_compaction(
-    threads: list[ThreadRec], claims: Claims,
-) -> tuple[list[FindingRec], list[dict[str, Any]]]:
-    """Context stayed above the compaction pressure point for a long tail.
-
-    Counterfactual: compaction at the first eligible call retains
-    COMPACTION_RETAINED_RATIO of that call's context and drops the rest. The
-    dropped tokens are a FIXED count — post-compaction work would regrow context
-    identically in both worlds, so only the dropped ballast is avoidable, not the
-    later growth. Savings = dropped tokens (minus any already claimed by
-    contributor-level findings) read-priced over the tail, minus the one-off
-    re-write of the retained content.
-
-    `savings_tokens` is the one-time avoidable footprint; `savings_usd`
-    accumulates the per-call carry.
-    """
-    pressure = CONTEXT_WINDOW_TOKENS * COMPACTION_PRESSURE_RATIO
-    thresholds = [
-        {"name": "pressure_tokens", "value": pressure,
-         "provenance": f"{int(COMPACTION_PRESSURE_RATIO * 100)}% of an assumed "
-                       f"{CONTEXT_WINDOW_TOKENS:,}-token context window"},
-        {"name": "min_tail_calls", "value": float(COMPACTION_MIN_TAIL),
-         "provenance": "minimum calls after the pressure point to flag"},
-    ]
-    findings: list[FindingRec] = []
-    for thread_index, thread in enumerate(threads):
-        claimed = claims.tokens_by_call[thread_index]
-        for epoch_index, epoch in enumerate(thread.epochs):
-            eligible = next(
-                (i for i in range(epoch.start, epoch.end + 1)
-                 if thread.calls[i].context_tokens >= pressure),
-                None,
-            )
-            if eligible is None or epoch.end - eligible < COMPACTION_MIN_TAIL:
-                continue
-            eligible_ctx = thread.calls[eligible].context_tokens
-            retained = eligible_ctx * COMPACTION_RETAINED_RATIO
-            dropped = eligible_ctx - retained  # fixed avoidable tokens per tail call
-            savings_usd = -retained * thread.write_prices[eligible]
-            savings_tokens = 0
-            covered: list[int] = []
-            for k in range(eligible + 1, epoch.end + 1):
-                residual = dropped - claimed[k]
-                if residual > 0:
-                    savings_usd += residual * thread.read_prices[k]
-                    # Footprint, not token-turns: the same ballast is re-paid each
-                    # call; the frontend subtracts savings_tokens from EVERY tail
-                    # turn (streamGeometry counterfactual), so report it once.
-                    savings_tokens = max(savings_tokens, int(residual))
-                    covered.append(k)
-            if _has_price_signal(thread) and savings_usd < MIN_FINDING_USD:
-                continue
-            for k in covered:
-                claims.calls[thread_index].add(k)
-            findings.append(FindingRec(
-                archetype="late_compaction",
-                session_id=thread.session_db_id,
-                session_title=thread.session_title,
-                project_name=thread.project_name,
-                epoch=epoch_index,
-                entry_turn=eligible,
-                label=(f"Context above {int(pressure / 1000)}k tokens for "
-                       f"{epoch.end - eligible} more turns without compaction"),
-                carried_turns=epoch.end - eligible,
-                carried_tokens=int(dropped),
-                savings_tokens=savings_tokens,
-                savings_usd=savings_usd,
-                counterfactual={
-                    "model": "compact at the first eligible turn, retaining "
-                             f"{int(COMPACTION_RETAINED_RATIO * 100)}% of the context",
-                    "params": {"eligible_turn": eligible, "retained_tokens": retained},
-                },
-                event_id=thread.calls[eligible].event_id,
-                ts=thread.calls[eligible].ts,
-            ))
-    return findings, thresholds
-
-
-# ---------------------------------------------------------------------------
-# Detector 4: stale session continuation
-# ---------------------------------------------------------------------------
-
-def _gap_seconds(a: str | None, b: str | None) -> float:
-    if not a or not b:
-        return 0.0
-    try:
-        start = datetime.fromisoformat(a.replace("Z", "+00:00"))
-        end = datetime.fromisoformat(b.replace("Z", "+00:00"))
-        return max(0.0, (end - start).total_seconds())
-    except (ValueError, TypeError):
-        return 0.0
-
-
-def detect_stale_continuation(
-    threads: list[ThreadRec], claims: Claims,
-) -> tuple[list[FindingRec], list[dict[str, Any]]]:
-    """A short follow-up burst after a long idle gap re-pays a huge context.
-
-    Counterfactual: the follow-up runs in a fresh session whose context is the
-    thread's first-call baseline; savings = residual context above baseline for
-    each follow-up call. Calls already claimed by late-compaction are skipped.
-
-    Must run AFTER detect_late_compaction so compaction-claimed calls (in
-    claims.calls) are excluded here.
-
-    `savings_tokens` is the one-time avoidable footprint; `savings_usd`
-    accumulates the per-call carry.
-    """
-    all_gaps = [
-        _gap_seconds(thread.calls[i - 1].ts, thread.calls[i].ts)
-        for thread in threads for i in range(1, len(thread.calls))
-    ]
-    all_contexts = [float(c.context_tokens) for t in threads for c in t.calls]
-    gap_threshold = max(_percentile(all_gaps, STALE_GAP_PERCENTILE),
-                        float(STALE_GAP_FLOOR_SECONDS))
-    context_threshold = _percentile(all_contexts, STALE_CONTEXT_PERCENTILE)
-    thresholds = [
-        {"name": "gap_seconds", "value": gap_threshold,
-         "provenance": f"p90 of {len(all_gaps)} call gaps, floor "
-                       f"{STALE_GAP_FLOOR_SECONDS // 60} min"},
-        {"name": "context_tokens", "value": context_threshold,
-         "provenance": f"p75 of {len(all_contexts)} call context sizes"},
-    ]
-    findings: list[FindingRec] = []
-    for thread_index, thread in enumerate(threads):
-        n = len(thread.calls)
-        claimed_tokens = claims.tokens_by_call[thread_index]
-        for i in range(1, n):
-            tail = n - i
-            if tail > max(1, int(n * STALE_MAX_TAIL_FRACTION)):
-                continue
-            if _gap_seconds(thread.calls[i - 1].ts, thread.calls[i].ts) < gap_threshold:
-                continue
-            if thread.calls[i - 1].context_tokens < context_threshold:
-                continue
-            tail_calls = [k for k in range(i, n) if k not in claims.calls[thread_index]]
-            if not tail_calls:
-                continue
-            baseline = thread.calls[0].context_tokens
-            # Avoidable = the stale ballast carried across the gap (context just
-            # before the gap, minus the fresh-session baseline). Constant across
-            # tail calls: the follow-up's own new work happens in both worlds, so
-            # only the pre-gap ballast is avoidable — crediting later growth would
-            # inflate the headline. Exact when context grows through the tail (the
-            # usual case); conservative if context shrinks mildly between tail calls.
-            avoidable_ctx = thread.calls[i - 1].context_tokens - baseline
-            savings_usd = 0.0
-            savings_tokens = 0
-            for k in tail_calls:
-                residual = avoidable_ctx - claimed_tokens[k]
-                if residual > 0:
-                    savings_usd += residual * thread.read_prices[k]
-                    savings_tokens = max(savings_tokens, int(residual))
-            if _has_price_signal(thread) and savings_usd < MIN_FINDING_USD:
-                continue
-            claims.calls[thread_index].update(tail_calls)
-            gap_minutes = int(_gap_seconds(thread.calls[i - 1].ts, thread.calls[i].ts) // 60)
-            findings.append(FindingRec(
-                archetype="stale_continuation",
-                session_id=thread.session_db_id,
-                session_title=thread.session_title,
-                project_name=thread.project_name,
-                epoch=next((e for e, ep in enumerate(thread.epochs) if ep.start <= i <= ep.end), 0),
-                entry_turn=i,
-                label=(f"Resumed a {thread.calls[i - 1].context_tokens // 1000}k-token "
-                       f"context after {gap_minutes} min for {tail} short turns"),
-                carried_turns=tail,
-                carried_tokens=int(avoidable_ctx),
-                savings_tokens=savings_tokens,
-                savings_usd=savings_usd,
-                counterfactual={
-                    "model": "run the follow-up in a fresh session at the thread's baseline context",
-                    "params": {"baseline_tokens": baseline, "gap_minutes": gap_minutes},
-                },
-                event_id=thread.calls[i].event_id,
-                ts=thread.calls[i].ts,
-            ))
-            break  # one stale-continuation finding per thread
-    return findings, thresholds
-
-
-# ---------------------------------------------------------------------------
 # Corpus aggregation
 # ---------------------------------------------------------------------------
 
@@ -1012,23 +817,11 @@ ARCHETYPES: list[dict[str, str]] = [
     {"key": "oversized", "title": "Large result carry opportunity",
      "description": "A result was unusually large relative to other results from the same tool, so carrying it may have increased context cost.",
      "recommendation": "Read large files with limit/offset, filter command output, or offload to a subagent and keep only its summary."},
-    {"key": "late_compaction", "title": "Late compaction",
-     "description": "The context stayed near the window limit for many turns without compaction.",
-     "recommendation": "Compact (or let auto-compact run) once the context stops earning its keep."},
-    {"key": "stale_continuation", "title": "Stale continuation",
-     "description": "A short follow-up after a long break re-paid a huge accumulated context.",
-     "recommendation": "Start short follow-ups in a fresh session instead of resuming a heavyweight one."},
 ]
 
 
 def _thumbnail(thread: ThreadRec, finding: FindingRec) -> dict[str, Any]:
-    """Downsampled context series for an archetype card, with the finding's
-    contributor (when contributor-level) highlighted.
-
-    Context-level findings (late_compaction, stale_continuation) carry a call's
-    event_id rather than a contributor's, so no contributor matches and the
-    series renders without a highlight band — the curve alone is the evidence.
-    """
+    """Downsampled context series with the finding contributor highlighted."""
     highlight_entry, highlight_end, highlight_tokens = None, None, 0
     for contributor in thread.contributors:
         if contributor.event_id is not None and contributor.event_id == finding.event_id:
@@ -1207,17 +1000,13 @@ def _finding_payload(finding: FindingRec) -> dict[str, Any]:
 
 
 def run_detectors(threads: list[ThreadRec]) -> dict[str, tuple[list[FindingRec], list[dict[str, Any]]]]:
-    """All four detectors in claim-priority order over already-taxed threads."""
+    """Supported production detectors in claim-priority order."""
     claims = Claims.for_threads(threads)
     rereads = detect_rereads(threads, claims)
     oversized, oversized_thresholds = detect_oversized(threads, claims)
-    compaction, compaction_thresholds = detect_late_compaction(threads, claims)
-    stale, stale_thresholds = detect_stale_continuation(threads, claims)
     return {
         "rereads": (rereads, []),
         "oversized": (oversized, oversized_thresholds),
-        "late_compaction": (compaction, compaction_thresholds),
-        "stale_continuation": (stale, stale_thresholds),
     }
 
 

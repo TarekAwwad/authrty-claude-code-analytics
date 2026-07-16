@@ -872,197 +872,6 @@ def test_detect_oversized_adaptive_threshold_governs_above_floor() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Detector 3: late compaction
-# ---------------------------------------------------------------------------
-
-from ccfr.analysis.context_economics import detect_late_compaction
-
-
-def test_detect_late_compaction_flags_long_high_context_tail() -> None:
-    # 12 calls; context crosses 50% of the 200k window (100k) at call 2 and
-    # stays high for 9 more calls.
-    calls = [_call(i + 1, c) for i, c in enumerate(
-        [60_000, 90_000, 110_000, 112_000, 114_000, 116_000, 118_000,
-         120_000, 122_000, 124_000, 126_000, 128_000]
-    )]
-    thread = _priced_thread(calls)
-    claims = Claims.for_threads([thread])
-    findings, thresholds = detect_late_compaction([thread], claims)
-
-    assert len(findings) == 1
-    finding = findings[0]
-    assert finding.archetype == "late_compaction"
-    assert finding.entry_turn == 2
-    retained = 110_000 * 0.3
-    dropped = 110_000 - retained
-    expected = sum(dropped / 1e6 for k in range(3, 12)) - retained / 1e6
-    assert finding.savings_usd == pytest.approx(expected, rel=1e-6)
-    assert claims.calls[0] == set(range(3, 12))
-    assert any(t["name"] == "pressure_tokens" for t in thresholds)
-
-
-def test_detect_late_compaction_short_tail_not_flagged() -> None:
-    calls = [_call(i + 1, c) for i, c in enumerate([60_000, 110_000, 112_000, 114_000])]
-    thread = _priced_thread(calls)
-    findings, _ = detect_late_compaction([thread], Claims.for_threads([thread]))
-    assert findings == []
-
-
-def test_detect_late_compaction_subtracts_contributor_claims() -> None:
-    calls = [_call(i + 1, c) for i, c in enumerate(
-        [60_000, 90_000, 110_000, 112_000, 114_000, 116_000, 118_000,
-         120_000, 122_000, 124_000, 126_000, 128_000]
-    )]
-    thread = _priced_thread(calls)
-    claims = Claims.for_threads([thread])
-    claims.tokens_by_call[0] = [10_000] * len(calls)  # pretend earlier detectors claimed 10k/call
-    findings, _ = detect_late_compaction([thread], claims)
-    retained = 110_000 * 0.3
-    dropped = 110_000 - retained
-    expected = sum((dropped - 10_000) / 1e6 for k in range(3, 12)) - retained / 1e6
-    assert findings[0].savings_usd == pytest.approx(expected, rel=1e-6)
-
-
-def test_detect_late_compaction_skips_fully_claimed_tail_calls() -> None:
-    calls = [_call(i + 1, c) for i, c in enumerate(
-        [60_000, 90_000, 110_000, 112_000, 114_000, 116_000, 118_000,
-         120_000, 122_000, 124_000, 126_000, 128_000]
-    )]
-    thread = _priced_thread(calls)
-    claims = Claims.for_threads([thread])
-    # dropped = 0.7*110k = 77k. Claim 80k at call 5 only, so its residual <= 0:
-    # it must be excluded from savings AND not added to claims.calls.
-    claims.tokens_by_call[0][5] = 80_000
-    findings, _ = detect_late_compaction([thread], claims)
-    assert 5 not in claims.calls[0]
-    assert claims.calls[0] == set(range(3, 12)) - {5}
-
-
-# ---------------------------------------------------------------------------
-# Detector 4: stale session continuation
-# ---------------------------------------------------------------------------
-
-from ccfr.analysis.context_economics import detect_stale_continuation
-
-
-def _gapped_thread() -> ThreadRec:
-    # 8 calls 1 minute apart with a large context, then a 2-hour gap before
-    # 2 short follow-up calls that still pay the full context.
-    calls = []
-    for i in range(8):
-        calls.append(CallRec(event_id=i + 1, ts=_ts(i + 1), model="claude-sonnet-4-6",
-                             context_tokens=20_000 + i * 20_000, output_tokens=0))
-    for j, minute in enumerate([130, 131]):
-        calls.append(CallRec(event_id=9 + j, ts=_ts(minute), model="claude-sonnet-4-6",
-                             context_tokens=161_000 + j * 1_000, output_tokens=0))
-    thread = _thread(calls)
-    accrue_tax(thread, PRICE_TIMELINE)
-    return thread
-
-
-def test_detect_stale_continuation_flags_gap_resume() -> None:
-    threads = [_gapped_thread()]
-    # Pad the corpus with gapless threads so the p90 gap threshold is small.
-    for n in range(9):
-        threads.append(_priced_thread(
-            [_call(1, 50_000), _call(2, 52_000), _call(3, 54_000)]
-        ))
-    claims = Claims.for_threads(threads)
-    findings, thresholds = detect_stale_continuation(threads, claims)
-
-    assert len(findings) == 1
-    finding = findings[0]
-    assert finding.archetype == "stale_continuation"
-    assert finding.entry_turn == 8
-    baseline = 20_000
-    avoidable = 160_000 - baseline  # context just before the gap, minus baseline
-    expected = (avoidable + avoidable) / 1e6  # constant per tail call, 2 tail calls
-    assert finding.savings_usd == pytest.approx(expected, rel=1e-6)
-    assert claims.calls[0] == {8, 9}
-    assert any(t["name"] == "gap_seconds" for t in thresholds)
-
-
-def test_detect_stale_continuation_skips_calls_claimed_by_compaction() -> None:
-    threads = [_gapped_thread()]
-    claims = Claims.for_threads(threads)
-    claims.calls[0].update({8, 9})
-    findings, _ = detect_stale_continuation(threads, claims)
-    assert findings == []
-
-
-def test_detect_stale_continuation_skips_small_resumed_context() -> None:
-    # Long gap but a small resumed context (below corpus p75): not flagged.
-    small = _thread([
-        CallRec(event_id=1, ts=_ts(1), model="claude-sonnet-4-6",
-                context_tokens=5_000, output_tokens=0),
-        CallRec(event_id=2, ts=_ts(200), model="claude-sonnet-4-6",
-                context_tokens=6_000, output_tokens=0),
-    ])
-    accrue_tax(small, PRICE_TIMELINE)
-    threads = [small]
-    for n in range(9):  # pad so corpus p75 context is large
-        threads.append(_priced_thread([_call(1, 200_000), _call(2, 200_000)]))
-    findings, _ = detect_stale_continuation(threads, Claims.for_threads(threads))
-    assert findings == []
-
-
-def _flat_priced_thread(calls: list[CallRec]) -> ThreadRec:
-    # Named distinctly from _priced_thread (line 459 above), which already has
-    # a different signature (calls, items) and derives prices via accrue_tax.
-    # A same-named redefinition here would silently replace that binding for
-    # every earlier test in this module (Python module-level defs are resolved
-    # at call time), breaking the many `_priced_thread(calls, items)` callers.
-    thread = ThreadRec(
-        session_db_id=1, session_title="t", project_name="p", agent_id=None,
-        calls=calls, epochs=split_epochs([c.context_tokens for c in calls]),
-        contributors=[],
-    )
-    thread.read_prices = [1e-6] * len(calls)      # $1/MTok read
-    thread.write_prices = [1.25e-6] * len(calls)  # $1.25/MTok write
-    return thread
-
-
-def test_late_compaction_savings_tokens_is_a_footprint_not_token_turns() -> None:
-    # 10 calls pinned at 120k context: eligible at call 0, tail of 9 calls.
-    calls = [_call(i + 1, 120_000, ts=f"2026-01-01T00:{i:02d}:00Z") for i in range(10)]
-    thread = _flat_priced_thread(calls)
-    claims = Claims.for_threads([thread])
-
-    findings, _ = detect_late_compaction([thread], claims)
-
-    assert len(findings) == 1
-    f = findings[0]
-    dropped = int(120_000 * (1 - 0.3))            # 84_000 ballast tokens
-    assert f.savings_tokens == dropped            # once — NOT dropped * 9 tail calls
-    assert f.carried_tokens == dropped
-    assert f.carried_turns == 9
-    # USD is per-call carry and stays cumulative: 9 * 84k * $1/MTok - rewrite cost.
-    assert f.savings_usd == pytest.approx(9 * 84_000 * 1e-6 - 36_000 * 1.25e-6)
-
-
-def test_stale_continuation_savings_tokens_is_a_footprint() -> None:
-    # 8 calls: minute-spaced ramp to 90k, then a 2h gap before two tail calls.
-    contexts = [10_000, 30_000, 50_000, 70_000, 80_000, 90_000, 90_000, 90_000]
-    times = ["00:00", "00:01", "00:02", "00:03", "00:04", "00:05", "02:05", "02:06"]
-    calls = [
-        _call(i + 1, ctx, ts=f"2026-01-01T{t}:00Z")
-        for i, (ctx, t) in enumerate(zip(contexts, times))
-    ]
-    thread = _flat_priced_thread(calls)
-    claims = Claims.for_threads([thread])
-
-    findings, _ = detect_stale_continuation([thread], claims)
-
-    assert len(findings) == 1
-    f = findings[0]
-    avoidable = 90_000 - 10_000                   # pre-gap context minus baseline
-    assert f.savings_tokens == avoidable          # once — NOT avoidable * 2 tail calls
-    assert f.carried_tokens == avoidable
-    assert f.carried_turns == 2
-    assert f.savings_usd == pytest.approx(2 * avoidable * 1e-6)
-
-
-# ---------------------------------------------------------------------------
 # Corpus aggregation: context_economics_analytics
 # ---------------------------------------------------------------------------
 
@@ -1131,7 +940,7 @@ def test_corpus_payload_uses_estimated_opportunity_contract(
     assert "avoidable_token_share" not in meta
 
     keys = [a["key"] for a in payload["archetypes"]]
-    assert keys == ["rereads", "oversized", "late_compaction", "stale_continuation"]
+    assert keys == ["rereads", "oversized"]
     rereads = payload["archetypes"][0]
     assert rereads["meets_support"] is True
     assert rereads["findings_count"] == 3
@@ -1164,7 +973,9 @@ def test_corpus_payload_weekly_trend_buckets_total_and_avoidable(
     assert sum(b["total_usd"] for b in trend) == pytest.approx(
         payload["meta"]["recorded_api_equivalent_usd"]
     )
-    assert sum(b["avoidable_usd"] for b in trend) > 0
+    assert sum(b["avoidable_usd"] for b in trend) == pytest.approx(
+        payload["meta"]["opportunity_usd"]
+    )
 
 
 def test_corpus_payload_without_pricing_is_token_only(
@@ -1251,18 +1062,15 @@ def test_corpus_payload_empty_db_is_stable(conn: sqlite3.Connection, tmp_path: P
     monkeypatch.setattr(context_economics, "pricing_dir", lambda: tmp_path / "pricing")
     payload = context_economics_analytics(conn)
     assert payload["meta"]["sessions_analyzed"] == 0
-    assert [a["findings"] for a in payload["archetypes"]] == [[], [], [], []]
+    assert [a["findings"] for a in payload["archetypes"]] == [[], []]
 
 
 from ccfr.analysis.context_economics import run_detectors
 
 
-def test_run_detectors_composition_is_conservative() -> None:
-    # One thread that triggers BOTH a re-read (big.py read twice in one epoch) and
-    # late compaction (context above the pressure point for a long tail). Run all
-    # four detectors over the shared claims ledger and assert the summed savings
-    # never exceed the thread's actual accrued carry cost — the disjointness
-    # guarantee that keeps the hero's "avoidable" honest when archetypes overlap.
+def test_run_detectors_exposes_only_supported_production_archetypes() -> None:
+    # The high context would have crossed the retired generic compaction
+    # threshold, while the contributors still exercise both supported detectors.
     contexts = [60_000, 110_000, 150_000, 152_000, 154_000, 156_000, 158_000,
                 160_000, 162_000, 164_000, 166_000, 168_000]
     calls = [_call(i + 1, c) for i, c in enumerate(contexts)]
@@ -1275,12 +1083,47 @@ def test_run_detectors_composition_is_conservative() -> None:
     thread = _priced_thread(calls, items)
     results = run_detectors([thread])
 
-    fired = {key for key, (findings, _) in results.items() if findings}
-    assert {"rereads", "late_compaction"} <= fired  # both overlapping archetypes fire
+    assert list(results) == ["rereads", "oversized"]
 
     total_savings = sum(f.savings_usd for findings, _ in results.values() for f in findings)
     total_accrued = sum(c.accrued_usd for c in thread.contributors)
     assert total_savings <= total_accrued + 1e-9
+
+
+def test_long_gaps_and_generic_context_thresholds_do_not_create_findings() -> None:
+    high_context = _priced_thread([
+        _call(i + 1, context)
+        for i, context in enumerate([
+            60_000, 90_000, 110_000, 112_000, 114_000, 116_000,
+            118_000, 120_000, 122_000, 124_000, 126_000, 128_000,
+        ])
+    ])
+    gapped_calls = [
+        CallRec(
+            event_id=i + 1,
+            ts=_ts(minute),
+            model="claude-sonnet-4-6",
+            context_tokens=context,
+            output_tokens=0,
+        )
+        for i, (minute, context) in enumerate([
+            (1, 20_000), (2, 40_000), (3, 60_000), (4, 80_000),
+            (5, 100_000), (6, 120_000), (7, 140_000), (8, 160_000),
+            (130, 161_000), (131, 162_000),
+        ])
+    ]
+    gapped = _thread(gapped_calls)
+    accrue_tax(gapped, PRICE_TIMELINE)
+    threads = [gapped, high_context]
+    threads.extend(
+        _priced_thread([_call(1, 50_000), _call(2, 52_000), _call(3, 54_000)])
+        for _ in range(9)
+    )
+
+    results = run_detectors(threads)
+
+    assert list(results) == ["rereads", "oversized"]
+    assert all(findings == [] for findings, _thresholds in results.values())
 
 
 from ccfr.analysis.context_economics import session_context_economics
@@ -1376,7 +1219,7 @@ def test_context_economics_endpoints(economics_conn: sqlite3.Connection, tmp_pat
     assert set(body["meta"]) == CONTEXT_ECONOMICS_META_KEYS
     assert body["meta"]["min_support"] == 3
     assert [a["key"] for a in body["archetypes"]] == [
-        "rereads", "oversized", "late_compaction", "stale_continuation",
+        "rereads", "oversized",
     ]
     reread = next(archetype for archetype in body["archetypes"] if archetype["key"] == "rereads")
     assert all(len(finding["evidence_event_ids"]) == 2 for finding in reread["findings"])

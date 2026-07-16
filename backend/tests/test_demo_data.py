@@ -68,7 +68,7 @@ def _priced_conn(tmp_path, monkeypatch):
     return conn
 
 
-def test_all_four_context_archetypes_meet_support(tmp_path, monkeypatch):
+def test_production_context_archetypes_meet_support(tmp_path, monkeypatch):
     from ccfr.analysis.context_economics import context_economics_analytics
 
     conn = _priced_conn(tmp_path, monkeypatch)
@@ -77,7 +77,8 @@ def test_all_four_context_archetypes_meet_support(tmp_path, monkeypatch):
     assert payload["meta"]["cost_available"] is True
     assert payload["meta"]["opportunity_usd"] > 0
     by_key = {a["key"]: a for a in payload["archetypes"]}
-    for key in ("rereads", "oversized", "late_compaction", "stale_continuation"):
+    assert set(by_key) == {"rereads", "oversized"}
+    for key in ("rereads", "oversized"):
         assert by_key[key]["meets_support"] is True, key
         assert by_key[key]["findings_count"] >= 3, key
 
