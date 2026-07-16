@@ -57,7 +57,10 @@ def test_structural_export_writes_a_valid_bundle(
     data = json.loads(out.read_text(encoding="utf-8"))
     canonical = validate_team_bundle(data)  # reuse the real validator
     assert canonical["privacy_level"] == "structural"
-    assert data["schema_version"] == 2
+    assert data["schema_version"] == 3
+    for session in data["sessions"]:
+        assert {"risk_categories", "sequence"}.isdisjoint(session)
+        assert {"loops", "max_repeat"}.isdisjoint(session["stats"])
     # the privacy ledger is printed before the write
     assert "NOT included" in capsys.readouterr().out
 

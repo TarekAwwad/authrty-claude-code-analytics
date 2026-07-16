@@ -290,11 +290,9 @@ CREATE TABLE IF NOT EXISTS team_bundle_sessions (
     tokens_by_model_json TEXT NOT NULL DEFAULT '{}',
     stats_json TEXT NOT NULL DEFAULT '{}',
     stop_reasons_json TEXT NOT NULL DEFAULT '{}',
-    risk_categories_json TEXT NOT NULL DEFAULT '[]',
     subagents_json TEXT NOT NULL DEFAULT '[]',
     tools_json TEXT NOT NULL DEFAULT '[]',
     file_types_json TEXT NOT NULL DEFAULT '[]',
-    sequence_json TEXT NOT NULL DEFAULT '[]',
     UNIQUE(team_bundle_id, session_id)
 );
 
@@ -404,6 +402,8 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     if team_session_columns and "file_types_json" not in team_session_columns:
         conn.execute("ALTER TABLE team_bundle_sessions ADD COLUMN file_types_json TEXT NOT NULL DEFAULT '[]'")
 
+    _migrate_team_bundle_sessions(conn)
+
     tool_call_columns = _column_names(conn, "tool_calls")
     if tool_call_columns and "file_ext" not in tool_call_columns:
         conn.execute("ALTER TABLE tool_calls ADD COLUMN file_ext TEXT")
@@ -451,6 +451,66 @@ def _migrate_session_stats(conn: sqlite3.Connection) -> None:
     )
     conn.execute("DROP TABLE session_stats")
     conn.execute("ALTER TABLE session_stats_without_loops RENAME TO session_stats")
+
+
+def _migrate_team_bundle_sessions(conn: sqlite3.Connection) -> None:
+    """Drop v1/v2 risk/sequence columns while preserving imported core aggregates."""
+    columns = _column_names(conn, "team_bundle_sessions")
+    if not {"risk_categories_json", "sequence_json"} & columns:
+        return
+
+    conn.execute("DROP TABLE IF EXISTS team_bundle_sessions_v3")
+    conn.execute(
+        """
+        CREATE TABLE team_bundle_sessions_v3 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            team_bundle_id INTEGER NOT NULL REFERENCES team_bundles(id) ON DELETE CASCADE,
+            member_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            project_name TEXT,
+            session_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            first_date TEXT,
+            last_date TEXT,
+            duration_s INTEGER NOT NULL DEFAULT 0,
+            models_json TEXT NOT NULL DEFAULT '[]',
+            tokens_json TEXT NOT NULL DEFAULT '{}',
+            tokens_by_model_json TEXT NOT NULL DEFAULT '{}',
+            stats_json TEXT NOT NULL DEFAULT '{}',
+            stop_reasons_json TEXT NOT NULL DEFAULT '{}',
+            subagents_json TEXT NOT NULL DEFAULT '[]',
+            tools_json TEXT NOT NULL DEFAULT '[]',
+            file_types_json TEXT NOT NULL DEFAULT '[]',
+            UNIQUE(team_bundle_id, session_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO team_bundle_sessions_v3(
+            id, team_bundle_id, member_id, project_id, project_name, session_id,
+            provider, first_date, last_date, duration_s, models_json, tokens_json,
+            tokens_by_model_json, stats_json, stop_reasons_json, subagents_json,
+            tools_json, file_types_json
+        )
+        SELECT id, team_bundle_id, member_id, project_id, project_name, session_id,
+               provider, first_date, last_date, duration_s, models_json, tokens_json,
+               tokens_by_model_json, stats_json, stop_reasons_json, subagents_json,
+               tools_json, file_types_json
+        FROM team_bundle_sessions
+        """
+    )
+    conn.execute("DROP TABLE team_bundle_sessions")
+    conn.execute("ALTER TABLE team_bundle_sessions_v3 RENAME TO team_bundle_sessions")
+    conn.execute(
+        "CREATE INDEX idx_team_bundle_sessions_bundle ON team_bundle_sessions(team_bundle_id)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_team_bundle_sessions_member ON team_bundle_sessions(member_id)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_team_bundle_sessions_first_date ON team_bundle_sessions(first_date)"
+    )
 
 
 def _backfill_tool_call_file_ext(conn: sqlite3.Connection) -> None:

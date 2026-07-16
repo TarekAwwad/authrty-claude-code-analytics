@@ -13,7 +13,7 @@ from ccfr.analysis.contribution import bucket_model
 from ccfr.ingest import import_export
 from ccfr.storage import init_db
 from tests.fixtures import ALPHA_SESSION_ID, BETA_SESSION_ID, sanitized_export
-from tests.test_contribution import SENTINELS, _allowed_syms, _export_with_sentinels
+from tests.test_contribution import SENTINELS, _export_with_sentinels
 
 
 def _bundle_from_sanitized(tmp_path):
@@ -33,11 +33,11 @@ def _bundle_from_sanitized(tmp_path):
         conn.close()
 
 
-def test_team_bundle_v2_structural_shape(tmp_path):
+def test_team_bundle_v3_structural_shape_omits_deprecated_inventory(tmp_path):
     bundle = _bundle_from_sanitized(tmp_path)
     data = bundle.to_dict()
 
-    assert data["schema_version"] == 2
+    assert data["schema_version"] == 3
     assert data["privacy_level"] == "structural"
     assert "profile" not in data
     assert "member_name" not in data
@@ -47,6 +47,8 @@ def test_team_bundle_v2_structural_shape(tmp_path):
     assert BETA_SESSION_ID not in blob
     assert "d--Alpha" not in blob
     for session in data["sessions"]:
+        assert {"risk_categories", "sequence"}.isdisjoint(session)
+        assert {"loops", "max_repeat"}.isdisjoint(session["stats"])
         assert len(session["pid"]) == 64
         assert len(session["sid"]) == 64
         int(session["pid"], 16)
@@ -91,11 +93,21 @@ def test_team_bundle_never_leaks_sentinels(tmp_path):
         assert sentinel not in blob, f"leaked sentinel: {sentinel}"
 
 
-def test_team_bundle_sequence_is_closed_vocabulary(tmp_path):
+def test_team_bundle_v3_does_not_build_risk_or_sequence_inventory(tmp_path, monkeypatch):
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     init_db(conn)
     import_export(conn, _export_with_sentinels(tmp_path))
+    monkeypatch.setattr(
+        team_bundles.contribution_helpers,
+        "_session_finding_categories",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("risk inventory was queried")),
+    )
+    monkeypatch.setattr(
+        team_bundles.contribution_helpers,
+        "_session_sequence",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("sequence inventory was queried")),
+    )
     try:
         bundle = team_bundles.build_team_bundle(
             conn,
@@ -107,12 +119,8 @@ def test_team_bundle_sequence_is_closed_vocabulary(tmp_path):
     finally:
         conn.close()
 
-    allowed = _allowed_syms()
-    steps = [step for session in bundle.to_dict()["sessions"] for step in session["sequence"]]
-    assert steps
-    for step in steps:
-        assert step["fam"] in {"tool_call", "tool_result"}
-        assert step["sym"] in allowed
+    for session in bundle.to_dict()["sessions"]:
+        assert {"risk_categories", "sequence"}.isdisjoint(session)
 
 
 def test_team_dashboard_date_to_includes_sessions_without_last_date():
@@ -218,6 +226,47 @@ def test_validate_team_bundle_buckets_raw_tokens_by_model(tmp_path):
     }
 
 
+def test_v1_and_v2_readers_strip_deprecated_fields_before_persistence(tmp_path):
+    current = _bundle_from_sanitized(tmp_path).to_dict()
+    v2 = copy.deepcopy(current)
+    v2.pop("bundle_id", None)
+    v2["schema_version"] = 2
+    for session in v2["sessions"]:
+        session["stats"]["loops"] = 2
+        session["stats"]["max_repeat"] = 7
+        session["risk_categories"] = ["permission_friction"]
+        session["sequence"] = [
+            {"sym": "CALL:inspect:Read", "fam": "tool_call", "dt_s": 1, "out_tok": 0}
+        ]
+    v2["bundle_id"] = team_bundles.bundle_content_id_v2(v2)
+
+    v1 = {
+        "schema_version": 1,
+        "profile": team_bundles.PROFILE,
+        "member_id": v2["member_id"],
+        "generated_at": v2["generated_at"],
+        "app_version": v2["app_version"],
+        "sessions": copy.deepcopy(v2["sessions"]),
+    }
+    v1["bundle_id"] = team_bundles.bundle_content_id(v1)
+
+    for legacy in (v1, v2):
+        canonical = team_bundles.validate_team_bundle(legacy)
+        assert canonical["schema_version"] == legacy["schema_version"]
+        for session in canonical["sessions"]:
+            assert {"risk_categories", "sequence"}.isdisjoint(session)
+            assert {"loops", "max_repeat"}.isdisjoint(session["stats"])
+
+        conn = _team_conn()
+        result = team_bundles.import_team_bundle(conn, legacy, source_path=Path("legacy.json"))
+        assert result.imported is True
+        stored = conn.execute(
+            "SELECT stats_json, stop_reasons_json, tokens_json FROM team_bundle_sessions LIMIT 1"
+        ).fetchone()
+        assert {"loops", "max_repeat"}.isdisjoint(json.loads(stored["stats_json"]))
+        conn.close()
+
+
 def test_validate_team_bundle_rejects_invalid_profile_and_schema(tmp_path):
     data = _bundle_from_sanitized(tmp_path).to_dict()
 
@@ -231,22 +280,37 @@ def test_validate_team_bundle_rejects_invalid_profile_and_schema(tmp_path):
         team_bundles.validate_team_bundle(bad_schema)
 
 
-def test_validate_team_bundle_canonicalizes_raw_symbol_and_model(tmp_path):
+def test_validate_team_bundle_canonicalizes_models_and_strips_legacy_symbols(tmp_path):
     data = _bundle_from_sanitized(tmp_path).to_dict()
     mutated = copy.deepcopy(data)
     mutated.pop("bundle_id")
     mutated["sessions"][0]["models"] = ["SECRET_MODEL_zzz"]
-    mutated["sessions"][0]["sequence"] = [
-        {"sym": "CALL:mcp__SECRET_SERVER__deploy", "fam": "tool_call", "dt_s": 1, "out_tok": 2}
-    ]
 
     canonical = team_bundles.validate_team_bundle(mutated)
+    assert "SECRET_MODEL_zzz" not in json.dumps(canonical)
+    assert canonical["sessions"][0]["models"] == ["other"]
+
+    smuggled = copy.deepcopy(mutated)
+    smuggled["sessions"][0]["sequence"] = []
+    with pytest.raises(ValueError, match="sequence"):
+        team_bundles.validate_team_bundle(smuggled)
+
+    legacy = copy.deepcopy(mutated)
+    legacy["schema_version"] = 2
+    legacy["sessions"][0]["sequence"] = [
+        {"sym": "CALL:mcp__SECRET_SERVER__deploy", "fam": "tool_call", "dt_s": 1, "out_tok": 2}
+    ]
+    legacy["sessions"][0]["risk_categories"] = []
+    legacy["sessions"][0]["stats"]["loops"] = 0
+    legacy["sessions"][0]["stats"]["max_repeat"] = 0
+
+    canonical = team_bundles.validate_team_bundle(legacy)
 
     blob = json.dumps(canonical)
     assert "SECRET_MODEL_zzz" not in blob
     assert "SECRET_SERVER" not in blob
     assert canonical["sessions"][0]["models"] == ["other"]
-    assert canonical["sessions"][0]["sequence"][0]["sym"] == "CALL:mcp"
+    assert "sequence" not in canonical["sessions"][0]
 
 
 def _team_conn() -> sqlite3.Connection:
@@ -680,9 +744,20 @@ def test_manifest_is_level_aware(tmp_path):
     team = team_bundles.team_bundle_manifest(_team_level_bundle(team_dir))
     assert structural["privacy_level"] == "structural"
     assert team["privacy_level"] == "team"
+    assert "sequence_step_count" not in structural
+    assert "sequence_step_count" not in team
     assert any("member name" in item.lower() for item in team["included_fields"])
     assert any("tool" in item.lower() for item in team["included_fields"])
     assert not any("member name" in item.lower() for item in structural["included_fields"])
+    for manifest in (structural, team):
+        included = " ".join(manifest["included_fields"]).lower()
+        excluded = " ".join(manifest["excluded"]).lower()
+        assert "risk" not in included
+        assert "sequence" not in included
+        assert "loop" not in included
+        assert "risk" in excluded
+        assert "sequence" in excluded
+        assert "loop" in excluded
 
 
 def test_import_team_level_bundle_persists_names_and_key(tmp_path):

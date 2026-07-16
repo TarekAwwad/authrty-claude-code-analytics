@@ -26,7 +26,8 @@ from ccfr.analysis.contribution import (
 from ccfr.analysis import contribution as contribution_helpers
 from ccfr.naming import project_display_name
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+PREVIOUS_SCHEMA_VERSION = 2
 LEGACY_SCHEMA_VERSION = 1
 PROFILE = "team_strict"  # legacy v1 wire profile == the structural level
 DEFAULT_PROVIDER = "claude"
@@ -54,18 +55,10 @@ STAT_KEYS = (
     "subagents",
     "errors",
     "system",
-    "loops",
-    "max_repeat",
     "persisted_outputs",
 )
-DASHBOARD_STAT_KEYS = (
-    "turns",
-    "tool_calls",
-    "subagents",
-    "errors",
-    "system",
-    "persisted_outputs",
-)
+LEGACY_STAT_KEYS = (*STAT_KEYS, "loops", "max_repeat")
+DASHBOARD_STAT_KEYS = STAT_KEYS
 SESSION_KEYS = {
     "pid",
     "sid",
@@ -78,10 +71,9 @@ SESSION_KEYS = {
     "tokens_by_model",
     "stats",
     "stop_reasons",
-    "risk_categories",
     "subagents",
-    "sequence",
 }
+LEGACY_SESSION_KEYS = SESSION_KEYS | {"risk_categories", "sequence"}
 TOP_LEVEL_KEYS = {
     "schema_version",
     "profile",
@@ -93,7 +85,12 @@ TOP_LEVEL_KEYS = {
     "sessions",
 }
 SESSION_KEYS_TEAM = (SESSION_KEYS - {"pid"}) | {"project_name", "tools", "file_types"}
-TOP_LEVEL_KEYS_V2 = {
+LEGACY_SESSION_KEYS_TEAM = (LEGACY_SESSION_KEYS - {"pid"}) | {
+    "project_name",
+    "tools",
+    "file_types",
+}
+TOP_LEVEL_KEYS_MODERN = {
     "schema_version",
     "privacy_level",
     "bundle_id",
@@ -148,7 +145,7 @@ class TeamBundle:
 
     def to_dict(self) -> dict[str, Any]:
         data = self.base_dict()
-        data["bundle_id"] = self.bundle_id or bundle_content_id_v2(data)
+        data["bundle_id"] = self.bundle_id or bundle_content_id_v3(data)
         return data
 
 
@@ -182,6 +179,11 @@ def bundle_content_id_v2(bundle: dict[str, Any]) -> str:
         base["member_name"] = bundle.get("member_name")
     encoded = json.dumps(base, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def bundle_content_id_v3(bundle: dict[str, Any]) -> str:
+    """Hash a v3 bundle; the modern envelope matches v2 but the session allowlist does not."""
+    return bundle_content_id_v2(bundle)
 
 
 def normalize_project_key(name: str) -> str:
@@ -323,6 +325,7 @@ def build_team_bundle(
     for row in session_rows:
         session_pk = int(row["id"])
         export_name = str(row["export_name"])
+        observed_stats = contribution_helpers._session_stats(conn, session_pk)
         session: dict[str, Any] = {
             "sid": _hash_id(salt, "session", export_name, row["session_id"]),
             "provider": DEFAULT_PROVIDER,
@@ -332,10 +335,8 @@ def build_team_bundle(
             "duration_s": contribution_helpers._duration_s(row["first_ts"], row["last_ts"]),
             "tokens": contribution_helpers._session_tokens(conn, session_pk),
             "tokens_by_model": _session_tokens_by_model(conn, session_pk),
-            "stats": contribution_helpers._session_stats(conn, session_pk),
+            "stats": {key: observed_stats.get(key, 0) for key in STAT_KEYS},
             "stop_reasons": contribution_helpers._session_stop_reasons(conn, session_pk),
-            "risk_categories": contribution_helpers._session_finding_categories(conn, session_pk),
-            "sequence": contribution_helpers._session_sequence(conn, session_pk),
         }
         if privacy_level == LEVEL_TEAM:
             default_label = project_display_name(export_name, row["inferred_cwd"])
@@ -375,7 +376,6 @@ def team_bundle_manifest(bundle: TeamBundle) -> dict[str, Any]:
     manifest: dict[str, Any] = {
         "privacy_level": bundle.privacy_level,
         "session_count": len(sessions),
-        "sequence_step_count": sum(len(session["sequence"]) for session in sessions),
     }
     if bundle.privacy_level == LEVEL_TEAM:
         manifest["included_fields"] = [
@@ -383,13 +383,14 @@ def team_bundle_manifest(bundle: TeamBundle) -> dict[str, Any]:
             "Real tool, MCP server, and subagent names with call counts",
             "File-type mix (extensions only — never paths or file names)",
             "Provider and bucketed model families",
-            "Date-only session timing and structural per-step deltas",
+            "Date-only session timing and duration",
             "Token counts with cache breakdowns, split per model family",
-            "Session stats, stop reasons, risk categories",
+            "Observed session counts and stop reasons",
         ]
         manifest["excluded"] = [
             "Prompts, assistant text, reasoning, titles, and free text",
             "Paths, cwd, branches, file names, shell commands, and tool IO",
+            "Risk categories, inferred patterns, loop/max-repeat scores, and event sequences",
             "Raw JSON and previews",
         ]
         manifest["fingerprint_caveat"] = (
@@ -400,19 +401,20 @@ def team_bundle_manifest(bundle: TeamBundle) -> dict[str, Any]:
         manifest["included_fields"] = [
             "Pseudonymous member, project, and session IDs",
             "Provider and bucketed model families",
-            "Date-only session timing and structural per-step deltas",
+            "Date-only session timing and duration",
             "Token counts with cache breakdowns, split per model family",
-            "Session stats, stop reasons, risk categories",
-            "Bucketed subagent types and structural event sequence",
+            "Observed session counts and stop reasons",
+            "Bucketed subagent types and event counts",
         ]
         manifest["excluded"] = [
             "Raw JSON and previews",
             "Prompts, assistant text, reasoning, titles, and free text",
             "Paths, cwd, branches, file names, shell commands, and tool IO",
             "Raw model aliases, MCP server names, and custom subagent names",
+            "Risk categories, inferred patterns, loop/max-repeat scores, and event sequences",
         ]
         manifest["fingerprint_caveat"] = (
-            "This bundle contains no content, but token counts and structural sequences "
+            "This bundle contains no content, but exact token counts and date-only timing "
             "can still be distinctive."
         )
     return manifest
@@ -424,8 +426,10 @@ def validate_team_bundle(payload: Any) -> dict[str, Any]:
     version = payload.get("schema_version")
     if version == LEGACY_SCHEMA_VERSION:
         return _validate_v1(payload)
-    if version == SCHEMA_VERSION:
+    if version == PREVIOUS_SCHEMA_VERSION:
         return _validate_v2(payload)
+    if version == SCHEMA_VERSION:
+        return _validate_v3(payload)
     raise ValueError("unsupported team bundle schema_version")
 
 
@@ -459,14 +463,14 @@ def _validate_v1(payload: dict[str, Any]) -> dict[str, Any]:
     sessions: list[dict[str, Any]] = []
     seen_sids: set[str] = set()
     for index, raw_session in enumerate(raw_sessions):
-        session = _validate_session(raw_session, index, LEVEL_STRUCTURAL)
+        session = _validate_session(raw_session, index, LEVEL_STRUCTURAL, legacy=True)
         sid = session["sid"]
         if sid in seen_sids:
             raise ValueError("duplicate session id in team bundle")
         seen_sids.add(sid)
         sessions.append(session)
 
-    canonical: dict[str, Any] = {
+    legacy_canonical: dict[str, Any] = {
         "schema_version": LEGACY_SCHEMA_VERSION,
         "profile": PROFILE,
         "privacy_level": LEVEL_STRUCTURAL,
@@ -477,18 +481,32 @@ def _validate_v1(payload: dict[str, Any]) -> dict[str, Any]:
         "app_version": app_version,
         "sessions": sessions,
     }
-    computed_id = bundle_content_id(canonical)
+    computed_id = bundle_content_id(legacy_canonical)
     supplied_id = payload.get("bundle_id")
     if supplied_id is not None and str(supplied_id) not in {computed_id, legacy_export_id}:
         raise ValueError("bundle_id does not match bundle content")
+    canonical = dict(legacy_canonical)
+    canonical["sessions"] = [_strip_deprecated_session(session) for session in sessions]
     canonical["bundle_id"] = computed_id
     return canonical
 
 
 def _validate_v2(payload: dict[str, Any]) -> dict[str, Any]:
-    unknown = set(payload) - TOP_LEVEL_KEYS_V2
+    return _validate_modern(payload, PREVIOUS_SCHEMA_VERSION, legacy=True)
+
+
+def _validate_v3(payload: dict[str, Any]) -> dict[str, Any]:
+    return _validate_modern(payload, SCHEMA_VERSION, legacy=False)
+
+
+def _validate_modern(
+    payload: dict[str, Any], version: int, *, legacy: bool
+) -> dict[str, Any]:
+    unknown = set(payload) - TOP_LEVEL_KEYS_MODERN
     if unknown:
         raise ValueError(f"unexpected team bundle field: {sorted(unknown)[0]}")
+    if payload.get("schema_version") != version:
+        raise ValueError("unsupported team bundle schema_version")
     level = payload.get("privacy_level")
     if level in RESERVED_LEVELS:
         raise ValueError(f"privacy_level not yet supported: {level}")
@@ -512,15 +530,15 @@ def _validate_v2(payload: dict[str, Any]) -> dict[str, Any]:
     sessions: list[dict[str, Any]] = []
     seen_sids: set[str] = set()
     for index, raw_session in enumerate(raw_sessions):
-        session = _validate_session(raw_session, index, level)
+        session = _validate_session(raw_session, index, level, legacy=legacy)
         sid = session["sid"]
         if sid in seen_sids:
             raise ValueError("duplicate session id in team bundle")
         seen_sids.add(sid)
         sessions.append(session)
 
-    canonical: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
+    hash_canonical: dict[str, Any] = {
+        "schema_version": version,
         "privacy_level": level,
         "profile": level,  # stored in the team_bundles.profile column
         "member_id": member_id,
@@ -531,13 +549,20 @@ def _validate_v2(payload: dict[str, Any]) -> dict[str, Any]:
         "sessions": sessions,
     }
     if level == LEVEL_TEAM:
-        canonical_for_id = dict(canonical)
+        canonical_for_id = dict(hash_canonical)
     else:
-        canonical_for_id = {k: v for k, v in canonical.items() if k != "member_name"}
-    computed_id = bundle_content_id_v2(canonical_for_id)
+        canonical_for_id = {k: v for k, v in hash_canonical.items() if k != "member_name"}
+    computed_id = (
+        bundle_content_id_v2(canonical_for_id)
+        if legacy
+        else bundle_content_id_v3(canonical_for_id)
+    )
     supplied_id = payload.get("bundle_id")
     if supplied_id is not None and str(supplied_id) != computed_id:
         raise ValueError("bundle_id does not match bundle content")
+    canonical = dict(hash_canonical)
+    if legacy:
+        canonical["sessions"] = [_strip_deprecated_session(session) for session in sessions]
     canonical["bundle_id"] = computed_id
     return canonical
 
@@ -664,11 +689,9 @@ def import_team_bundle(
                     _json(session["tokens_by_model"]),
                     _json(session["stats"]),
                     _json(session["stop_reasons"]),
-                    _json(session["risk_categories"]),
                     _json(session["subagents"]),
                     _json(session.get("tools", [])),
                     _json(session.get("file_types", [])),
-                    _json(session["sequence"]),
                 )
             )
         conn.executemany(
@@ -677,9 +700,9 @@ def import_team_bundle(
                 team_bundle_id, member_id, project_id, project_name, session_id, provider,
                 first_date, last_date, duration_s, models_json, tokens_json,
                 tokens_by_model_json, stats_json, stop_reasons_json,
-                risk_categories_json, subagents_json, tools_json, file_types_json, sequence_json
+                subagents_json, tools_json, file_types_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             session_rows,
         )
@@ -938,10 +961,17 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
-def _validate_session(raw_session: Any, index: int, level: str) -> dict[str, Any]:
+def _validate_session(
+    raw_session: Any, index: int, level: str, *, legacy: bool
+) -> dict[str, Any]:
     if not isinstance(raw_session, dict):
         raise ValueError(f"sessions[{index}] must be an object")
-    allowed = SESSION_KEYS_TEAM if level == LEVEL_TEAM else SESSION_KEYS
+    if legacy:
+        allowed = LEGACY_SESSION_KEYS_TEAM if level == LEVEL_TEAM else LEGACY_SESSION_KEYS
+        stat_keys = LEGACY_STAT_KEYS
+    else:
+        allowed = SESSION_KEYS_TEAM if level == LEVEL_TEAM else SESSION_KEYS
+        stat_keys = STAT_KEYS
     unknown = set(raw_session) - allowed
     if unknown:
         raise ValueError(f"unexpected session field: {sorted(unknown)[0]}")
@@ -954,12 +984,13 @@ def _validate_session(raw_session: Any, index: int, level: str) -> dict[str, Any
         "duration_s": _nonnegative_int(raw_session.get("duration_s")),
         "tokens": _number_map(raw_session.get("tokens"), TOKEN_KEYS),
         "tokens_by_model": _tokens_by_model(raw_session.get("tokens_by_model")),
-        "stats": _number_map(raw_session.get("stats"), STAT_KEYS),
+        "stats": _number_map(raw_session.get("stats"), stat_keys),
         "stop_reasons": _stop_reasons(raw_session.get("stop_reasons")),
-        "risk_categories": _risk_categories(raw_session.get("risk_categories")),
         "subagents": _subagents(raw_session.get("subagents"), raw=(level == LEVEL_TEAM)),
-        "sequence": _sequence(raw_session.get("sequence")),
     }
+    if legacy:
+        session["risk_categories"] = _risk_categories(raw_session.get("risk_categories"))
+        session["sequence"] = _sequence(raw_session.get("sequence"))
     if level == LEVEL_TEAM:
         session["project_name"] = _project_label(
             raw_session.get("project_name"), f"sessions[{index}].project_name"
@@ -969,6 +1000,20 @@ def _validate_session(raw_session: Any, index: int, level: str) -> dict[str, Any
     else:
         session["pid"] = _hex_id(raw_session.get("pid"), f"sessions[{index}].pid")
     return session
+
+
+def _strip_deprecated_session(session: dict[str, Any]) -> dict[str, Any]:
+    stripped = {
+        key: value
+        for key, value in session.items()
+        if key not in {"risk_categories", "sequence"}
+    }
+    stats = stripped.get("stats")
+    stripped["stats"] = {
+        key: _nonnegative_int(stats.get(key) if isinstance(stats, dict) else 0)
+        for key in STAT_KEYS
+    }
+    return stripped
 
 
 def _required_str(value: Any, name: str) -> str:

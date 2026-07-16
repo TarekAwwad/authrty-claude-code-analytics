@@ -102,6 +102,7 @@ def test_init_db_creates_tokens_by_model_column() -> None:
 
     columns = {row[1] for row in conn.execute("PRAGMA table_info(team_bundle_sessions)").fetchall()}
     assert "tokens_by_model_json" in columns
+    assert {"risk_categories_json", "sequence_json"}.isdisjoint(columns)
 
 
 def test_migrate_db_adds_tokens_by_model_to_legacy_team_table() -> None:
@@ -122,6 +123,88 @@ def test_migrate_db_adds_tokens_by_model_to_legacy_team_table() -> None:
 
     columns = {row[1] for row in conn.execute("PRAGMA table_info(team_bundle_sessions)").fetchall()}
     assert "tokens_by_model_json" in columns
+
+
+def test_migrate_db_removes_deprecated_team_session_columns_without_losing_core_data() -> None:
+    from ccfr.storage.database import migrate_db
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    conn.execute("DROP TABLE team_bundle_sessions")
+    conn.executescript(
+        """
+        CREATE TABLE team_bundle_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            team_bundle_id INTEGER NOT NULL REFERENCES team_bundles(id) ON DELETE CASCADE,
+            member_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            project_name TEXT,
+            session_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            first_date TEXT,
+            last_date TEXT,
+            duration_s INTEGER NOT NULL DEFAULT 0,
+            models_json TEXT NOT NULL DEFAULT '[]',
+            tokens_json TEXT NOT NULL DEFAULT '{}',
+            tokens_by_model_json TEXT NOT NULL DEFAULT '{}',
+            stats_json TEXT NOT NULL DEFAULT '{}',
+            stop_reasons_json TEXT NOT NULL DEFAULT '{}',
+            risk_categories_json TEXT NOT NULL DEFAULT '[]',
+            subagents_json TEXT NOT NULL DEFAULT '[]',
+            tools_json TEXT NOT NULL DEFAULT '[]',
+            file_types_json TEXT NOT NULL DEFAULT '[]',
+            sequence_json TEXT NOT NULL DEFAULT '[]',
+            UNIQUE(team_bundle_id, session_id)
+        );
+        CREATE INDEX idx_team_bundle_sessions_bundle ON team_bundle_sessions(team_bundle_id);
+        CREATE INDEX idx_team_bundle_sessions_member ON team_bundle_sessions(member_id);
+        CREATE INDEX idx_team_bundle_sessions_first_date ON team_bundle_sessions(first_date);
+        """
+    )
+    bundle_id = conn.execute(
+        """
+        INSERT INTO team_bundles(
+            bundle_id, profile, schema_version, member_id, generated_at,
+            app_version, imported_at, source_path, session_count
+        ) VALUES ('legacy-v2', 'structural', 2, 'member', '2026-07-01',
+                  '0.1.0', '2026-07-01T00:00:00Z', 'legacy.json', 1)
+        """
+    ).lastrowid
+    conn.execute(
+        """
+        INSERT INTO team_bundle_sessions(
+            team_bundle_id, member_id, project_id, session_id, provider,
+            tokens_json, tokens_by_model_json, stats_json, stop_reasons_json,
+            risk_categories_json, sequence_json
+        ) VALUES (?, 'member', 'project', 'session', 'claude',
+                  '{"input":10,"output":2}', '{"opus":{"input":10,"output":2}}',
+                  '{"turns":3,"errors":1,"loops":4,"max_repeat":9}',
+                  '{"tool_use":2}', '["permission_friction"]',
+                  '[{"sym":"CALL:inspect:Read"}]')
+        """,
+        (bundle_id,),
+    )
+
+    migrate_db(conn)
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(team_bundle_sessions)")}
+    assert {"risk_categories_json", "sequence_json"}.isdisjoint(columns)
+    row = conn.execute(
+        "SELECT session_id, tokens_json, tokens_by_model_json, stats_json, stop_reasons_json "
+        "FROM team_bundle_sessions"
+    ).fetchone()
+    assert row["session_id"] == "session"
+    assert json.loads(row["tokens_json"]) == {"input": 10, "output": 2}
+    assert json.loads(row["tokens_by_model_json"])["opus"]["input"] == 10
+    assert json.loads(row["stop_reasons_json"]) == {"tool_use": 2}
+    assert json.loads(row["stats_json"])["errors"] == 1
+    indexes = {row[1] for row in conn.execute("PRAGMA index_list(team_bundle_sessions)")}
+    assert {
+        "idx_team_bundle_sessions_bundle",
+        "idx_team_bundle_sessions_member",
+        "idx_team_bundle_sessions_first_date",
+    } <= indexes
 
 
 def test_migrate_adds_and_backfills_file_ext_on_legacy_tool_calls():

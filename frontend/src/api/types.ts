@@ -793,9 +793,17 @@ export interface TeamExportRequestBody {
   projects: { export_name: string; label?: string | null }[];
 }
 
+export interface TeamManifest {
+  privacy_level: TeamPrivacyLevel;
+  session_count: number;
+  included_fields: string[];
+  excluded: string[];
+  fingerprint_caveat: string;
+}
+
 // GET /api/team/export-preview -> TeamExportPreviewResponse { manifest, bundle }.
 export interface TeamPreview {
-  manifest: ContributionManifest;
+  manifest: TeamManifest;
   bundle: { sessions?: unknown[] } & Record<string, unknown>;
 }
 

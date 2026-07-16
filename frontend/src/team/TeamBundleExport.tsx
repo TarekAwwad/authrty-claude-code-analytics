@@ -34,7 +34,8 @@ function errorMessage(error: unknown): string {
 // Local-scope "Export": write a content-free team bundle from this machine's
 // sessions and share it through a team-approved channel. The exporter picks a
 // privacy level: structural (anonymous) or team (named, for per-user/per-project
-// dashboards). The privacy ledger spells out exactly what leaves the machine.
+// dashboards). The privacy ledger spells out exactly what enters the bundle;
+// the browser sends only export settings to the app's local backend.
 export default function TeamBundleExport() {
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["config"], queryFn: getRuntimeConfig });
@@ -108,8 +109,9 @@ export default function TeamBundleExport() {
         <div className="contribute-titleblock team-titleblock">
           <h1 id="team-export-title">Export a team bundle</h1>
           <p>
-            Package local session structure into a content-free JSON bundle for teammates. The app
-            writes locally only, and the privacy level controls whether names travel with it.
+            The browser sends selected projects and privacy settings to this app&apos;s local backend,
+            which writes a content-free JSON bundle under team_bundle_root. The bundle is not sent
+            to a remote service.
           </p>
           <div className="team-root-row">
             <span>team_bundle_root</span>

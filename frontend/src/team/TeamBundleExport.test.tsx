@@ -16,12 +16,15 @@ const previewPayload = {
   manifest: {
     privacy_level: "structural",
     session_count: 3,
-    sequence_step_count: 3,
-    included_fields: ["Token counts + cache breakdown"],
-    excluded: ["Prompts and your messages", "File paths"],
+    included_fields: ["Token counts + cache breakdown", "Observed session counts and stop reasons"],
+    excluded: [
+      "Prompts and your messages",
+      "File paths",
+      "Risk categories, inferred patterns, loop/max-repeat scores, and event sequences",
+    ],
     fingerprint_caveat: "Local team bundles are structural fingerprints.",
   },
-  bundle: { sessions: [{ sid: "s-a", models: ["claude-opus-4-8"], sequence: [] }] },
+  bundle: { sessions: [{ sid: "s-a", models: ["claude-opus-4-8"] }] },
 };
 
 const projectsPayload = {
@@ -72,6 +75,15 @@ describe("TeamBundleExport", () => {
   it("documents the snapshot-replace and deselection behavior in the project picker", async () => {
     renderExport();
     expect(await screen.findByText(/replaces your entire previous bundle/i)).toBeInTheDocument();
+  });
+
+  it("states the local-backend boundary and lists deprecated analytics as excluded", async () => {
+    renderExport();
+
+    expect(await screen.findByText(/selected projects and privacy settings to this app's local backend/i))
+      .toBeInTheDocument();
+    expect(screen.getByText(/not sent to a remote service/i)).toBeInTheDocument();
+    expect(await screen.findByText(/risk categories.*loop.*event sequences/i)).toBeInTheDocument();
   });
 
   it("defaults every project to selected and exports a structural bundle without a name", async () => {

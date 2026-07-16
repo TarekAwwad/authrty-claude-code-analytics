@@ -78,8 +78,12 @@ def test_team_export_writes_under_bundle_root_without_network(client, monkeypatc
     assert len(written) == 1
     assert body["path"] == str(written[0])
     parsed = json.loads(written[0].read_text(encoding="utf-8"))
+    assert parsed["schema_version"] == 3
     assert parsed["privacy_level"] == "structural"
     assert "profile" not in parsed
+    for session in parsed["sessions"]:
+        assert {"risk_categories", "sequence"}.isdisjoint(session)
+        assert {"loops", "max_repeat"}.isdisjoint(session["stats"])
     assert parsed["bundle_id"] == body["bundle_id"]
     assert body["session_count"] == 3
 

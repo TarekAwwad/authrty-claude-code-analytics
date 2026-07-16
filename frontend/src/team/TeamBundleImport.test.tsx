@@ -72,6 +72,14 @@ describe("TeamBundleImport", () => {
     expect(screen.queryByRole("button", { name: /Export bundle/i })).not.toBeInTheDocument();
   });
 
+  it("explains that browser-selected bundles are sent to the app's local backend", async () => {
+    renderImport();
+
+    expect(await screen.findByText(/sent to this app's local backend for validation and storage/i))
+      .toBeInTheDocument();
+    expect(screen.getByText(/not send bundles to a remote service/i)).toBeInTheDocument();
+  });
+
   it("imports from a server-visible path and shows the result", async () => {
     renderImport();
 
