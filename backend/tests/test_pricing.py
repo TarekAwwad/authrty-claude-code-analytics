@@ -65,6 +65,22 @@ def test_load_and_match_resolves_models_including_dated_ids(tmp_path: Path) -> N
     assert match_price(table, None) is None
 
 
+def test_synthetic_pseudo_model_is_always_non_billable() -> None:
+    price = match_price({}, "<synthetic>")
+
+    assert price == ModelPrice(
+        base_input=0,
+        cache_write_5m=0,
+        cache_write_1h=0,
+        cache_read=0,
+        output=0,
+    )
+    assert cost_usd(
+        price,
+        TokenBreakdown(base_input=1_000_000, output=1_000_000),
+    ) == 0
+
+
 def test_load_tolerates_hyphenated_headers_and_id_style_models(tmp_path: Path) -> None:
     # Header punctuation (hyphens vs spaces) and id-style model names must still resolve.
     csv = tmp_path / "pricing.csv"

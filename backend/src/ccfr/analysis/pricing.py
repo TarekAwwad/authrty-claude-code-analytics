@@ -27,6 +27,16 @@ class ModelPrice:
     output: float
 
 
+_NON_BILLABLE_MODEL_KEYS = frozenset({"<synthetic>"})
+_ZERO_PRICE = ModelPrice(
+    base_input=0.0,
+    cache_write_5m=0.0,
+    cache_write_1h=0.0,
+    cache_read=0.0,
+    output=0.0,
+)
+
+
 @dataclass(frozen=True)
 class TokenBreakdown:
     """Token counts for one usage category split (summed across messages)."""
@@ -108,10 +118,17 @@ def load_price_table(path: Path) -> dict[str, ModelPrice]:
 
 
 def match_price(table: dict[str, ModelPrice], model_id: str | None) -> ModelPrice | None:
-    """Resolve a model id to its price, tolerating dated release suffixes."""
+    """Resolve a model id to its price, tolerating dated release suffixes.
+
+    ``<synthetic>`` marks locally inserted notices such as recorded rate-limit
+    messages. It is not an API model call, so it always resolves to a zero
+    price and never makes otherwise complete pricing coverage partial.
+    """
     if not model_id:
         return None
     key = normalize_model_key(model_id)
+    if key in _NON_BILLABLE_MODEL_KEYS:
+        return _ZERO_PRICE
     if key in table:
         return table[key]
     stripped = _DATE_SUFFIX.sub("", key)

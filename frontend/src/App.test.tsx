@@ -69,11 +69,14 @@ vi.mock("./api/client", () => ({
     spikes: [],
   })),
   getDiscoveryAnalytics: vi.fn(async () => ({
-    meta: { project_id: null, min_support: 5, total_sessions: 12, cost_available: true },
+    meta: {
+      project_id: null, min_support: 5, total_sessions: 12, total_tool_calls: 34,
+      cost_available: true, unpriced_models: [],
+    },
     sections: {
-      cost: {
-        key: "cost", title: "Cost drivers", target_label: "High-cost sessions",
-        description: "", available: true, unavailable_reason: null,
+      cost_associations: {
+        key: "cost_associations", title: "Cost associations", target_label: "High estimated API-equivalent cost",
+        description: "", observation_unit: "session", available: true, unavailable_reason: null,
         baseline_count: 12, positive_count: 3, results: [{
           id: "model:sonnet",
           title: "Sonnet-heavy sessions",
@@ -81,28 +84,20 @@ vi.mock("./api/client", () => ({
           selectors: ["model = sonnet"],
           support: 6,
           positive_support: 3,
+          complement_count: 6,
+          complement_positive_count: 0,
           baseline_rate: 0.25,
           subgroup_rate: 0.5,
+          complement_rate: 0,
+          effect_size: 0.5,
           subgroup_rate_low: 0.22,
-          lift: 2,
-          score: 1,
           examples: [],
         }],
       },
-      fanout_cost: {
-        key: "fanout_cost", title: "Fanout cost drivers", target_label: "High-cost sessions",
-        description: "", available: false, unavailable_reason: "Price table unavailable.",
-        baseline_count: 0, positive_count: 0, results: [],
-      },
-      tool_errors: {
-        key: "tool_errors", title: "Tool error drivers", target_label: "Tool calls with errors",
-        description: "", available: true, unavailable_reason: null,
-        baseline_count: 0, positive_count: 0, results: [],
-      },
-      rejections: {
-        key: "rejections", title: "Rejection drivers", target_label: "Rejected slices",
-        description: "", available: true, unavailable_reason: null,
-        baseline_count: 0, positive_count: 0, results: [],
+      tool_error_associations: {
+        key: "tool_error_associations", title: "Tool-error associations", target_label: "Recorded tool error",
+        description: "", observation_unit: "tool_call", available: true, unavailable_reason: null,
+        baseline_count: 34, positive_count: 2, results: [],
       },
     },
   })),

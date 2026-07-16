@@ -376,6 +376,7 @@ export interface SpendSpike {
 export interface DiscoveryExample {
   id: number | null;
   kind: string;
+  event_id: number | null;
   session_id: string | null;
   title: string | null;
   project_name: string | null;
@@ -391,11 +392,13 @@ export interface DiscoveryDriver {
   selectors: string[];
   support: number;
   positive_support: number;
+  complement_count: number;
+  complement_positive_count: number;
   baseline_rate: number;
   subgroup_rate: number;
+  complement_rate: number;
+  effect_size: number;
   subgroup_rate_low: number;
-  lift: number;
-  score: number;
   examples: DiscoveryExample[];
 }
 
@@ -404,6 +407,7 @@ export interface DiscoverySection {
   title: string;
   target_label: string;
   description: string;
+  observation_unit: "session" | "tool_call";
   available: boolean;
   unavailable_reason: string | null;
   baseline_count: number;
@@ -416,7 +420,9 @@ export interface DiscoveryResponse {
     project_id: number | null;
     min_support: number;
     total_sessions: number;
+    total_tool_calls: number;
     cost_available: boolean;
+    unpriced_models: string[];
   };
   sections: Record<string, DiscoverySection>;
 }

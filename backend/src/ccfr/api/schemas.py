@@ -406,6 +406,7 @@ class SpendSpike(BaseModel):
 class DiscoveryExample(BaseModel):
     id: int | None = None
     kind: str
+    event_id: int | None = None
     session_id: str | None = None
     title: str | None = None
     project_name: str | None = None
@@ -421,11 +422,13 @@ class DiscoveryDriver(BaseModel):
     selectors: list[str] = Field(default_factory=list)
     support: int = 0
     positive_support: int = 0
+    complement_count: int = 0
+    complement_positive_count: int = 0
     baseline_rate: float = 0
     subgroup_rate: float = 0
+    complement_rate: float = 0
+    effect_size: float = 0
     subgroup_rate_low: float = 0
-    lift: float = 0
-    score: float = 0
     examples: list[DiscoveryExample] = Field(default_factory=list)
 
 
@@ -434,6 +437,7 @@ class DiscoverySection(BaseModel):
     title: str
     target_label: str
     description: str
+    observation_unit: str
     available: bool = True
     unavailable_reason: str | None = None
     baseline_count: int = 0
@@ -445,7 +449,9 @@ class DiscoveryMeta(BaseModel):
     project_id: int | None = None
     min_support: int = 5
     total_sessions: int = 0
+    total_tool_calls: int = 0
     cost_available: bool = False
+    unpriced_models: list[str] = Field(default_factory=list)
 
 
 class DiscoveryResponse(BaseModel):
