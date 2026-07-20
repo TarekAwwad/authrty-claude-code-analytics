@@ -16,7 +16,6 @@ from ccfr.api import analytics, repository
 from ccfr.api.deps import get_db, get_historical_pricing
 from ccfr.api.import_progress import import_progress_store
 from ccfr.settings import Settings, contributor_identity, read_settings, write_settings
-from ccfr.analysis.contribution import build_contribution, bundle_manifest
 from ccfr.analysis.context_economics import (
     context_economics_analytics,
     session_context_economics,
@@ -38,8 +37,6 @@ from ccfr.analysis.usage_characteristics import usage_characteristics_analytics
 from ccfr.naming import project_display_name
 from ccfr.api.schemas import (
     CacheStatsResponse,
-    ContributionExportResponse,
-    ContributionPreviewResponse,
     ContextEconomicsResponse,
     CostAnalyticsResponse,
     DiscoveryResponse,
@@ -165,17 +162,6 @@ def update_settings(payload: SettingsResponse) -> SettingsResponse:
     return SettingsResponse(**asdict(saved))
 
 
-def _current_bundle(conn: Connection):
-    salt, contributor_id = contributor_identity()
-    return build_contribution(
-        conn,
-        salt=salt,
-        contributor_id=contributor_id,
-        app_version=config.app_version(),
-        generated_on=date.today(),
-    )
-
-
 @router.get("/team/projects", response_model=TeamProjectsResponse)
 def team_projects(conn: Connection = Depends(get_db)) -> TeamProjectsResponse:
     rows = conn.execute(
@@ -249,25 +235,6 @@ def _current_team_bundle(conn: Connection, payload: TeamExportRequest, *, persis
         }
         write_settings(replace(settings, team_bundle_seq=seq, team_export_prefs=prefs))
     return bundle
-
-
-@router.get("/contribution/preview", response_model=ContributionPreviewResponse)
-def contribution_preview(conn: Connection = Depends(get_db)) -> ContributionPreviewResponse:
-    bundle = _current_bundle(conn)
-    return ContributionPreviewResponse(manifest=bundle_manifest(bundle), bundle=bundle.to_dict())
-
-
-@router.post("/contribution/export", response_model=ContributionExportResponse)
-def contribution_export(conn: Connection = Depends(get_db)) -> ContributionExportResponse:
-    bundle = _current_bundle(conn)
-    out_dir = config.data_dir() / "contributions"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
-    path = out_dir / f"contribution-{stamp}-{secrets.token_hex(4)}.json"
-    # Exclusive create: never silently overwrite a prior export.
-    with path.open("x", encoding="utf-8") as fh:
-        fh.write(json.dumps(bundle.to_dict(), indent=2))
-    return ContributionExportResponse(path=str(path), session_count=len(bundle.sessions))
 
 
 @router.post("/team/export-preview", response_model=TeamExportPreviewResponse)

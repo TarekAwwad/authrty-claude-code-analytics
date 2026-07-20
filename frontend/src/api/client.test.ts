@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as apiClient from "./client";
 import {
   exportTeamBundle,
   getCostAnalytics,
@@ -26,6 +27,11 @@ describe("api client", () => {
     vi.stubGlobal("fetch", fetchMock);
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it("does not expose the retired standalone contribution workflow", () => {
+    expect(apiClient).not.toHaveProperty("getContributionPreview");
+    expect(apiClient).not.toHaveProperty("exportContribution");
+  });
 
   it("requests are sent with cache disabled so toggled state can't serve stale data", async () => {
     await getCostAnalytics({});

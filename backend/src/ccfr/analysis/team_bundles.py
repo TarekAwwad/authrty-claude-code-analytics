@@ -1,7 +1,7 @@
 """Team-strict privacy bundle export/import and dashboard aggregation.
 
-The bundle is built from an explicit structural allowlist and reuses the
-contribution sanitizers for model/tool/subagent buckets. Imports are
+The bundle is built from an explicit structural allowlist and uses shared
+bundle sanitizers for model/tool/subagent buckets. Imports are
 canonicalized before persistence so the team tables never need raw Claude
 export content, previews, paths, commands, prompts, model aliases, or MCP names.
 """
@@ -17,13 +17,19 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ccfr.analysis.contribution import (
+from ccfr.analysis.bundle_sanitization import (
     KNOWN_STOP_REASONS,
     bucket_agent_type,
     bucket_model,
+    date_only,
+    duration_s,
     sanitize_symbol,
+    session_models,
+    session_stats,
+    session_stop_reasons,
+    session_subagents,
+    session_tokens,
 )
-from ccfr.analysis import contribution as contribution_helpers
 from ccfr.naming import project_display_name
 
 SCHEMA_VERSION = 3
@@ -325,18 +331,18 @@ def build_team_bundle(
     for row in session_rows:
         session_pk = int(row["id"])
         export_name = str(row["export_name"])
-        observed_stats = contribution_helpers._session_stats(conn, session_pk)
+        observed_stats = session_stats(conn, session_pk)
         session: dict[str, Any] = {
             "sid": _hash_id(salt, "session", export_name, row["session_id"]),
             "provider": DEFAULT_PROVIDER,
-            "models": contribution_helpers._session_models(conn, session_pk),
-            "first_date": contribution_helpers._date_only(row["first_ts"]),
-            "last_date": contribution_helpers._date_only(row["last_ts"]),
-            "duration_s": contribution_helpers._duration_s(row["first_ts"], row["last_ts"]),
-            "tokens": contribution_helpers._session_tokens(conn, session_pk),
+            "models": session_models(conn, session_pk),
+            "first_date": date_only(row["first_ts"]),
+            "last_date": date_only(row["last_ts"]),
+            "duration_s": duration_s(row["first_ts"], row["last_ts"]),
+            "tokens": session_tokens(conn, session_pk),
             "tokens_by_model": _session_tokens_by_model(conn, session_pk),
             "stats": {key: observed_stats.get(key, 0) for key in STAT_KEYS},
-            "stop_reasons": contribution_helpers._session_stop_reasons(conn, session_pk),
+            "stop_reasons": session_stop_reasons(conn, session_pk),
         }
         if privacy_level == LEVEL_TEAM:
             default_label = project_display_name(export_name, row["inferred_cwd"])
@@ -346,7 +352,7 @@ def build_team_bundle(
             session["file_types"] = _session_file_types(conn, session_pk)
         else:
             session["pid"] = _hash_id(salt, "project", export_name)
-            session["subagents"] = contribution_helpers._session_subagents(conn, session_pk)
+            session["subagents"] = session_subagents(conn, session_pk)
         sessions.append(session)
 
     raw_bundle = TeamBundle(

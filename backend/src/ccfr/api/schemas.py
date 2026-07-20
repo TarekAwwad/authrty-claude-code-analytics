@@ -779,16 +779,6 @@ class LimitsResponse(BaseModel):
     eras: list[LimitEraOut] = Field(default_factory=list)
 
 
-class ContributionPreviewResponse(BaseModel):
-    manifest: dict[str, Any]
-    bundle: dict[str, Any]
-
-
-class ContributionExportResponse(BaseModel):
-    path: str
-    session_count: int
-
-
 class TeamExportPreviewResponse(BaseModel):
     manifest: dict[str, Any]
     bundle: dict[str, Any]

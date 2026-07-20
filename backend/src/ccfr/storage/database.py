@@ -187,36 +187,6 @@ CREATE TABLE IF NOT EXISTS import_errors (
     message TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS sequence_slices (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL,
-    lane TEXT NOT NULL,
-    start_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
-    end_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
-    outcome TEXT NOT NULL,
-    length INTEGER NOT NULL DEFAULT 0,
-    duration_seconds INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_sequence_slices_session ON sequence_slices(session_id);
-CREATE INDEX IF NOT EXISTS idx_sequence_slices_kind ON sequence_slices(kind);
-
-CREATE TABLE IF NOT EXISTS event_features (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    sequence_slice_id INTEGER NOT NULL REFERENCES sequence_slices(id) ON DELETE CASCADE,
-    position INTEGER NOT NULL,
-    symbol TEXT NOT NULL,
-    family TEXT NOT NULL,
-    attributes_json TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE INDEX IF NOT EXISTS idx_event_features_session ON event_features(session_id);
-CREATE INDEX IF NOT EXISTS idx_event_features_slice_pos ON event_features(sequence_slice_id, position);
-CREATE INDEX IF NOT EXISTS idx_event_features_symbol ON event_features(symbol);
-
 CREATE TABLE IF NOT EXISTS session_findings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -340,6 +310,7 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     """Apply lightweight migrations for databases created by older app versions."""
     _drop_legacy_risk_tables(conn)
     _drop_unused_memory_index(conn)
+    _drop_unused_sequence_cache(conn)
     _migrate_session_stats(conn)
 
     existing_message_columns = _column_names(conn, "messages")
@@ -415,6 +386,12 @@ def _drop_unused_memory_index(conn: sqlite3.Connection) -> None:
     if search_exists:
         conn.execute("DELETE FROM search_index WHERE kind = 'memory'")
     conn.execute("DROP TABLE IF EXISTS memory_nodes")
+
+
+def _drop_unused_sequence_cache(conn: sqlite3.Connection) -> None:
+    """Remove transitional structural rows no shipped analysis consumes."""
+    conn.execute("DROP TABLE IF EXISTS event_features")
+    conn.execute("DROP TABLE IF EXISTS sequence_slices")
 
 
 def _migrate_session_stats(conn: sqlite3.Connection) -> None:

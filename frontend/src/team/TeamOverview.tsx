@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { getTeamDashboard } from "../api/client";
-import { compactInt } from "../contribute/specimen";
+import { compactInt } from "./bundlePresentation";
 import { buildAreaChart } from "./teamCharts";
 import LoadingBar from "../components/LoadingBar";
 

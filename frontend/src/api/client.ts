@@ -1,7 +1,5 @@
 import type {
   CacheStats,
-  ContributionExportResult,
-  ContributionPreview,
   ContextEconomicsResponse,
   CostAnalyticsFilters,
   CostAnalyticsResponse,
@@ -269,14 +267,6 @@ export function updateSettings(settings: Settings) {
     method: "PUT",
     body: JSON.stringify(settings),
   });
-}
-
-export function getContributionPreview() {
-  return request<ContributionPreview>("/contribution/preview");
-}
-
-export function exportContribution() {
-  return request<ContributionExportResult>("/contribution/export", { method: "POST" });
 }
 
 export function getTeamProjects() {

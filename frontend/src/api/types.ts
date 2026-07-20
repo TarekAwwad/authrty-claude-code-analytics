@@ -767,25 +767,6 @@ export interface LimitsResponse {
   eras: LimitEraEntry[];
 }
 
-export interface ContributionManifest {
-  session_count: number;
-  sequence_step_count: number;
-  included_fields: string[];
-  excluded: string[];
-  fingerprint_caveat: string;
-  privacy_level?: string;
-}
-
-export interface ContributionPreview {
-  manifest: ContributionManifest;
-  bundle: { sessions?: unknown[] } & Record<string, unknown>;
-}
-
-export interface ContributionExportResult {
-  path: string;
-  session_count: number;
-}
-
 export type TeamPrivacyLevel = "structural" | "team";
 
 // GET /api/team/projects -> TeamProjectsResponse.

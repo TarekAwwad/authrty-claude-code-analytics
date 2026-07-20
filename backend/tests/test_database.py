@@ -108,6 +108,50 @@ def test_init_db_has_no_memory_table_and_migrates_legacy_memory_index() -> None:
     assert conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
 
 
+def test_init_db_has_no_sequence_cache_and_migrates_legacy_tables() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+
+    def sequence_tables() -> set[str]:
+        return {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        } & {"sequence_slices", "event_features"}
+
+    assert sequence_tables() == set()
+
+    import_id = conn.execute(
+        "INSERT INTO imports(source_path, imported_at, status) VALUES('source', '2026-07-20', 'completed')"
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO projects(import_id, export_name) VALUES(?, 'd--Legacy')",
+        (import_id,),
+    )
+    conn.executescript(
+        """
+        CREATE TABLE sequence_slices (
+            id INTEGER PRIMARY KEY,
+            session_id INTEGER NOT NULL
+        );
+        CREATE TABLE event_features (
+            id INTEGER PRIMARY KEY,
+            sequence_slice_id INTEGER NOT NULL
+        );
+        INSERT INTO sequence_slices(id, session_id) VALUES (1, 1);
+        INSERT INTO event_features(id, sequence_slice_id) VALUES (1, 1);
+        """
+    )
+    conn.commit()
+
+    init_db(conn)
+
+    assert sequence_tables() == set()
+    assert conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
+
+
 def test_init_db_and_reset_cover_team_bundle_tables() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row

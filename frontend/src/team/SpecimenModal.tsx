@@ -2,17 +2,17 @@ import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { Blurred } from "../shell/Blurred";
 import {
-  type ContributionSession,
+  type TeamBundleSession,
   compactInt,
   formatDuration,
   prettyModel,
   prettySymbol,
-} from "./specimen";
+} from "./bundlePresentation";
 
 const SEQ_PREVIEW = 32;
 
 interface Props {
-  sample: ContributionSession;
+  sample: TeamBundleSession;
   open: boolean;
   onClose: () => void;
   title?: string;

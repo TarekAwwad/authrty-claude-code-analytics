@@ -213,8 +213,6 @@ def test_reimport_replaces_without_orphaning_derived_rows(tmp_path: Path) -> Non
             "events",
             "event_edges",
             "search_index",
-            "event_features",
-            "sequence_slices",
             "session_findings",
             "projects",
         )
@@ -230,8 +228,6 @@ def test_reimport_replaces_without_orphaning_derived_rows(tmp_path: Path) -> Non
             "events",
             "event_edges",
             "search_index",
-            "event_features",
-            "sequence_slices",
             "session_findings",
             "projects",
         )
@@ -317,67 +313,6 @@ def test_reimport_progress_does_not_double_count_replaced_project(tmp_path: Path
     assert snapshots
     assert max(snapshot["project_count"] for snapshot in snapshots) == 1
     assert repository.cache_stats(conn)["session_count"] == 2
-
-
-def test_import_project_keeps_unrelated_sequence_features(tmp_path: Path) -> None:
-    from ccfr.ingest import import_all_new, import_project
-
-    _write_project(tmp_path, "d--Alpha", "11111111-1111-1111-1111-111111111111")
-    _write_project(tmp_path, "d--Beta", "22222222-2222-2222-2222-222222222222")
-    conn = memory_conn()
-    import_all_new(conn, tmp_path)
-
-    beta_session = conn.execute(
-        """
-        SELECT s.id
-        FROM sessions s
-        JOIN projects p ON p.id = s.project_id
-        WHERE p.export_name = 'd--Beta'
-        """
-    ).fetchone()[0]
-    beta_feature_count = conn.execute(
-        "SELECT COUNT(*) FROM event_features WHERE session_id = ?",
-        (beta_session,),
-    ).fetchone()[0]
-    assert beta_feature_count > 0
-
-    _write_project(tmp_path, "d--Alpha", "33333333-3333-3333-3333-333333333333")
-    import_project(conn, tmp_path, "d--Alpha")
-
-    assert conn.execute(
-        "SELECT COUNT(*) FROM event_features WHERE session_id = ?",
-        (beta_session,),
-    ).fetchone()[0] == beta_feature_count
-
-
-def test_import_builds_only_neutral_sequence_features(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    import ccfr.ingest.importer as importer
-    from ccfr.ingest import import_export
-
-    def legacy_rebuild_was_called(*_args, **_kwargs) -> None:
-        raise AssertionError("legacy risk-pattern rebuild must not run")
-
-    monkeypatch.setattr(
-        importer,
-        "rebuild_risk_patterns",
-        legacy_rebuild_was_called,
-        raising=False,
-    )
-    _write_project(tmp_path, "d--Alpha", "11111111-1111-1111-1111-111111111111")
-    conn = memory_conn()
-
-    import_export(conn, tmp_path)
-
-    assert conn.execute("SELECT COUNT(*) FROM event_features").fetchone()[0] > 0
-    assert conn.execute("SELECT COUNT(*) FROM sequence_slices").fetchone()[0] > 0
-    tables = {
-        row[0]
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
-    }
-    assert {"sequence_patterns", "pattern_hits", "risk_findings"}.isdisjoint(tables)
 
 
 def test_import_project_unknown_name_raises(tmp_path: Path) -> None:

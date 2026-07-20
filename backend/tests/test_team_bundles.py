@@ -9,11 +9,48 @@ from pathlib import Path
 import pytest
 
 from ccfr.analysis import team_bundles
-from ccfr.analysis.contribution import bucket_model
+from ccfr.analysis import bundle_sanitization as bundle_helpers
 from ccfr.ingest import import_export
 from ccfr.storage import init_db
-from tests.fixtures import ALPHA_SESSION_ID, BETA_SESSION_ID, sanitized_export
-from tests.test_contribution import SENTINELS, _export_with_sentinels
+from tests.fixtures import (
+    ALPHA_SESSION_ID,
+    BETA_SESSION_ID,
+    TEAM_BUNDLE_SENTINELS,
+    sanitized_export,
+    sentinel_export,
+)
+
+
+def test_team_bundle_model_and_agent_buckets_are_closed() -> None:
+    assert bundle_helpers.bucket_model("claude-opus-4-8") == "claude-opus-4-8"
+    assert bundle_helpers.bucket_model("claude-haiku-4-5-20251001") == "claude-haiku-4-5"
+    assert bundle_helpers.bucket_model("SECRET_MODEL_zzz") == "other"
+    assert bundle_helpers.bucket_model(None) == "unknown"
+    assert bundle_helpers.bucket_agent_type("general-purpose") == "general-purpose"
+    assert bundle_helpers.bucket_agent_type("acme-deploy-bot") == "custom"
+    assert bundle_helpers.bucket_agent_type(None) == "custom"
+
+
+def test_legacy_team_sequence_symbols_are_sanitized_to_closed_values() -> None:
+    assert bundle_helpers.sanitize_symbol("CALL:Bash:git", "tool_call") == "CALL:Bash:git"
+    assert bundle_helpers.sanitize_symbol("CALL:Bash:private", "tool_call") == "CALL:Bash:other"
+    assert bundle_helpers.sanitize_symbol("CALL:inspect:Read", "tool_call") == "CALL:inspect:Read"
+    assert bundle_helpers.sanitize_symbol("CALL:write:Edit", "tool_call") == "CALL:write:Edit"
+    assert bundle_helpers.sanitize_symbol("CALL:Agent", "tool_call") == "CALL:Agent"
+    assert bundle_helpers.sanitize_symbol("CALL:WebFetch", "tool_call") == "CALL:WebFetch"
+    assert bundle_helpers.sanitize_symbol(
+        "CALL:mcp__SECRETSERVER__deploy", "tool_call"
+    ) == "CALL:mcp"
+    assert bundle_helpers.sanitize_symbol(
+        "CALL:SomePrivateTool", "tool_call"
+    ) == "CALL:other"
+    assert bundle_helpers.sanitize_symbol("RESULT:ok", "tool_result") == "RESULT:ok"
+    assert bundle_helpers.sanitize_symbol(
+        "RESULT:error:permission_denied", "tool_result"
+    ) == "RESULT:error:permission_denied"
+    assert bundle_helpers.sanitize_symbol(
+        "RESULT:error:private", "tool_result"
+    ) == "RESULT:error:other"
 
 
 def _bundle_from_sanitized(tmp_path):
@@ -76,7 +113,7 @@ def test_team_bundle_never_leaks_sentinels(tmp_path):
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     init_db(conn)
-    import_export(conn, _export_with_sentinels(tmp_path))
+    import_export(conn, sentinel_export(tmp_path))
     try:
         bundle = team_bundles.build_team_bundle(
             conn,
@@ -89,38 +126,8 @@ def test_team_bundle_never_leaks_sentinels(tmp_path):
         conn.close()
 
     blob = json.dumps(bundle.to_dict())
-    for sentinel in SENTINELS:
+    for sentinel in TEAM_BUNDLE_SENTINELS:
         assert sentinel not in blob, f"leaked sentinel: {sentinel}"
-
-
-def test_team_bundle_v3_does_not_build_risk_or_sequence_inventory(tmp_path, monkeypatch):
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    init_db(conn)
-    import_export(conn, _export_with_sentinels(tmp_path))
-    monkeypatch.setattr(
-        team_bundles.contribution_helpers,
-        "_session_finding_categories",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("risk inventory was queried")),
-    )
-    monkeypatch.setattr(
-        team_bundles.contribution_helpers,
-        "_session_sequence",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("sequence inventory was queried")),
-    )
-    try:
-        bundle = team_bundles.build_team_bundle(
-            conn,
-            salt="abcd" * 16,
-            member_id="member",
-            app_version="0.1.0",
-            generated_on=datetime.date(2026, 6, 18),
-        )
-    finally:
-        conn.close()
-
-    for session in bundle.to_dict()["sessions"]:
-        assert {"risk_categories", "sequence"}.isdisjoint(session)
 
 
 def test_team_dashboard_date_to_includes_sessions_without_last_date():
@@ -195,7 +202,7 @@ def test_team_bundle_tokens_by_model_sum_to_session_tokens(tmp_path):
             assert sum(vals[key] for vals in tbm.values()) == session["tokens"][key]
         # Keys are bucketed model families (idempotent under bucket_model).
         for family in tbm:
-            assert bucket_model(family) == family
+            assert bundle_helpers.bucket_model(family) == family
 
 
 def test_validate_team_bundle_accepts_legacy_without_tokens_by_model(tmp_path):

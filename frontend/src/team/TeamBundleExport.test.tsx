@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import TeamBundleExport from "./TeamBundleExport";
 
@@ -86,6 +86,16 @@ describe("TeamBundleExport", () => {
     expect(await screen.findByText(/risk categories.*loop.*event sequences/i)).toBeInTheDocument();
   });
 
+  it("keeps the team-owned specimen inspection available", async () => {
+    renderExport();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Inspect specimen/i }));
+
+    expect(screen.getByRole("heading", { name: "First team bundle session" })).toBeInTheDocument();
+    expect(screen.getByText("Opus 4.8")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Raw JSON" })).toBeInTheDocument();
+  });
+
   it("defaults every project to selected and exports a structural bundle without a name", async () => {
     renderExport();
     const exportBtn = await screen.findByRole("button", { name: /Export bundle/i });
@@ -125,6 +135,37 @@ describe("TeamBundleExport", () => {
     await waitFor(() => expect(exportTeamBundle).toHaveBeenCalled());
     const body = vi.mocked(exportTeamBundle).mock.calls[0][0];
     expect(body.projects.map((p) => p.export_name)).toEqual(["d--Alpha"]);
+  });
+
+  it("keeps the preview stable while a changed project selection is recalculated", async () => {
+    let resolveUpdatedPreview: ((value: typeof previewPayload) => void) | undefined;
+    vi.mocked(getTeamPreview)
+      .mockResolvedValueOnce(previewPayload as never)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveUpdatedPreview = resolve as (value: typeof previewPayload) => void;
+          }) as never,
+      );
+    renderExport();
+    expect(await screen.findByText("What stays vs. what travels")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("Include beta"));
+    await waitFor(() => expect(getTeamPreview).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByText("What stays vs. what travels")).toBeInTheDocument();
+    expect(screen.queryByText(/No sessions in the current selection/i)).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveUpdatedPreview?.({
+        ...previewPayload,
+        manifest: { ...previewPayload.manifest, session_count: 2 },
+        bundle: { sessions: previewPayload.bundle.sessions.slice(0, 1) },
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText("Team export summary")).toHaveTextContent(/2Sessions/),
+    );
   });
 
   it("reveals the label input only after clicking rename, then commits on blur", async () => {
@@ -194,6 +235,6 @@ describe("TeamBundleExport", () => {
     renderExport();
     const exportBtn = await screen.findByRole("button", { name: /Export bundle/i });
     await waitFor(() => expect(exportBtn).toBeDisabled());
-    expect(screen.getByText(/No sessions in the current selection/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No sessions in the current selection/i)).toBeInTheDocument();
   });
 });

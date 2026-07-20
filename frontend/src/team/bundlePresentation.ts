@@ -1,4 +1,4 @@
-// Pure helpers for rendering a contribution specimen row.
+// Pure helpers for rendering a Team bundle specimen row.
 // Everything here is a faithful, lossless re-presentation of the bundle's own
 // closed-vocabulary symbols. No value is invented, only relabeled for reading.
 
@@ -36,7 +36,7 @@ export interface SessionSubagent {
   event_count: number;
 }
 
-export interface ContributionSession {
+export interface TeamBundleSession {
   sid?: string;
   models?: string[];
   first_date?: string | null;
@@ -50,7 +50,7 @@ export interface ContributionSession {
 }
 
 // Map a closed-vocabulary event symbol to a short label and visual kind.
-// Mirrors the producer in backend analysis/contribution.py (sanitize_symbol).
+// Legacy sequence values have already been sanitized by the backend bundle helpers.
 export function prettySymbol(sym: string): { label: string; kind: SymKind } {
   const parts = sym.split(":");
   if (parts[0] === "RESULT") {

@@ -1,13 +1,13 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Download, FileJson, Pencil } from "lucide-react";
 import { exportTeamBundle, getRuntimeConfig, getTeamPreview, getTeamProjects } from "../api/client";
 import type { TeamExportRequestBody, TeamPrivacyLevel } from "../api/types";
-import type { ContributionSession } from "../contribute/specimen";
-import { compactInt } from "../contribute/specimen";
+import type { TeamBundleSession } from "./bundlePresentation";
+import { compactInt } from "./bundlePresentation";
 import { Blurred } from "../shell/Blurred";
-import PrivacyLedger from "../contribute/PrivacyLedger";
-import SpecimenModal from "../contribute/SpecimenModal";
+import PrivacyLedger from "./PrivacyLedger";
+import SpecimenModal from "./SpecimenModal";
 import LoadingBar from "../components/LoadingBar";
 
 const LEVELS: { id: TeamPrivacyLevel; label: string; hint: string }[] = [
@@ -23,8 +23,8 @@ const LEVELS: { id: TeamPrivacyLevel; label: string; hint: string }[] = [
   },
 ];
 
-function sessionsFromBundle(value: unknown): ContributionSession[] {
-  return Array.isArray(value) ? (value as ContributionSession[]) : [];
+function sessionsFromBundle(value: unknown): TeamBundleSession[] {
+  return Array.isArray(value) ? (value as TeamBundleSession[]) : [];
 }
 
 function errorMessage(error: unknown): string {
@@ -73,6 +73,7 @@ export default function TeamBundleExport() {
     queryKey: ["team-preview", previewBody],
     queryFn: () => getTeamPreview(previewBody),
     enabled: selected.length > 0,
+    placeholderData: keepPreviousData,
   });
 
   const exporter = useMutation({
@@ -183,7 +184,13 @@ export default function TeamBundleExport() {
                 type="button"
                 className="contribute-primary-button"
                 onClick={() => exporter.mutate()}
-                disabled={exporter.isPending || selected.length === 0 || sessionCount === 0 || needsName}
+                disabled={
+                  exporter.isPending
+                  || preview.isFetching
+                  || selected.length === 0
+                  || sessionCount === 0
+                  || needsName
+                }
               >
                 {exporter.isSuccess ? (
                   <Check size={15} strokeWidth={3} aria-hidden="true" />
@@ -195,7 +202,7 @@ export default function TeamBundleExport() {
               <div className="team-flow-errors" aria-live="polite">
                 {needsName && <span className="flow-error">Enter your name to export a team-level bundle.</span>}
                 {selected.length === 0 && <span className="flow-error">Select at least one project.</span>}
-                {selected.length > 0 && sessionCount === 0 && (
+                {selected.length > 0 && !preview.isFetching && sessionCount === 0 && (
                   <span className="flow-error">No sessions in the current selection.</span>
                 )}
                 {exporter.isError && (

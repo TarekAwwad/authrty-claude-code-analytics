@@ -11,7 +11,7 @@ import {
 import type { TeamImportRecord } from "../api/types";
 import { Blurred } from "../shell/Blurred";
 import LoadingBar from "../components/LoadingBar";
-import { compactInt } from "../contribute/specimen";
+import { compactInt } from "./bundlePresentation";
 
 function importRecordId(record: TeamImportRecord, index: number): string {
   return record.bundle_id ?? record.member_id ?? record.source_path ?? `team-import-${index}`;
