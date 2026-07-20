@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from ccfr.api import routes
 from ccfr.api.deps import get_db
+from ccfr.analysis.team_bundles import bundle_content_id
 from ccfr.main import create_app
 from ccfr.storage import init_db
 
@@ -86,6 +87,64 @@ def test_import_all_new_then_reset(client) -> None:
     assert reset.status_code == 200
     assert reset.json() == {"ok": True}
     assert c.get("/api/projects").json() == []
+
+
+def test_local_reset_preserves_imported_team_bundles(client) -> None:
+    c, root = client
+    _write_project(root, "d--Alpha", "11111111-1111-1111-1111-111111111111")
+    assert c.post("/api/imports", json={}).status_code == 200
+
+    bundle = {
+        "schema_version": 1,
+        "profile": "team_strict",
+        "member_id": "22222222-2222-2222-2222-222222222222",
+        "generated_at": "2026-07-16",
+        "app_version": "0.1.0",
+        "sessions": [],
+    }
+    bundle["bundle_id"] = bundle_content_id(bundle)
+    assert c.post(
+        "/api/team/import-bundle",
+        json={"filename": "team.json", "bundle": bundle},
+    ).status_code == 200
+
+    assert c.post("/api/imports/reset").status_code == 200
+
+    assert c.get("/api/projects").json() == []
+    assert len(c.get("/api/team/imports").json()) == 1
+
+
+def test_import_status_persists_skipped_errors_and_human_project_identity(client) -> None:
+    c, root = client
+    project = root / "d--Encoded-Project"
+    project.mkdir(parents=True)
+    (project / "11111111-1111-1111-1111-111111111111.jsonl").write_text(
+        "\n".join([
+            '{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z",'
+            '"cwd":"/workspace/payments-api","message":{"role":"user","content":"hello"}}',
+            "not valid json",
+        ]),
+        encoding="utf-8",
+    )
+
+    imported = c.post("/api/imports", json={"project": "d--Encoded-Project"})
+    assert imported.status_code == 200
+    assert imported.json()["error_count"] == 1
+
+    projects = c.get("/api/source/projects").json()
+    assert projects[0]["name"] == "d--Encoded-Project"
+    assert projects[0]["display_name"] == "payments-api"
+
+    stats = c.get("/api/stats").json()
+    assert stats["observed_date_from"] == "2026-01-01"
+    assert stats["observed_date_to"] == "2026-01-01"
+    assert stats["last_successful_sync_at"] is not None
+    assert stats["latest_import_error_count"] == 1
+
+    history = c.get("/api/imports").json()
+    assert history[0]["error_count"] == 1
+    assert history[0]["errors"]
+    assert history[0]["errors"][0]["path"].endswith(".jsonl")
 
 
 def test_import_unknown_project_returns_400(client) -> None:
@@ -224,6 +283,10 @@ def test_stats_reflect_current_cache(client) -> None:
         "subagent_count": 0,
         "memory_count": 0,
         "persisted_output_count": 0,
+        "observed_date_from": None,
+        "observed_date_to": None,
+        "last_successful_sync_at": None,
+        "latest_import_error_count": 0,
     }
 
     _write_project(root, "d--Alpha", "11111111-1111-1111-1111-111111111111")

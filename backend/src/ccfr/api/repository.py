@@ -131,10 +131,26 @@ def rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
 
 
 def list_imports(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    return rows_to_dicts(conn.execute("SELECT * FROM imports ORDER BY imported_at DESC").fetchall())
+    imports = rows_to_dicts(
+        conn.execute("SELECT * FROM imports ORDER BY imported_at DESC, id DESC").fetchall()
+    )
+    errors_by_import: dict[int, list[dict[str, Any]]] = {}
+    for row in conn.execute(
+        "SELECT import_id, path, line_no, message FROM import_errors ORDER BY id"
+    ).fetchall():
+        errors_by_import.setdefault(int(row["import_id"]), []).append(
+            {
+                "path": row["path"],
+                "line_no": row["line_no"],
+                "message": row["message"],
+            }
+        )
+    for item in imports:
+        item["errors"] = errors_by_import.get(int(item["id"]), [])
+    return imports
 
 
-def cache_stats(conn: sqlite3.Connection) -> dict[str, int]:
+def cache_stats(conn: sqlite3.Connection) -> dict[str, Any]:
     """Current totals across the whole local cache (independent of any single import)."""
     counts = {
         "project_count": "SELECT COUNT(*) FROM projects",
@@ -144,7 +160,46 @@ def cache_stats(conn: sqlite3.Connection) -> dict[str, int]:
         "memory_count": "SELECT COUNT(*) FROM memory_nodes",
         "persisted_output_count": "SELECT COUNT(*) FROM persisted_outputs",
     }
-    return {key: conn.execute(sql).fetchone()[0] for key, sql in counts.items()}
+    result: dict[str, Any] = {
+        key: int(conn.execute(sql).fetchone()[0]) for key, sql in counts.items()
+    }
+    coverage = conn.execute(
+        """
+        SELECT
+            MIN(substr(COALESCE(first_ts, last_ts), 1, 10)) AS observed_date_from,
+            MAX(substr(COALESCE(last_ts, first_ts), 1, 10)) AS observed_date_to
+        FROM sessions
+        """
+    ).fetchone()
+    last_success = conn.execute(
+        """
+        SELECT imported_at
+        FROM imports
+        WHERE status IN ('completed', 'completed_with_errors')
+        ORDER BY imported_at DESC, id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    latest_terminal = conn.execute(
+        """
+        SELECT error_count
+        FROM imports
+        WHERE status IN ('completed', 'completed_with_errors', 'failed')
+        ORDER BY imported_at DESC, id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    result.update(
+        {
+            "observed_date_from": coverage["observed_date_from"],
+            "observed_date_to": coverage["observed_date_to"],
+            "last_successful_sync_at": last_success["imported_at"] if last_success else None,
+            "latest_import_error_count": int(latest_terminal["error_count"])
+            if latest_terminal
+            else 0,
+        }
+    )
+    return result
 
 
 def import_summary_stats(conn: sqlite3.Connection, import_id: int) -> dict[str, int]:

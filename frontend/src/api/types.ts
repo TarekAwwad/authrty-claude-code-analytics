@@ -19,7 +19,7 @@ export interface RuntimeConfig {
   is_docker: boolean;
 }
 
-export interface CacheStats {
+export interface IngestCounts {
   project_count: number;
   session_count: number;
   event_count: number;
@@ -28,7 +28,14 @@ export interface CacheStats {
   persisted_output_count: number;
 }
 
-export interface ImportProgressSummary extends CacheStats {
+export interface CacheStats extends IngestCounts {
+  observed_date_from: string | null;
+  observed_date_to: string | null;
+  last_successful_sync_at: string | null;
+  latest_import_error_count: number;
+}
+
+export interface ImportProgressSummary extends IngestCounts {
   file_count: number;
   error_count: number;
 }
@@ -58,10 +65,27 @@ export interface Project {
 
 export interface DiscoveredProject {
   name: string;
+  display_name: string;
   imported: boolean;
   session_count: number;
   last_imported_at: string | null;
   stale?: boolean;
+}
+
+export interface ImportIssue {
+  path: string;
+  line_no: number | null;
+  message: string;
+}
+
+export interface ImportRecord {
+  id: number;
+  source_path: string;
+  imported_at: string;
+  file_count: number;
+  status: string;
+  error_count: number;
+  errors: ImportIssue[];
 }
 
 export interface SessionCard {

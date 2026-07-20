@@ -334,6 +334,9 @@ DROP_TABLES = [
     "imports",
 ]
 
+TEAM_TABLES = {"team_bundle_sessions", "team_bundles"}
+LOCAL_DATA_TABLES = [table for table in DROP_TABLES if table not in TEAM_TABLES]
+
 MESSAGE_COST_COLUMNS = {
     "base_input_tokens": "INTEGER DEFAULT 0",
     "cache_5m_tokens": "INTEGER DEFAULT 0",
@@ -589,10 +592,20 @@ def _backfill_session_findings_once(conn: sqlite3.Connection) -> None:
     )
 
 
-def reset_db(conn: sqlite3.Connection) -> None:
+def _reset_tables(conn: sqlite3.Connection, tables: list[str]) -> None:
     conn.execute("PRAGMA foreign_keys = OFF")
-    for table in DROP_TABLES:
+    for table in tables:
         conn.execute(f"DROP TABLE IF EXISTS {table}")
     conn.commit()
     conn.execute("PRAGMA foreign_keys = ON")
     init_db(conn)
+
+
+def reset_local_data(conn: sqlite3.Connection) -> None:
+    """Clear imported local analytics while preserving imported team bundles."""
+    _reset_tables(conn, LOCAL_DATA_TABLES)
+
+
+def reset_db(conn: sqlite3.Connection) -> None:
+    """Clear all application data, including imported team bundles."""
+    _reset_tables(conn, DROP_TABLES)

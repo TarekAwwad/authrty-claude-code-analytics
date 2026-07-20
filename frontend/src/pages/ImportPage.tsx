@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderInput, RotateCcw, Search, Trash2 } from "lucide-react";
-import { createImport, discoverSourceProjects, getCacheStats, getImportProgress, getRuntimeConfig, loadDemoData, resetImports } from "../api/client";
+import { AlertTriangle, FolderInput, RotateCcw, Search, Trash2 } from "lucide-react";
+import { createImport, discoverSourceProjects, getCacheStats, getImportProgress, getRuntimeConfig, listImports, loadDemoData, resetImports } from "../api/client";
 import type { DiscoveredProject } from "../api/types";
 import { useImportRoot } from "./useImportRoot";
 import LoadingBar from "../components/LoadingBar";
@@ -46,6 +46,11 @@ function ImportPage() {
 
   const importPending = importOne.isPending || importAll.isPending;
   const mutationPending = importPending || reset.isPending || loadDemo.isPending;
+  const imports = useQuery({
+    queryKey: ["imports"],
+    queryFn: listImports,
+    refetchInterval: importPending ? 750 : false,
+  });
   const projects = useQuery({
     queryKey: ["source-projects", root],
     queryFn: () => discoverSourceProjects(root),
@@ -64,6 +69,11 @@ function ImportPage() {
   const importedCount = discovered.filter((p) => p.imported).length;
   const liveTotals = importPending && progress.data?.active ? progress.data.totals : null;
   const metricTotals = liveTotals ?? stats.data;
+  const latestImport = imports.data?.[0] ?? null;
+  const latestIssues = latestImport?.errors ?? [];
+  const latestErrorCount = liveTotals
+    ? (progress.data?.summary?.error_count ?? 0)
+    : (stats.data?.latest_import_error_count ?? 0);
   const cacheEmpty = (stats.data?.project_count ?? 0) === 0;
   const showDemoCard = projects.isSuccess && discovered.length === 0 && cacheEmpty;
 
@@ -117,7 +127,7 @@ function ImportPage() {
             </p>
           ) : (
             <p className="muted">
-              Import projects individually from the read-only export into a rebuildable SQLite cache.
+              Sync projects from the read-only export into a rebuildable local analytics cache.
             </p>
           )}
           <div className="console-actions">
@@ -127,29 +137,63 @@ function ImportPage() {
               disabled={mutationPending || root.length === 0}
             >
               {importAll.isPending ? <LoadingBar size="inline" label="Importing" /> : <FolderInput size={15} />}
-              <span>{importAll.isPending ? "Importing…" : "Import all new"}</span>
+              <span>{importAll.isPending ? "Syncing…" : "Sync new and updated"}</span>
             </button>
             <button
               className="ghost-action danger"
               onClick={() => {
-                if (window.confirm("Clear the entire local cache? This removes all imported projects.")) reset.mutate();
+                if (window.confirm("Reset local session data? This removes local imports, projects, sessions, and derived analytics. Imported team bundles are preserved.")) reset.mutate();
               }}
               disabled={mutationPending}
             >
               {reset.isPending ? <LoadingBar size="inline" label="Resetting" /> : <Trash2 size={15} />}
-              <span>Reset cache</span>
+              <span>Reset local data</span>
             </button>
           </div>
         </div>
       </section>
 
-      <section className={`metric-band${liveTotals ? " is-live" : ""}`} aria-label="Cache totals">
+      <section className={`metric-band${liveTotals ? " is-live" : ""}`} aria-label="Local data summary">
         <Metric label="Projects" value={metricTotals?.project_count ?? 0} />
         <Metric label="Sessions" value={metricTotals?.session_count ?? 0} />
-        <Metric label="Events" value={metricTotals?.event_count ?? 0} />
-        <Metric label="Subagents" value={metricTotals?.subagent_count ?? 0} />
-        <Metric label="Memory" value={metricTotals?.memory_count ?? 0} />
-        <Metric label="Large outputs" value={metricTotals?.persisted_output_count ?? 0} />
+        <Metric
+          label="Observed coverage"
+          value={formatDateCoverage(metricTotals?.observed_date_from, metricTotals?.observed_date_to)}
+        />
+        <Metric
+          label="Last successful sync"
+          value={formatSyncDate(metricTotals?.last_successful_sync_at)}
+        />
+        <Metric label="Skipped / errors" value={latestErrorCount} alert={latestErrorCount > 0} />
+      </section>
+
+      <section
+        className={`import-diagnostics${latestIssues.length > 0 ? " has-issues" : ""}`}
+        aria-label="Import diagnostics"
+      >
+        <div className="diagnostics-summary">
+          <span className="diagnostics-label">Diagnostics</span>
+          <span>{(metricTotals?.event_count ?? 0).toLocaleString()} events</span>
+          <span>{(metricTotals?.subagent_count ?? 0).toLocaleString()} subagents</span>
+          <span>{(metricTotals?.memory_count ?? 0).toLocaleString()} memory nodes</span>
+          <span>{(metricTotals?.persisted_output_count ?? 0).toLocaleString()} large outputs</span>
+        </div>
+        {latestIssues.length > 0 && (
+          <div className="import-issues">
+            <div className="import-issues-title">
+              <AlertTriangle size={13} aria-hidden="true" />
+              <span>{latestIssues.length.toLocaleString()} skipped record{latestIssues.length === 1 ? "" : "s"} in the latest sync</span>
+            </div>
+            <ul>
+              {latestIssues.map((issue, index) => (
+                <li key={`${issue.path}:${issue.line_no ?? "file"}:${index}`}>
+                  <code>{issue.path}{issue.line_no == null ? "" : `:${issue.line_no}`}</code>
+                  <span>{issue.message}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </section>
 
       {showDemoCard && (
@@ -191,10 +235,14 @@ function ImportPage() {
           )}
           {discovered.map((project: DiscoveredProject) => {
             const busy = pendingName === project.name;
+            const displayName = project.display_name || project.name;
             return (
               <div className={`import-row${project.imported ? " is-imported" : ""}`} key={project.name}>
                 <span className={`status-dot${project.imported ? " on" : ""}`} aria-hidden="true" />
-                <span className="path">{project.name}</span>
+                <span className="import-project-identity">
+                  <strong>{displayName}</strong>
+                  <code>{project.name}</code>
+                </span>
                 <span className="row-meta">
                   {project.imported ? (
                     <>
@@ -211,7 +259,7 @@ function ImportPage() {
                   className="ghost-action"
                   onClick={() => importOne.mutate(project.name)}
                   disabled={mutationPending}
-                  aria-label={`${project.imported ? "Re-import" : "Import"} ${project.name}`}
+                  aria-label={`${project.imported ? "Re-import" : "Import"} ${displayName}`}
                 >
                   {busy ? <LoadingBar size="inline" label="Importing" /> : project.imported ? <RotateCcw size={14} /> : <FolderInput size={14} />}
                   <span>{busy ? "Importing…" : project.imported ? "Re-import" : "Import"}</span>
@@ -241,11 +289,42 @@ function formatImported(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function formatDateCoverage(from?: string | null, to?: string | null): string {
+  if (!from && !to) return "No sessions";
+  const first = from ?? to;
+  if (!first) return "No sessions";
+  if (!from || from === to) return formatCalendarDate(first);
+  return `${formatCalendarDate(from)} – ${to ? formatCalendarDate(to) : formatCalendarDate(from)}`;
+}
+
+function formatSyncDate(iso?: string | null): string {
+  if (!iso) return "Never";
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return "Unknown";
+  return parsed.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function formatCalendarDate(iso: string): string {
+  const parsed = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return iso;
+  return parsed.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+function Metric({ label, value, alert = false }: { label: string; value: number | string; alert?: boolean }) {
+  const textValue = typeof value === "string";
   return (
-    <div className="metric">
+    <div className={`metric${textValue ? " is-text" : ""}${alert ? " has-alert" : ""}`}>
       <span>{label}</span>
-      <strong>{value.toLocaleString()}</strong>
+      <strong>{typeof value === "number" ? value.toLocaleString() : value}</strong>
     </div>
   );
 }

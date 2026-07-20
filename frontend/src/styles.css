@@ -445,7 +445,7 @@ h3 {
   background: color-mix(in srgb, var(--err) 9%, var(--bg));
 }
 
-.metric-band { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin: 18px 0; }
+.metric-band { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin: 18px 0 10px; }
 .metric { border: 1px solid var(--border); border-radius: 13px; padding: 16px; background: var(--surface); }
 .metric-band.is-live .metric {
   border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
@@ -453,6 +453,36 @@ h3 {
 }
 .metric span { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
 .metric strong { display: block; margin-top: 9px; font-size: 24px; font-weight: 700; color: var(--text-strong); }
+.metric.is-text strong { font-size: 15px; line-height: 1.35; }
+.metric.has-alert {
+  border-color: color-mix(in srgb, var(--err) 40%, var(--border));
+  background: color-mix(in srgb, var(--err) 4%, var(--surface));
+}
+.metric.has-alert strong { color: var(--err); }
+
+.import-diagnostics {
+  margin-bottom: 10px; border: 1px solid var(--border); border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--bg)); overflow: hidden;
+  color: var(--faint); font-size: 10.5px;
+}
+.diagnostics-summary {
+  display: flex; align-items: center; gap: 8px 16px; min-height: 32px; padding: 0 12px;
+  white-space: nowrap; overflow-x: auto;
+}
+.diagnostics-label {
+  color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+}
+.import-diagnostics.has-issues { border-color: color-mix(in srgb, var(--err) 30%, var(--border)); }
+.import-issues { border-top: 1px solid color-mix(in srgb, var(--err) 24%, var(--border)); }
+.import-issues-title {
+  display: flex; align-items: center; gap: 7px; padding: 7px 12px;
+  color: var(--err); font-weight: 700;
+}
+.import-issues ul {
+  max-height: 82px; margin: 0; padding: 0 12px 8px; overflow: auto; list-style: none;
+}
+.import-issues li { display: flex; gap: 10px; padding: 3px 0; color: var(--muted); }
+.import-issues code { min-width: 0; color: var(--text); overflow-wrap: anywhere; }
 
 .map-footer {
   border: 1px solid var(--border);
@@ -489,11 +519,14 @@ h3 {
 .import-row .status-dot.on {
   background: var(--asst); box-shadow: 0 0 0 3px color-mix(in srgb, var(--asst) 22%, transparent);
 }
-.import-row .path {
-  color: var(--text); overflow-wrap: anywhere; font-weight: 700;
-  font-family: var(--font-mono); font-size: 12px;
+.import-project-identity { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.import-project-identity strong {
+  color: var(--text); overflow-wrap: anywhere; font-size: 12.5px; font-weight: 700;
 }
-.import-row:not(.is-imported) .path { color: var(--muted); font-weight: 400; }
+.import-project-identity code {
+  color: var(--faint); overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 10.5px;
+}
+.import-row:not(.is-imported) .import-project-identity strong { color: var(--muted); font-weight: 600; }
 .import-row .row-meta { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
 .import-row .row-meta b { color: var(--text); }
 .import-row .row-time { color: var(--faint); }

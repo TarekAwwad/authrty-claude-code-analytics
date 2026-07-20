@@ -10,6 +10,7 @@ import type {
   DiscoveredProject,
   EventDetail,
   ImportProgress,
+  ImportRecord,
   ImportSummary,
   LimitsResponse,
   Project,
@@ -98,7 +99,7 @@ export function resetImports() {
 }
 
 export function listImports() {
-  return request<Array<Record<string, unknown>>>("/imports");
+  return request<ImportRecord[]>("/imports");
 }
 
 export function getImportProgress() {

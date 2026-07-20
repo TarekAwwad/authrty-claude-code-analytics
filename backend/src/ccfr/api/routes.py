@@ -46,6 +46,7 @@ from ccfr.api.schemas import (
     DiscoveredProjectResponse,
     EventDetail,
     ImportProgressResponse,
+    ImportRecordResponse,
     ImportRequest,
     ImportSummaryResponse,
     LimitsResponse,
@@ -87,7 +88,7 @@ from ccfr.config import (
     validate_project_name,
 )
 from ccfr.ingest import ImportSummary, discover_projects, import_all_new, import_project
-from ccfr.storage import reset_db
+from ccfr.storage import reset_local_data
 
 router = APIRouter(prefix="/api")
 
@@ -414,7 +415,7 @@ def create_demo_import(conn: Connection = Depends(get_db)) -> ImportSummaryRespo
 
 @router.post("/imports/reset", response_model=dict[str, bool])
 def reset_import(conn: Connection = Depends(get_db)) -> dict:
-    reset_db(conn)
+    reset_local_data(conn)
     import_progress_store.clear()
     return {"ok": True}
 
@@ -429,12 +430,23 @@ def list_source_projects(
         discovered = discover_projects(conn, source)
     except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return [DiscoveredProjectResponse(**d.__dict__) for d in discovered]
+    inferred_cwds: dict[str, str | None] = {}
+    for row in conn.execute(
+        "SELECT export_name, inferred_cwd FROM projects ORDER BY id"
+    ).fetchall():
+        inferred_cwds[str(row["export_name"])] = row["inferred_cwd"]
+    return [
+        DiscoveredProjectResponse(
+            **d.__dict__,
+            display_name=project_display_name(d.name, inferred_cwds.get(d.name)),
+        )
+        for d in discovered
+    ]
 
 
-@router.get("/imports")
-def list_imports(conn: Connection = Depends(get_db)) -> list[dict]:
-    return repository.list_imports(conn)
+@router.get("/imports", response_model=list[ImportRecordResponse])
+def list_imports(conn: Connection = Depends(get_db)) -> list[ImportRecordResponse]:
+    return [ImportRecordResponse(**row) for row in repository.list_imports(conn)]
 
 
 @router.get("/imports/progress", response_model=ImportProgressResponse)

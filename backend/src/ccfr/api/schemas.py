@@ -31,6 +31,10 @@ class CacheStatsResponse(BaseModel):
     subagent_count: int
     memory_count: int
     persisted_output_count: int
+    observed_date_from: str | None = None
+    observed_date_to: str | None = None
+    last_successful_sync_at: str | None = None
+    latest_import_error_count: int = 0
 
 
 class ImportProgressSummary(BaseModel):
@@ -71,10 +75,27 @@ class ImportSummaryResponse(BaseModel):
 
 class DiscoveredProjectResponse(BaseModel):
     name: str
+    display_name: str
     imported: bool
     session_count: int
     last_imported_at: str | None
     stale: bool = False
+
+
+class ImportErrorResponse(BaseModel):
+    path: str
+    line_no: int | None
+    message: str
+
+
+class ImportRecordResponse(BaseModel):
+    id: int
+    source_path: str
+    imported_at: str
+    file_count: int
+    status: str
+    error_count: int
+    errors: list[ImportErrorResponse] = Field(default_factory=list)
 
 
 class ProjectResponse(BaseModel):

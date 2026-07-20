@@ -95,6 +95,50 @@ def test_init_db_and_reset_cover_team_bundle_tables() -> None:
     assert conn.execute("SELECT COUNT(*) FROM team_bundle_sessions").fetchone()[0] == 0
 
 
+def test_reset_local_data_preserves_team_bundles() -> None:
+    from ccfr.storage import database as storage_database
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    local_import_id = conn.execute(
+        "INSERT INTO imports(source_path, imported_at, status) VALUES('local', '2026-07-01', 'completed')"
+    ).lastrowid
+    project_id = conn.execute(
+        "INSERT INTO projects(import_id, export_name) VALUES(?, 'd--Local')",
+        (local_import_id,),
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO sessions(project_id, session_id) VALUES(?, 'local-session')",
+        (project_id,),
+    )
+    team_bundle_id = conn.execute(
+        """
+        INSERT INTO team_bundles(
+            bundle_id, profile, schema_version, member_id, generated_at,
+            app_version, imported_at, source_path, session_count
+        ) VALUES ('team-bundle', 'structural', 3, 'member', '2026-07-01',
+                  '0.1.0', '2026-07-01T00:00:00Z', 'team.json', 1)
+        """
+    ).lastrowid
+    conn.execute(
+        """
+        INSERT INTO team_bundle_sessions(
+            team_bundle_id, member_id, project_id, session_id, provider
+        ) VALUES (?, 'member', 'team-project', 'team-session', 'claude')
+        """,
+        (team_bundle_id,),
+    )
+
+    storage_database.reset_local_data(conn)
+
+    assert conn.execute("SELECT COUNT(*) FROM imports").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM team_bundles").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM team_bundle_sessions").fetchone()[0] == 1
+
+
 def test_init_db_creates_tokens_by_model_column() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row

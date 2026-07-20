@@ -9,6 +9,51 @@ from ccfr.storage import init_db
 from tests.fixtures import sanitized_export
 
 
+def test_import_status_exposes_coverage_latest_success_and_persisted_issues() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    successful_id = conn.execute(
+        """
+        INSERT INTO imports(source_path, imported_at, file_count, status, error_count)
+        VALUES('source-a', '2026-06-01T12:00:00Z', 4, 'completed_with_errors', 2)
+        """
+    ).lastrowid
+    failed_id = conn.execute(
+        """
+        INSERT INTO imports(source_path, imported_at, file_count, status, error_count)
+        VALUES('source-b', '2026-06-02T12:00:00Z', 1, 'failed', 1)
+        """
+    ).lastrowid
+    project_id = conn.execute(
+        "INSERT INTO projects(import_id, export_name) VALUES(?, 'd--Alpha')",
+        (successful_id,),
+    ).lastrowid
+    conn.executemany(
+        "INSERT INTO sessions(project_id, session_id, first_ts, last_ts) VALUES(?, ?, ?, ?)",
+        [
+            (project_id, "early", "2026-01-03T10:00:00Z", "2026-01-03T10:05:00Z"),
+            (project_id, "late", "2026-05-09T10:00:00Z", None),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO import_errors(import_id, path, line_no, message) VALUES(?, 'bad.jsonl', 7, 'Invalid JSON')",
+        (failed_id,),
+    )
+
+    stats = repository.cache_stats(conn)
+    history = repository.list_imports(conn)
+
+    assert stats["observed_date_from"] == "2026-01-03"
+    assert stats["observed_date_to"] == "2026-05-09"
+    assert stats["last_successful_sync_at"] == "2026-06-01T12:00:00Z"
+    assert stats["latest_import_error_count"] == 1
+    assert history[0]["status"] == "failed"
+    assert history[0]["errors"] == [
+        {"path": "bad.jsonl", "line_no": 7, "message": "Invalid JSON"}
+    ]
+
+
 def test_repository_returns_session_timeline_trace_and_event_detail(tmp_path: Path) -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
