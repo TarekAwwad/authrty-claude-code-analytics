@@ -27,7 +27,6 @@ class ImportSummary:
     session_count: int = 0
     event_count: int = 0
     subagent_count: int = 0
-    memory_count: int = 0
     persisted_output_count: int = 0
     file_count: int = 0
     error_count: int = 0
@@ -68,14 +67,15 @@ def import_all_new(
 ) -> ImportSummary:
     source_root = _validate_root(source_root)
     _prepare_conn(conn)
-    file_count = sum(1 for p in source_root.rglob("*") if p.is_file())
+    project_dirs = sorted(p for p in source_root.iterdir() if p.is_dir())
+    file_count = sum(_project_file_count(project_dir) for project_dir in project_dirs)
     import_id, summary = _create_import_row(conn, source_root, file_count)
     conn.commit()  # the imports row must survive a later project rollback
     _notify_progress(progress_callback, summary, "running")
 
     session_ids: list[int] = []
     project_ids: list[int] = []
-    for project_dir in sorted(p for p in source_root.iterdir() if p.is_dir()):
+    for project_dir in project_dirs:
         if not include_existing and not _project_needs_import(conn, project_dir):
             continue
         project_count_before = summary.project_count
@@ -117,7 +117,7 @@ def import_project(
     if not project_dir.is_dir():
         raise FileNotFoundError(f"Project not found under import root: {project_name}")
     _prepare_conn(conn)
-    file_count = sum(1 for p in project_dir.rglob("*") if p.is_file())
+    file_count = _project_file_count(project_dir)
     import_id, summary = _create_import_row(conn, source_root, file_count)
     conn.commit()
     _notify_progress(progress_callback, summary, "running")
@@ -213,11 +213,27 @@ def _project_source_signature(project_dir: Path) -> str:
     for path in sorted(project_dir.rglob("*")):
         if not path.is_file():
             continue
+        relative_path = path.relative_to(project_dir)
+        if _is_memory_source_path(relative_path):
+            continue
         stat = path.stat()
         digest.update(
-            f"{path.relative_to(project_dir).as_posix()}\0{stat.st_size}\0{stat.st_mtime_ns}\0".encode()
+            f"{relative_path.as_posix()}\0{stat.st_size}\0{stat.st_mtime_ns}\0".encode()
         )
     return digest.hexdigest()
+
+
+def _project_file_count(project_dir: Path) -> int:
+    return sum(
+        1
+        for path in project_dir.rglob("*")
+        if path.is_file()
+        and not _is_memory_source_path(path.relative_to(project_dir))
+    )
+
+
+def _is_memory_source_path(relative_path: Path) -> bool:
+    return bool(relative_path.parts and relative_path.parts[0] == "memory")
 
 
 def _project_needs_import(conn: sqlite3.Connection, project_dir: Path) -> bool:
@@ -278,12 +294,6 @@ def _import_one_project(
                 )
                 _notify_progress(progress_callback, summary, "importing")
 
-    memory_dir = project_dir / "memory"
-    if memory_dir.exists():
-        for memory_file in sorted(memory_dir.glob("*.md")):
-            _insert_memory(conn, summary, source_root, memory_file, project_id)
-            _notify_progress(progress_callback, summary, "importing")
-
     session_ids = [int(r["id"]) for r in conn.execute(
         "SELECT id FROM sessions WHERE project_id = ?", (project_id,)
     ).fetchall()]
@@ -321,7 +331,6 @@ def _delete_project_by_name(conn: sqlite3.Connection, export_name: str) -> None:
             ("events", "session_id"),
         ]:
             conn.execute(f"DELETE FROM {table} WHERE {col} IN ({sp})", session_ids)
-    conn.execute("DELETE FROM memory_nodes WHERE project_id = ?", (project_id,))
     conn.execute("DELETE FROM search_index WHERE project_id = ?", (project_id,))
     conn.execute("DELETE FROM sessions WHERE project_id = ?", (project_id,))
     conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
@@ -332,7 +341,6 @@ def _finalize_import(
     summary: ImportSummary,
     import_id: int,
     session_ids: list[int],
-    project_ids: list[int],
     *,
     progress_callback: ProgressCallback | None = None,
 ) -> None:
@@ -345,10 +353,6 @@ def _finalize_import(
             f"SELECT COUNT(*) FROM subagents WHERE parent_session_id IN ({sp})", session_ids).fetchone()[0])
         summary.persisted_output_count = int(conn.execute(
             f"SELECT COUNT(*) FROM persisted_outputs WHERE session_id IN ({sp})", session_ids).fetchone()[0])
-    if project_ids:
-        pp = ",".join("?" * len(project_ids))
-        summary.memory_count = int(conn.execute(
-            f"SELECT COUNT(*) FROM memory_nodes WHERE project_id IN ({pp})", project_ids).fetchone()[0])
     summary.error_count = len(summary.errors)
     status = "completed_with_errors" if summary.errors else "completed"
     conn.execute(
@@ -383,7 +387,7 @@ def _finish_import_or_strand(
     try:
         _notify_progress(progress_callback, summary, "rebuilding")
         _rebuild_derived(conn, session_ids, project_ids)
-        _finalize_import(conn, summary, import_id, session_ids, project_ids, progress_callback=progress_callback)
+        _finalize_import(conn, summary, import_id, session_ids, progress_callback=progress_callback)
     except Exception:
         conn.rollback()
         if project_ids:
@@ -891,54 +895,6 @@ def _insert_subagent_meta(
     )
 
 
-def _insert_memory(
-    conn: sqlite3.Connection,
-    summary: ImportSummary,
-    root: Path,
-    memory_file: Path,
-    project_id: int,
-) -> None:
-    rel_path = _rel(root, memory_file)
-    try:
-        text = memory_file.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        _record_error(conn, summary, rel_path, None, f"Could not read memory file: {exc}")
-        return
-    frontmatter, body = _parse_frontmatter(text)
-    conn.execute(
-        """
-        INSERT INTO memory_nodes(project_id, path, name, type, description, origin_session_id, text_preview)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            project_id,
-            rel_path,
-            frontmatter.get("name") or memory_file.stem,
-            frontmatter.get("type") or frontmatter.get("node_type"),
-            frontmatter.get("description"),
-            frontmatter.get("originSessionId"),
-            _shorten(body or text, 800),
-        ),
-    )
-
-
-def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}, text
-    meta: dict[str, str] = {}
-    end = 0
-    for idx, line in enumerate(lines[1:], start=1):
-        if line.strip() == "---":
-            end = idx
-            break
-        if ":" in line and not line.startswith(" "):
-            key, value = line.split(":", 1)
-            meta[key.strip()] = value.strip().strip('"')
-    body = "\n".join(lines[end + 1 :]) if end else text
-    return meta, body
-
-
 def _record_error(
     conn: sqlite3.Connection,
     summary: ImportSummary,
@@ -1188,12 +1144,4 @@ def _populate_search(conn: sqlite3.Connection, project_ids: list[int]) -> None:
             )
             for row in subagent_rows
         ],
-    )
-    memory_rows = conn.execute(
-        f"SELECT id, project_id, name, description, text_preview FROM memory_nodes WHERE project_id IN ({pp})",
-        project_ids,
-    ).fetchall()
-    conn.executemany(
-        "INSERT INTO search_index(kind, ref_id, project_id, session_id, title, body) VALUES (?, ?, ?, ?, ?, ?)",
-        [("memory", row["id"], row["project_id"], None, row["name"], f"{row['description'] or ''} {row['text_preview'] or ''}") for row in memory_rows],
     )

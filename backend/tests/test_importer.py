@@ -27,7 +27,6 @@ def test_import_fixture_counts(tmp_path: Path) -> None:
     assert summary.session_count == SANITIZED_EXPORT_COUNTS["session_count"]
     assert summary.event_count == SANITIZED_EXPORT_COUNTS["event_count"]
     assert summary.subagent_count == SANITIZED_EXPORT_COUNTS["subagent_count"]
-    assert summary.memory_count == SANITIZED_EXPORT_COUNTS["memory_count"]
     assert summary.persisted_output_count == SANITIZED_EXPORT_COUNTS["persisted_output_count"]
     assert summary.error_count == 0
     assert conn.execute("SELECT COUNT(*) FROM tool_calls").fetchone()[0] == SANITIZED_EXPORT_COUNTS["tool_call_count"]
@@ -51,6 +50,31 @@ def test_import_fixture_links_tool_cycles_and_search(tmp_path: Path) -> None:
     assert tool_edges > 0
     assert parent_edges > 0
     assert search_hits > 0
+
+
+def test_memory_source_files_are_ignored_without_being_modified(tmp_path: Path) -> None:
+    from ccfr.ingest import discover_projects
+
+    _write_project(tmp_path, "d--Alpha", "11111111-1111-1111-1111-111111111111")
+    memory_dir = tmp_path / "d--Alpha" / "memory"
+    memory_dir.mkdir()
+    memory_file = memory_dir / "private-note.md"
+    memory_file.write_text("private memory content", encoding="utf-8")
+    original_bytes = memory_file.read_bytes()
+
+    conn = memory_conn()
+    summary = import_export(conn, tmp_path)
+
+    assert not hasattr(summary, "memory_count")
+    assert summary.file_count == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM search_index WHERE kind = 'memory'"
+    ).fetchone()[0] == 0
+    assert memory_file.read_bytes() == original_bytes
+
+    memory_file.write_text("changed private memory content", encoding="utf-8")
+    discovered = discover_projects(conn, tmp_path)
+    assert discovered[0].stale is False
 
 
 def test_malformed_jsonl_is_reported_without_aborting(tmp_path: Path) -> None:
@@ -716,8 +740,8 @@ def test_rolled_back_recoverable_errors_do_not_linger_in_summary(tmp_path: Path,
     import ccfr.ingest.importer as importer_mod
     from ccfr.ingest import import_all_new
 
-    # Beta has a recoverable bad line (recorded mid-transaction) and a memory
-    # file whose insert we make fatal — the rollback must also purge the
+    # Beta has a recoverable bad line (recorded mid-transaction) followed by a
+    # subagent metadata insert we make fatal. The rollback must also purge the
     # recoverable entry from the in-memory summary.
     project = tmp_path / "d--Beta"
     project.mkdir()
@@ -730,14 +754,16 @@ def test_rolled_back_recoverable_errors_do_not_linger_in_summary(tmp_path: Path,
         ),
         encoding="utf-8",
     )
-    memory_dir = project / "memory"
-    memory_dir.mkdir()
-    (memory_dir / "note.md").write_text("note", encoding="utf-8")
+    subagents_dir = (
+        project / "33333333-3333-3333-3333-333333333333" / "subagents"
+    )
+    subagents_dir.mkdir(parents=True)
+    (subagents_dir / "agent-deadbeef.meta.json").write_text("{}", encoding="utf-8")
 
-    def boom(conn, summary, root, memory_file, project_id):
-        raise RuntimeError("memory insert failed")
+    def boom(conn, summary, root, meta_file, session_id):
+        raise RuntimeError("subagent metadata insert failed")
 
-    monkeypatch.setattr(importer_mod, "_insert_memory", boom)
+    monkeypatch.setattr(importer_mod, "_insert_subagent_meta", boom)
     conn = memory_conn()
     summary = import_all_new(conn, tmp_path, include_existing=True)
 

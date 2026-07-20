@@ -14,7 +14,6 @@ SANITIZED_EXPORT_COUNTS = {
     "session_count": 3,
     "event_count": 20,
     "subagent_count": 1,
-    "memory_count": 2,
     "persisted_output_count": 1,
     "tool_call_count": 6,
     "sidechain_event_count": 3,

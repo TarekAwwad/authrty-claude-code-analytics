@@ -48,13 +48,13 @@ vi.mock("./api/client", () => ({
   })),
   getCacheStats: vi.fn(async () => ({
     project_count: 0, session_count: 0, event_count: 0,
-    subagent_count: 0, memory_count: 0, persisted_output_count: 0,
+    subagent_count: 0, persisted_output_count: 0,
     observed_date_from: null, observed_date_to: null,
     last_successful_sync_at: null, latest_import_error_count: 0,
   })),
   getImportProgress: vi.fn(async () => ({
     active: false, import_id: null, project_count: 0, session_count: 0,
-    event_count: 0, subagent_count: 0, memory_count: 0, persisted_output_count: 0,
+    event_count: 0, subagent_count: 0, persisted_output_count: 0,
   })),
   getCostAnalytics: vi.fn(async () => ({
     meta: { available: false, unpriced_models: [], costs_partial: false, costs_are_lower_bound: false, total_usd: 0, total_tokens: 0,

@@ -61,6 +61,53 @@ def test_init_db_creates_analytics_indexes() -> None:
     assert {"idx_event_edges_session", "idx_event_edges_source", "idx_event_edges_target"} <= edge_indexes
 
 
+def test_init_db_has_no_memory_table_and_migrates_legacy_memory_index() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    import_id = conn.execute(
+        "INSERT INTO imports(source_path, imported_at, status) VALUES('source', '2026-07-20', 'completed')"
+    ).lastrowid
+    project_id = conn.execute(
+        "INSERT INTO projects(import_id, export_name) VALUES(?, 'd--Legacy')",
+        (import_id,),
+    ).lastrowid
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS memory_nodes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            name TEXT,
+            text_preview TEXT
+        )
+        """
+    )
+    memory_id = conn.execute(
+        "INSERT INTO memory_nodes(project_id, path, name, text_preview) VALUES(?, 'memory/note.md', 'note', 'private')",
+        (project_id,),
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO search_index(kind, ref_id, project_id, title, body) VALUES('memory', ?, ?, 'note', 'private')",
+        (memory_id, project_id),
+    )
+    conn.commit()
+
+    init_db(conn)
+
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    assert "memory_nodes" not in tables
+    assert conn.execute(
+        "SELECT COUNT(*) FROM search_index WHERE kind = 'memory'"
+    ).fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
+
+
 def test_init_db_and_reset_cover_team_bundle_tables() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row

@@ -5,7 +5,6 @@ export interface ImportSummary {
   session_count: number;
   event_count: number;
   subagent_count: number;
-  memory_count: number;
   persisted_output_count: number;
   file_count: number;
   error_count: number;
@@ -24,7 +23,6 @@ export interface IngestCounts {
   session_count: number;
   event_count: number;
   subagent_count: number;
-  memory_count: number;
   persisted_output_count: number;
 }
 

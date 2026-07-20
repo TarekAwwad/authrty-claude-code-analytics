@@ -12,6 +12,8 @@ describe("GlossaryDialog", () => {
     expect(
       screen.getByText(/secondary agent the main thread spawns/i),
     ).toBeInTheDocument();
+    expect(screen.queryByText("Memory")).not.toBeInTheDocument();
+    expect(screen.queryByText(/memory file/i)).not.toBeInTheDocument();
   });
 
   it("switches panels when another tab is selected, revealing that tab's terms and score detail", () => {

@@ -63,12 +63,6 @@ export const GLOSSARY_TERMS: GlossaryTerm[] = [
   },
   {
     category: "Structure",
-    term: "Memory",
-    definition:
-      "A fact Claude Code persisted during a session so it carries across runs (for example a note written to a memory file). The Import page's \"Memory\" stat counts how many were captured across all sessions.",
-  },
-  {
-    category: "Structure",
     term: "Large output",
     definition:
       "A tool output big enough that it was stored on its own rather than inline with the event — typically a heavy file read or verbose command output. The Import page's \"Large outputs\" stat counts these.",

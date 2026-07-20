@@ -157,7 +157,6 @@ def cache_stats(conn: sqlite3.Connection) -> dict[str, Any]:
         "session_count": "SELECT COUNT(*) FROM sessions",
         "event_count": "SELECT COUNT(*) FROM events",
         "subagent_count": "SELECT COUNT(*) FROM subagents",
-        "memory_count": "SELECT COUNT(*) FROM memory_nodes",
         "persisted_output_count": "SELECT COUNT(*) FROM persisted_outputs",
     }
     result: dict[str, Any] = {
@@ -224,12 +223,6 @@ def import_summary_stats(conn: sqlite3.Connection, import_id: int) -> dict[str, 
             FROM subagents sa
             JOIN sessions s ON s.id = sa.parent_session_id
             JOIN projects p ON p.id = s.project_id
-            WHERE p.import_id = ?
-        """,
-        "memory_count": """
-            SELECT COUNT(*)
-            FROM memory_nodes m
-            JOIN projects p ON p.id = m.project_id
             WHERE p.import_id = ?
         """,
         "persisted_output_count": """

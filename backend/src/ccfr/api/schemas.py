@@ -29,7 +29,6 @@ class CacheStatsResponse(BaseModel):
     session_count: int
     event_count: int
     subagent_count: int
-    memory_count: int
     persisted_output_count: int
     observed_date_from: str | None = None
     observed_date_to: str | None = None
@@ -42,7 +41,6 @@ class ImportProgressSummary(BaseModel):
     session_count: int
     event_count: int
     subagent_count: int
-    memory_count: int
     persisted_output_count: int
     file_count: int
     error_count: int
@@ -66,7 +64,6 @@ class ImportSummaryResponse(BaseModel):
     session_count: int
     event_count: int
     subagent_count: int
-    memory_count: int
     persisted_output_count: int
     file_count: int
     error_count: int

@@ -241,6 +241,8 @@ def test_import_progress_reports_running_project(client, monkeypatch: pytest.Mon
     assert progress["totals"]["event_count"] == 1
     assert progress["summary"]["project_count"] == 1
     assert progress["summary"]["event_count"] == 1
+    assert "memory_count" not in progress["totals"]
+    assert "memory_count" not in progress["summary"]
 
     release.set()
     thread.join(5)
@@ -281,7 +283,6 @@ def test_stats_reflect_current_cache(client) -> None:
         "session_count": 0,
         "event_count": 0,
         "subagent_count": 0,
-        "memory_count": 0,
         "persisted_output_count": 0,
         "observed_date_from": None,
         "observed_date_to": None,

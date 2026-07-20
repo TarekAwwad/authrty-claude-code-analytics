@@ -23,7 +23,7 @@ beforeEach(() => {
   vi.spyOn(client, "listImports").mockResolvedValue([]);
   vi.spyOn(client, "getCacheStats").mockResolvedValue({
     project_count: 0, session_count: 0, event_count: 0,
-    subagent_count: 0, memory_count: 0, persisted_output_count: 0,
+    subagent_count: 0, persisted_output_count: 0,
     observed_date_from: null, observed_date_to: null,
     last_successful_sync_at: null, latest_import_error_count: 0,
   });
@@ -48,7 +48,7 @@ describe("ImportPage", () => {
     ]);
     const createImport = vi.spyOn(client, "createImport").mockResolvedValue({
       import_id: 1, source_path: "/srv/Data", project_count: 1, session_count: 1,
-      event_count: 1, subagent_count: 0, memory_count: 0, persisted_output_count: 0,
+      event_count: 1, subagent_count: 0, persisted_output_count: 0,
       file_count: 1, error_count: 0, errors: [],
     });
 
@@ -103,7 +103,6 @@ describe("ImportPage", () => {
         session_count: 24,
         event_count: 9876,
         subagent_count: 31,
-        memory_count: 4,
         persisted_output_count: 5,
         observed_date_from: "2026-01-01",
         observed_date_to: "2026-06-03",
@@ -115,7 +114,6 @@ describe("ImportPage", () => {
         session_count: 1,
         event_count: 9876,
         subagent_count: 31,
-        memory_count: 4,
         persisted_output_count: 5,
         file_count: 10,
         error_count: 0,
@@ -188,7 +186,7 @@ describe("ImportPage", () => {
     vi.spyOn(client, "discoverSourceProjects").mockResolvedValue([]);
     vi.mocked(client.getCacheStats).mockResolvedValue({
       project_count: 1, session_count: 13, event_count: 3679,
-      subagent_count: 57, memory_count: 0, persisted_output_count: 0,
+      subagent_count: 57, persisted_output_count: 0,
       observed_date_from: "2026-01-01", observed_date_to: "2026-06-01",
       last_successful_sync_at: "2026-06-03T00:00:00Z", latest_import_error_count: 0,
     });
@@ -206,7 +204,7 @@ describe("ImportPage", () => {
     vi.spyOn(client, "discoverSourceProjects").mockResolvedValue([]);
     const loadDemo = vi.spyOn(client, "loadDemoData").mockResolvedValue({
       import_id: 1, source_path: "/demo", project_count: 3, session_count: 46,
-      event_count: 900, subagent_count: 26, memory_count: 6, persisted_output_count: 4,
+      event_count: 900, subagent_count: 26, persisted_output_count: 4,
       file_count: 120, error_count: 0, errors: [],
     });
 
@@ -224,7 +222,7 @@ describe("ImportPage", () => {
     ]);
     vi.spyOn(client, "loadDemoData").mockResolvedValue({
       import_id: 1, source_path: "/demo", project_count: 3, session_count: 46,
-      event_count: 900, subagent_count: 26, memory_count: 6, persisted_output_count: 4,
+      event_count: 900, subagent_count: 26, persisted_output_count: 4,
       file_count: 120, error_count: 0, errors: [],
     });
 
@@ -260,7 +258,6 @@ describe("ImportPage", () => {
       session_count: 42,
       event_count: 9_876,
       subagent_count: 19,
-      memory_count: 4,
       persisted_output_count: 2,
       observed_date_from: "2026-01-03",
       observed_date_to: "2026-05-09",
@@ -296,6 +293,7 @@ describe("ImportPage", () => {
     await waitFor(() => expect(diagnostics).toHaveTextContent("Invalid JSON"));
     expect(diagnostics).toHaveTextContent("9,876 events");
     expect(diagnostics).toHaveTextContent("19 subagents");
+    expect(diagnostics).not.toHaveTextContent(/memory/i);
     expect(diagnostics).toHaveTextContent("Invalid JSON");
     expect(diagnostics).toHaveTextContent("session.jsonl");
   });

@@ -175,7 +175,6 @@ function ImportPage() {
           <span className="diagnostics-label">Diagnostics</span>
           <span>{(metricTotals?.event_count ?? 0).toLocaleString()} events</span>
           <span>{(metricTotals?.subagent_count ?? 0).toLocaleString()} subagents</span>
-          <span>{(metricTotals?.memory_count ?? 0).toLocaleString()} memory nodes</span>
           <span>{(metricTotals?.persisted_output_count ?? 0).toLocaleString()} large outputs</span>
         </div>
         {latestIssues.length > 0 && (

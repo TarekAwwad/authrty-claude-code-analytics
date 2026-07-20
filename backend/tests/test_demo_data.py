@@ -42,7 +42,6 @@ def test_generated_tree_imports_without_errors(tmp_path):
     assert summary.error_count == 0
     assert summary.project_count == 3
     assert summary.session_count == 46
-    assert summary.memory_count == 6
     assert summary.subagent_count >= 24
     names = {row["export_name"] for row in conn.execute("SELECT export_name FROM projects")}
     assert names == {"demo-web-shop", "demo-mobile-app", "demo-data-pipeline"}

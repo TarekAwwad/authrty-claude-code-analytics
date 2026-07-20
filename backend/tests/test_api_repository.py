@@ -48,6 +48,7 @@ def test_import_status_exposes_coverage_latest_success_and_persisted_issues() ->
     assert stats["observed_date_to"] == "2026-05-09"
     assert stats["last_successful_sync_at"] == "2026-06-01T12:00:00Z"
     assert stats["latest_import_error_count"] == 1
+    assert "memory_count" not in stats
     assert history[0]["status"] == "failed"
     assert history[0]["errors"] == [
         {"path": "bad.jsonl", "line_no": 7, "message": "Invalid JSON"}

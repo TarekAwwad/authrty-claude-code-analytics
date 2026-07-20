@@ -154,19 +154,6 @@ CREATE TABLE IF NOT EXISTS subagents (
     UNIQUE(parent_session_id, agent_id)
 );
 
-CREATE TABLE IF NOT EXISTS memory_nodes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    path TEXT NOT NULL,
-    name TEXT,
-    type TEXT,
-    description TEXT,
-    origin_session_id TEXT,
-    text_preview TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_memory_nodes_project ON memory_nodes(project_id);
-
 CREATE TABLE IF NOT EXISTS event_edges (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -352,6 +339,7 @@ def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
 def migrate_db(conn: sqlite3.Connection) -> None:
     """Apply lightweight migrations for databases created by older app versions."""
     _drop_legacy_risk_tables(conn)
+    _drop_unused_memory_index(conn)
     _migrate_session_stats(conn)
 
     existing_message_columns = _column_names(conn, "messages")
@@ -417,6 +405,16 @@ def _drop_legacy_risk_tables(conn: sqlite3.Connection) -> None:
     """Remove obsolete inferred-pattern caches while preserving receipt findings."""
     for table in ("risk_findings", "pattern_hits", "sequence_patterns"):
         conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+
+def _drop_unused_memory_index(conn: sqlite3.Connection) -> None:
+    """Remove the retired derived memory index without touching source files."""
+    search_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name = 'search_index'"
+    ).fetchone()
+    if search_exists:
+        conn.execute("DELETE FROM search_index WHERE kind = 'memory'")
+    conn.execute("DROP TABLE IF EXISTS memory_nodes")
 
 
 def _migrate_session_stats(conn: sqlite3.Connection) -> None:
