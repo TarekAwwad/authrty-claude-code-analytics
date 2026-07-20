@@ -83,10 +83,10 @@ describe("TeamOverview", () => {
     renderOverview();
 
     const totals = await screen.findByLabelText("Team totals");
-    expect(within(totals).getByText("Members").closest(".contribute-metric")).toHaveTextContent("3");
-    expect(within(totals).getByText("Projects").closest(".contribute-metric")).toHaveTextContent("4");
-    expect(within(totals).getByText("Sessions").closest(".contribute-metric")).toHaveTextContent("9");
-    expect(within(totals).getByText("Tokens").closest(".contribute-metric")).toHaveTextContent("27k");
+    expect(within(totals).getByText("Members").closest(".team-metric")).toHaveTextContent("3");
+    expect(within(totals).getByText("Projects").closest(".team-metric")).toHaveTextContent("4");
+    expect(within(totals).getByText("Sessions").closest(".team-metric")).toHaveTextContent("9");
+    expect(within(totals).getByText("Tokens").closest(".team-metric")).toHaveTextContent("27k");
 
     expect(screen.getByRole("img", { name: "Token activity over time" })).toBeInTheDocument();
 

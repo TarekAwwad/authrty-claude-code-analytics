@@ -168,7 +168,7 @@ export default function Sidebar({
             {glossaryHint && (
               <div className="glossary-hint" role="note" aria-labelledby="glossary-hint-title">
                 <h4 id="glossary-hint-title">Not sure what a term means?</h4>
-                <p>Open the glossary any time for plain-English definitions — and how each score is computed.</p>
+                <p>Open the glossary any time for plain-English definitions — including how evidence and estimates are derived.</p>
                 <div className="glossary-hint-actions">
                   <button type="button" className="ghint-primary" onClick={onOpenGlossary}>
                     Browse glossary

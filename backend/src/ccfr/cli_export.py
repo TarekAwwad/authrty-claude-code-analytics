@@ -125,7 +125,8 @@ def run_export_bundle(args: argparse.Namespace) -> int:
             print(f"error: cannot read export root {root}: {exc}", file=sys.stderr)
             return 1
 
-        # Same identity + sequence flow as /api/team/export (routes.py::_current_team_bundle).
+        # Same identity + export-revision flow as /api/team/export
+        # (routes.py::_current_team_bundle).
         salt, member_id = contributor_identity()
         settings = read_settings()
         seq = settings.team_bundle_seq + 1

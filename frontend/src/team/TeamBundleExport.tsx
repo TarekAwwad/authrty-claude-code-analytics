@@ -106,8 +106,8 @@ export default function TeamBundleExport() {
 
   return (
     <main className="page team-flow-page team-export-page">
-      <section className="contribute-header team-flow-header" aria-labelledby="team-export-title">
-        <div className="contribute-titleblock team-titleblock">
+      <section className="team-flow-header" aria-labelledby="team-export-title">
+        <div className="team-titleblock">
           <h1 id="team-export-title">Export a team bundle</h1>
           <p>
             The browser sends selected projects and privacy settings to this app&apos;s local backend,
@@ -122,7 +122,7 @@ export default function TeamBundleExport() {
           </div>
         </div>
 
-        <div className="contribute-metrics team-metrics team-flow-metrics" aria-label="Team export summary">
+        <div className="team-metrics team-flow-metrics" aria-label="Team export summary">
           <Metric value={`${selected.length}/${entries.length || 0}`} label="Projects" />
           <Metric value={sessionCount} label="Sessions" />
           <Metric value={selectedTokens} label="Tokens" />
@@ -182,7 +182,7 @@ export default function TeamBundleExport() {
               </p>
               <button
                 type="button"
-                className="contribute-primary-button"
+                className="team-primary-button"
                 onClick={() => exporter.mutate()}
                 disabled={
                   exporter.isPending
@@ -346,7 +346,7 @@ function Metric({
   mono?: boolean;
 }) {
   return (
-    <div className="contribute-metric">
+    <div className="team-metric">
       <strong className={mono ? undefined : "team-metric-text"}>
         {typeof value === "number" ? compactInt(value) : value}
       </strong>

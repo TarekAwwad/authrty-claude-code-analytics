@@ -131,8 +131,8 @@ export default function TeamBundleImport() {
 
   return (
     <main className="page team-flow-page team-import-page">
-      <section className="contribute-header team-flow-header" aria-labelledby="team-import-title">
-        <div className="contribute-titleblock team-titleblock">
+      <section className="team-flow-header" aria-labelledby="team-import-title">
+        <div className="team-titleblock">
           <h1 id="team-import-title">Import a team bundle</h1>
           <p>
             Browser-selected bundle JSON is sent to this app&apos;s local backend for validation and
@@ -147,7 +147,7 @@ export default function TeamBundleImport() {
           </div>
         </div>
 
-        <div className="contribute-metrics team-metrics team-flow-metrics" aria-label="Team import summary">
+        <div className="team-metrics team-flow-metrics" aria-label="Team import summary">
           <Metric value={importedRecords.length} label="Bundles" />
           <Metric value={importedMemberCount} label="Members" />
           <Metric value={importedSessionCount} label="Sessions" />
@@ -206,7 +206,7 @@ export default function TeamBundleImport() {
                 </label>
                 <button
                   type="button"
-                  className="contribute-primary-button"
+                  className="team-primary-button"
                   onClick={() => importer.mutate()}
                   disabled={importer.isPending || !canImport}
                 >
@@ -331,7 +331,7 @@ function Metric({
   mono?: boolean;
 }) {
   return (
-    <div className="contribute-metric">
+    <div className="team-metric">
       <strong className={mono ? undefined : "team-metric-text"}>
         {typeof value === "number" ? compactInt(value) : value}
       </strong>

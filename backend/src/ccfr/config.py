@@ -167,7 +167,7 @@ def is_docker() -> bool:
 
 
 def app_version() -> str:
-    """App release version for contribution bundles.
+    """App release version recorded in team bundles.
 
     Resolves from the installed ``checkyouragent`` package metadata so the
     version has a single source (``pyproject.toml``). Falls back to the pinned

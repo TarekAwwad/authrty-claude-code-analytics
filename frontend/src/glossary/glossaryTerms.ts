@@ -6,7 +6,7 @@ export type GlossaryCategory =
   | "Structure"
   | "Activity"
   | "Workflow"
-  | "Risk"
+  | "Evidence"
   | "Discovery"
   | "Cost";
 
@@ -15,8 +15,8 @@ export interface GlossaryTerm {
   term: string;
   definition: string;
   // Optional "how it's computed" lines, rendered as a monospace block beneath
-  // the definition. Used for the scores where the exact mechanics help a dev
-  // reconcile what they see on screen with how it was produced.
+  // the definition. Used where exact mechanics help reconcile a displayed
+  // result with how it was produced.
   detail?: string[];
 }
 
@@ -24,7 +24,7 @@ export const CATEGORY_ORDER: GlossaryCategory[] = [
   "Structure",
   "Activity",
   "Workflow",
-  "Risk",
+  "Evidence",
   "Discovery",
   "Cost",
 ];
@@ -59,7 +59,7 @@ export const GLOSSARY_TERMS: GlossaryTerm[] = [
     category: "Structure",
     term: "Import",
     definition:
-      "One ingestion of session logs from a source folder into the database. Re-importing the same source updates existing sessions.",
+      "A local sync from the read-only source export into the rebuildable analytics cache. Syncing again updates new or changed projects from the files currently on disk; skipped records remain listed in Diagnostics.",
   },
   {
     category: "Structure",
@@ -123,13 +123,13 @@ export const GLOSSARY_TERMS: GlossaryTerm[] = [
     category: "Workflow",
     term: "Usage Mindmap",
     definition:
-      "The graph on Discover that splits all spend in the current filter into workflow phases (the inner ring) and the behavior habits detected within them (the leaves). Click any node to see the rule behind it and the sessions that fed it.",
+      "The experimental activity map on Explore. It groups observed tool calls and text-only assistant steps into workflow phases, tools, and recurring habits. It describes recorded activity, not cost attribution. Click a node to inspect its rule and supporting sessions.",
   },
   {
     category: "Workflow",
     term: "Workflow phase",
     definition:
-      "The kind of work an assistant turn was doing, decided from the tools it called. Every turn lands in exactly one of seven phases, so the phases partition all spend and sum to 100%. The percentage on a phase is its share of the corpus's spend (or tokens, when pricing is unavailable).",
+      "The kind of work an observed activity represents, classified from its tool or step type. Every counted activity lands in exactly one of seven phases, so phase shares partition the observed activity sample and sum to 100%.",
     detail: [
       "Explore     reading & searching (Read, Grep, web)",
       "Plan        planning (TodoWrite, plan mode, ask)",
@@ -144,72 +144,72 @@ export const GLOSSARY_TERMS: GlossaryTerm[] = [
     category: "Workflow",
     term: "Habit (good / anti)",
     definition:
-      "A recurring behavior pattern detected across a session's turns — for example planning before a burst of edits, or retrying a failing command unchanged. Each habit hangs off its home phase as a leaf, marked good (a pattern worth keeping) or anti (a pattern worth fixing). Its cost is the size of the behavior itself, not a hypothetical saving.",
+      "A recurring behavior detected across session turns — for example planning before a burst of edits, or retrying a failing command unchanged. Each habit hangs off its home phase as a leaf and is labelled good or anti by its explicit rule. Its size is observed activity involved in the habit, not a cost or saving claim.",
   },
   {
     category: "Workflow",
     term: "Phase vs. habit",
     definition:
-      "Phases and habits answer different questions. The phases are a partition: every dollar of spend lands in exactly one phase, so they sum to 100%. Habits are an overlay on top — a single habit can span several phases and deliberately counts the work across them, so habit shares overlap each other and the phases and do not sum to 100%. Read a phase as \"how much spend was this kind of work\"; read a habit as \"how much spend is involved in this pattern.\"",
+      "Phases and habits answer different questions. Phases partition the observed activity sample, so they sum to 100%. Habits overlay that partition: one habit can span several phases, so habit shares can overlap and do not sum to 100%. Read a phase as \"what kind of activity was recorded\" and a habit as \"which recurring rule matched that activity.\"",
   },
 
-  // Risk — the Triage rank and the findings/patterns behind it.
+  // Evidence — how claims in the UI relate to the imported records.
   {
-    category: "Risk",
-    term: "Risk score",
+    category: "Evidence",
+    term: "Observed",
     definition:
-      "The Triage \"Risk\" number — a single rank for how much a session is worth reviewing. Higher means more (errors, stuck loops, heavy fan-out, size, or risky patterns). It's a relative sort key, not a probability.",
-    detail: [
-      "Weighted sum of 5 signals, each squashed to 0–1",
-      "via  value / (value + scale):",
-      "",
-      "  Alerts    ×3     errors + system events",
-      "  Loops     ×2     loop count × longest repeat",
-      "  Fanout    ×1.5   subagents + agent events",
-      "  Size      ×1     max of events / time / tokens",
-      "  Patterns  ×2     risky-pattern findings score",
-    ],
+      "Directly present in the imported records or obtained by counting those records. Observed describes what was recorded; it does not by itself say whether the result is good, bad, or causal.",
   },
   {
-    category: "Risk",
-    term: "Risk tiers (color)",
+    category: "Evidence",
+    term: "Estimated",
     definition:
-      "The color of the Risk score reflects its tier. The thin segmented underline shows which signals are driving that score.",
-    detail: ["High    score ≥ 6", "Medium  score ≥ 3", "Low     score < 3"],
+      "Calculated from observed inputs using a stated model or assumption, such as a pricing table or token-size approximation. Estimated values are useful approximations, not directly recorded facts.",
   },
   {
-    category: "Risk",
+    category: "Evidence",
+    term: "Inferred",
+    definition:
+      "Reconstructed from indirect evidence because the source export does not record the value directly. The UI states the reconstruction basis and sample wherever an inferred result is shown.",
+  },
+  {
+    category: "Evidence",
+    term: "Associated",
+    definition:
+      "A measured relationship between an attribute and an observed outcome in the current sample. Associated is not a causal conclusion and should be treated as a lead to investigate.",
+  },
+  {
+    category: "Evidence",
     term: "Finding",
     definition:
-      "A risky pattern detected in a session's sequence of tool calls. The top finding shows in Triage's \"Findings\" column, and findings feed the Patterns signal of the Risk score.",
+      "A specific condition detected by a named rule. Each finding states whether its basis is observed or estimated and links to supporting events when the imported data provides them.",
   },
   {
-    category: "Risk",
-    term: "Finding types",
+    category: "Evidence",
+    term: "Supported finding types",
     definition:
-      "Every finding is sorted into one of these categories, based on the tool-call sequence that triggered it.",
+      "The current session detectors cover a small explicit set of conditions. Absence of a finding means none of these supported rules matched; it is not a general quality verdict.",
     detail: [
-      "Unsafe write attempt   edit/write hit a safety error",
-      "Permission friction    tool denied or user-rejected",
-      "Environment mismatch   missing dep, timeout, validation",
-      "Subagent failure       error inside a delegated agent",
-      "Failed verification    test/lint failed, then a repair",
-      "Rare risky workflow    uncommon vs the local baseline",
+      "Repeated identical tool failure",
+      "Tool call timeout",
+      "Missing dependency or command",
+      "Permission rejection",
+      "Large persisted tool result (estimated size threshold)",
     ],
   },
 
   // Discovery — the Subgroup view that explains outcomes.
   {
     category: "Discovery",
-    term: "Subgroup (driver)",
+    term: "Subgroup",
     definition:
-      "A set of conditions that, when they co-occur, line up with an outcome far more often than the average session does. Discovery surfaces the subgroups that most \"drive\" each outcome.",
+      "Sessions or tool calls that match the same set of conditions. Experimental subgroup analysis reports groups whose observed outcome rate differs from the comparison sample; it does not claim those conditions caused the outcome.",
   },
   {
     category: "Discovery",
     term: "Outcome",
     definition:
-      "The thing a subgroup is being measured against — the tabs at the top of Discover: high Cost, high-cost Fanout, Tool errors, and Rejections.",
+      "The measured result a subgroup is compared against, such as membership in the high estimated-cost band or an observed tool-error result.",
   },
   {
     category: "Discovery",
@@ -245,6 +245,12 @@ export const GLOSSARY_TERMS: GlossaryTerm[] = [
     term: "Significance gate (Wilson lower bound)",
     definition:
       "The \"stays at or above X%\" figure. Even on a pessimistic reading of a small sample, the subgroup's rate must still beat the baseline — and the bar rises with the number of conditions tested (a Bonferroni adjustment), so a long screen doesn't manufacture false positives. The gate is conservative: weak real effects can be hidden. Treat results as leads to investigate, not proof of cause.",
+  },
+  {
+    category: "Discovery",
+    term: "Observed hit-level percentile",
+    definition:
+      "Where a recorded limit hit's token volume or estimated API-equivalent cost falls within the reconstructed usage windows for the same plan era. For example, p50 is the median observed hit level. The windows are inferred; the percentile does not measure unused plan capacity.",
   },
   {
     category: "Discovery",
@@ -284,13 +290,13 @@ export const GLOSSARY_TERMS: GlossaryTerm[] = [
     category: "Cost",
     term: "Token",
     definition:
-      "The unit models read and write text in. Cost and usage are measured in tokens; roughly a few characters each.",
+      "The unit models read and write text in, roughly a few characters each. Recorded token counts are observed usage and provide the input to API-equivalent cost estimates.",
   },
   {
     category: "Cost",
-    term: "Total spend",
+    term: "Estimated API-equivalent cost",
     definition:
-      "The headline dollar figure on the Cost page: the summed cost across the sessions in the current time range and project filter.",
+      "A dollar estimate computed from recorded token counts and the configured model price table. It is an API-equivalent comparison, not an invoice. Historical mode uses the price in effect on each session date; incomplete model coverage is shown as partial or unavailable.",
   },
   {
     category: "Cost",

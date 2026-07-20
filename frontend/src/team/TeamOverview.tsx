@@ -37,7 +37,7 @@ export default function TeamOverview({ onGoToImport }: Props) {
   if (dashboard.isError || !dashboard.data) {
     return (
       <main className="page team-flow-page team-overview-page">
-        <div className="contribute-state panel-error">
+        <div className="team-state panel-error">
           <strong>Team overview unavailable.</strong>
           <span>Could not load the aggregated team dashboard.</span>
         </div>
@@ -56,7 +56,7 @@ export default function TeamOverview({ onGoToImport }: Props) {
         <div className="team-empty card">
           <strong>No team bundles imported yet.</strong>
           <p>Import a team bundle to see aggregated activity and reliability summaries.</p>
-          <button type="button" className="contribute-primary-button" onClick={onGoToImport}>
+          <button type="button" className="team-primary-button" onClick={onGoToImport}>
             <ArrowRight size={15} aria-hidden="true" /> Go to Import
           </button>
         </div>
@@ -91,7 +91,7 @@ export default function TeamOverview({ onGoToImport }: Props) {
   return (
     <main className="page team-flow-page team-overview-page">
       <Header>
-        <div className="contribute-metrics team-metrics team-flow-metrics" aria-label="Team totals">
+        <div className="team-metrics team-flow-metrics" aria-label="Team totals">
           <Metric value={meta?.member_count ?? 0} label="Members" />
           <Metric value={meta?.project_count ?? 0} label="Projects" />
           <Metric value={sessionCount} label="Sessions" />
@@ -209,8 +209,8 @@ export default function TeamOverview({ onGoToImport }: Props) {
 
 function Header({ children }: { children?: React.ReactNode }) {
   return (
-    <section className="contribute-header team-flow-header" aria-labelledby="team-title">
-      <div className="contribute-titleblock team-titleblock">
+    <section className="team-flow-header" aria-labelledby="team-title">
+      <div className="team-titleblock">
         <h1 id="team-title">Team overview</h1>
         <p>Aggregated usage across imported team bundles — no prompts, file contents, or commands.</p>
       </div>
@@ -221,7 +221,7 @@ function Header({ children }: { children?: React.ReactNode }) {
 
 function Metric({ value, label }: { value: number; label: string }) {
   return (
-    <div className="contribute-metric">
+    <div className="team-metric">
       <strong>{compactInt(value)}</strong>
       <span>{label}</span>
     </div>

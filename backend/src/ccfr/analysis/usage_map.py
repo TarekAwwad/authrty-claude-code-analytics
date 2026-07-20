@@ -299,8 +299,7 @@ def load_events(
 
 # --- Habit detectors ----------------------------------------------------------
 # Each detector is a pure function over one session's ordered EventRecs and
-# returns HabitFindings. Future sequence mining registers detectors in
-# SESSION_DETECTORS below.
+# returns HabitFindings. SESSION_DETECTORS below is the explicit registry.
 
 BLIND_RETRY_MIN = 3   # identical failing attempts in a row to flag
 PLAN_BURST_MIN = 5    # edit calls after a plan step to count as a planned burst
@@ -559,7 +558,7 @@ HABITS: list[dict[str, str]] = [
 ]
 HABIT_BY_KEY: dict[str, dict[str, str]] = {h["key"]: h for h in HABITS}
 
-# Per-session detectors. Future sequence mining adds entries here.
+# Per-session detector registry.
 SESSION_DETECTORS: list[Callable[[list[EventRec]], list[HabitFinding]]] = [
     detect_tdd_loop,
     detect_delegation,

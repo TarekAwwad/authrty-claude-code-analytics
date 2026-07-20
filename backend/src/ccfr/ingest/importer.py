@@ -378,7 +378,7 @@ def _finish_import_or_strand(
     already match what's on disk, so the next import_all_new() run's skip check
     (_project_needs_import) would treat these projects as unchanged and never
     retry them — even though their derived tables (event_edges, session_stats,
-    search_index, sequence features, session findings) never got rebuilt. Roll back any
+    search_index, session findings) never got rebuilt. Roll back any
     partial derived writes, null the signatures so the projects are re-imported
     on the next run, and mark the import failed before re-raising so callers
     (e.g. the API route) see the failure instead of a silently-stuck "running" row.

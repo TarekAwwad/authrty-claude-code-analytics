@@ -1,15 +1,4 @@
-// Pure helpers for rendering a Team bundle specimen row.
-// Everything here is a faithful, lossless re-presentation of the bundle's own
-// closed-vocabulary symbols. No value is invented, only relabeled for reading.
-
-export type SymKind = "inspect" | "write" | "shell" | "agent" | "call" | "ok" | "err" | "muted";
-
-export interface SeqStep {
-  sym: string;
-  fam?: string;
-  dt_s?: number;
-  out_tok?: number;
-}
+// Pure helpers for rendering the fields present in a Team bundle specimen.
 
 export interface SessionTokens {
   input: number;
@@ -26,8 +15,6 @@ export interface SessionStats {
   subagents: number;
   errors: number;
   system: number;
-  loops: number;
-  max_repeat: number;
   persisted_outputs: number;
 }
 
@@ -44,28 +31,7 @@ export interface TeamBundleSession {
   tokens?: Partial<SessionTokens>;
   stats?: Partial<SessionStats>;
   stop_reasons?: Record<string, number>;
-  risk_categories?: string[];
   subagents?: SessionSubagent[];
-  sequence?: SeqStep[];
-}
-
-// Map a closed-vocabulary event symbol to a short label and visual kind.
-// Legacy sequence values have already been sanitized by the backend bundle helpers.
-export function prettySymbol(sym: string): { label: string; kind: SymKind } {
-  const parts = sym.split(":");
-  if (parts[0] === "RESULT") {
-    if (parts[1] === "ok") return { label: "ok", kind: "ok" };
-    if (parts[1] === "error") return { label: parts[2] ?? "error", kind: "err" };
-    return { label: "result", kind: "muted" };
-  }
-  // CALL:*
-  if (parts[1] === "inspect") return { label: parts[2] ?? "read", kind: "inspect" };
-  if (parts[1] === "write") return { label: parts[2] ?? "write", kind: "write" };
-  if (parts[1] === "Bash" || parts[1] === "PowerShell") {
-    return { label: parts[2] ? `${parts[1]}:${parts[2]}` : parts[1], kind: "shell" };
-  }
-  if (parts[1] === "Agent") return { label: "Agent", kind: "agent" };
-  return { label: parts[1] ?? "call", kind: "call" };
 }
 
 // Friendly model name for a bucketed model id, falling back to the raw id so an

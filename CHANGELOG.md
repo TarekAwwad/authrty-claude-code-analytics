@@ -11,6 +11,30 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the timeline, hit details, cap zones, near-misses, percentile, and plan-fit
   verdict all use the selected measurement basis.
 
+### Changed
+- Reframed analytics around explicit evidence: observed records, estimated
+  API-equivalent values, inferred limit windows, and non-causal experimental
+  associations now state their basis and expose receipts where available.
+- Renamed the local Overview to Sessions and reorganized Explore into primary
+  techniques plus a clearly labelled Experimental section.
+- Reworked the Session workspace around supported findings, tool activity, a
+  selectable subagent heatmap, browser-native navigation, and an always-visible
+  trace.
+- Clarified Import synchronization, local versus Team reset scope, partial or
+  unavailable pricing, and read-only source handling. Source memory files are
+  no longer indexed.
+- Team exports now use schema v3 without deprecated risk, loop, or event-sequence
+  inventory; sanitized v1 and v2 imports remain supported.
+
+### Fixed
+- Team Export keeps the current preview visible while project selections are
+  refreshed, preventing transient full-list and empty-selection flashes.
+
+### Removed
+- Removed uninterpretable risk scores and tiers, loop/max-repeat metrics, the
+  passive event-density chart, stale pattern and sequence mining, unused memory
+  indexing, and the unmounted contribution workflow.
+
 ## [0.1.0] - 2026-07-11
 
 First public release. Local, privacy-strict forensic analytics for Claude Code
