@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_project_id ON sessions(project_id, id);
 
+-- events.is_replay is 1 when the row repeats an event already recorded under another
+-- session in the same project. Resuming or forking a session makes Claude Code write a
+-- new JSONL containing the whole prior history, so one uuid lands in several sessions.
+-- Cost and token aggregates count only is_replay = 0 rows; per-session timelines keep
+-- every row, so a resumed session still renders its full history.
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -54,7 +59,8 @@ CREATE TABLE IF NOT EXISTS events (
     timestamp TEXT,
     is_sidechain INTEGER NOT NULL DEFAULT 0,
     agent_id TEXT,
-    raw_json TEXT NOT NULL
+    raw_json TEXT NOT NULL,
+    is_replay INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_session_time ON events(session_id, timestamp, id);
@@ -65,6 +71,8 @@ CREATE INDEX IF NOT EXISTS idx_events_parent_uuid ON events(parent_uuid);
 CREATE INDEX IF NOT EXISTS idx_events_session_uuid ON events(session_id, uuid);
 CREATE INDEX IF NOT EXISTS idx_events_session_parent_uuid ON events(session_id, parent_uuid);
 CREATE INDEX IF NOT EXISTS idx_events_agent_id ON events(agent_id);
+-- idx_events_replay is created in migrate_db, not here: this script runs before the
+-- migration, so on a pre-existing database the column would not exist yet.
 
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -306,12 +314,75 @@ def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
 
 
+def mark_replay_events(conn: sqlite3.Connection, *, project_ids: list[int] | None = None) -> int:
+    """Flag events that replay one already recorded elsewhere in the same project.
+
+    Resuming or forking a session makes Claude Code write a new JSONL that repeats the
+    whole prior history, so the same ``uuid`` is imported once per resume. Left alone
+    that multiplies cost and token totals by the number of resumes.
+
+    Within a project, the row with the lowest ``events.id`` for a given uuid is the
+    canonical one (``is_replay = 0``); every later copy is flagged. Events with no uuid
+    are never flagged — there is nothing to match them on. Passing ``project_ids``
+    limits the pass to those projects; ``None`` recomputes every project.
+
+    Returns the number of rows flagged.
+    """
+    if project_ids is not None and not project_ids:
+        return 0
+    if project_ids is None:
+        scope, params = "", []
+    else:
+        placeholders = ",".join("?" * len(project_ids))
+        scope, params = f"AND s.project_id IN ({placeholders})", list(project_ids)
+
+    # Recompute from scratch for the scope so re-imports can clear a stale flag.
+    conn.execute(
+        f"""
+        UPDATE events SET is_replay = 0
+        WHERE is_replay = 1
+          AND id IN (SELECT e.id FROM events e
+                     JOIN sessions s ON s.id = e.session_id
+                     WHERE 1 = 1 {scope})
+        """,
+        params,
+    )
+    cursor = conn.execute(
+        f"""
+        WITH canonical AS (
+            SELECT e.uuid AS uuid, s.project_id AS project_id, MIN(e.id) AS keep_id
+            FROM events e
+            JOIN sessions s ON s.id = e.session_id
+            WHERE e.uuid IS NOT NULL {scope}
+            GROUP BY s.project_id, e.uuid
+        )
+        UPDATE events SET is_replay = 1
+        WHERE id IN (SELECT e.id FROM events e
+                     JOIN sessions s ON s.id = e.session_id
+                     JOIN canonical c ON c.uuid = e.uuid AND c.project_id = s.project_id
+                     WHERE e.id <> c.keep_id)
+        """,
+        params,
+    )
+    return int(cursor.rowcount or 0)
+
+
 def migrate_db(conn: sqlite3.Connection) -> None:
     """Apply lightweight migrations for databases created by older app versions."""
     _drop_legacy_risk_tables(conn)
     _drop_unused_memory_index(conn)
     _drop_unused_sequence_cache(conn)
     _migrate_session_stats(conn)
+
+    # Resumed/forked sessions replay prior history, so the same event lands in several
+    # sessions. Older databases have no flag for that; add it and backfill once so
+    # existing caches stop double-counting without needing a re-import.
+    event_columns = _column_names(conn, "events")
+    if event_columns and "is_replay" not in event_columns:
+        conn.execute("ALTER TABLE events ADD COLUMN is_replay INTEGER NOT NULL DEFAULT 0")
+        mark_replay_events(conn)
+    if event_columns:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_replay ON events(is_replay)")
 
     existing_message_columns = _column_names(conn, "messages")
     for name, definition in MESSAGE_COST_COLUMNS.items():
