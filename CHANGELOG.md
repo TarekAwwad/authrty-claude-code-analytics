@@ -7,6 +7,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Pricing for Claude Opus 5 (`claude-opus-5`), at the same $5/$25 per million
+  input/output as Opus 4.8. Sessions on that model previously had no price row,
+  so their tokens were silently valued at $0 and the model was reported under
+  `unpriced_models`.
 - Limit hits can now switch between raw token volume and API-equivalent cost;
   the timeline, hit details, cap zones, near-misses, percentile, and plan-fit
   verdict all use the selected measurement basis.
