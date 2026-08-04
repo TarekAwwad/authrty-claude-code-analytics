@@ -13,11 +13,12 @@ interface Props {
   onOpenSession: (session: SessionCard) => void;
 }
 
-type SortKey = "risk" | "first_ts" | "patterns" | "error_count" | "max_repeat" | "subagent_count" | "event_count" | "cost_usd";
+type SortKey = "risk" | "first_ts" | "last_ts" | "patterns" | "error_count" | "max_repeat" | "subagent_count" | "event_count" | "cost_usd";
 
 const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
   { key: "risk", label: "Highest risk" },
   { key: "first_ts", label: "Newest first" },
+  { key: "last_ts", label: "Last ended" },
   { key: "patterns", label: "Strongest finding" },
   { key: "error_count", label: "Most errors" },
   { key: "max_repeat", label: "Largest loop" },
@@ -28,8 +29,9 @@ const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
 
 function sortValue(session: SessionCard, sortKey: SortKey): number {
   if (sortKey === "risk") return riskScore(session);
-  if (sortKey === "first_ts") {
-    const timestamp = session.first_ts ? Date.parse(session.first_ts) : Number.NaN;
+  if (sortKey === "first_ts" || sortKey === "last_ts") {
+    const value = sortKey === "first_ts" ? session.first_ts : session.last_ts;
+    const timestamp = value ? Date.parse(value) : Number.NaN;
     return Number.isNaN(timestamp) ? 0 : timestamp;
   }
   if (sortKey === "patterns") return session.pattern_risk_score;
@@ -40,7 +42,7 @@ function formatUsd(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
-function formatSessionStart(value: string | null): string {
+function formatTimestamp(value: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
@@ -180,6 +182,7 @@ function TriageBoard({ projects, sessions, loading, onOpenSession }: Props) {
                   {header("risk", "Risk")}
                   <th>Session</th>
                   {header("first_ts", "Started")}
+                  {header("last_ts", "Ended")}
                   {header("patterns", "Top issue")}
                   <th>Impact</th>
                   {header("cost_usd", "Cost")}
@@ -208,7 +211,12 @@ function TriageBoard({ projects, sessions, loading, onOpenSession }: Props) {
                       </td>
                       <td className="cell-started">
                         {session.first_ts ? (
-                          <time dateTime={session.first_ts}>{formatSessionStart(session.first_ts)}</time>
+                          <time dateTime={session.first_ts}>{formatTimestamp(session.first_ts)}</time>
+                        ) : "—"}
+                      </td>
+                      <td className="cell-ended">
+                        {session.last_ts ? (
+                          <time dateTime={session.last_ts}>{formatTimestamp(session.last_ts)}</time>
                         ) : "—"}
                       </td>
                       <td className={`cell-issue issue-${issue.tone}`}>
