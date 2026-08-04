@@ -148,8 +148,12 @@ def import_project(
 
 
 def discover_projects(conn: sqlite3.Connection, source_root: Path) -> list[DiscoveredProject]:
+    # Read-only: the schema is already initialized once at app startup
+    # (main.py's lifespan), so re-running init_db()/migrate_db() here on every
+    # scan just takes an unnecessary write lock -- migrate_db's backfill
+    # UPDATE runs unconditionally, colliding with the live watcher's frequent
+    # writes and surfacing as "database is locked" on this listing endpoint.
     source_root = _validate_root(source_root)
-    init_db(conn)
     result: list[DiscoveredProject] = []
     for project_dir in sorted(p for p in source_root.iterdir() if p.is_dir()):
         row = conn.execute(
