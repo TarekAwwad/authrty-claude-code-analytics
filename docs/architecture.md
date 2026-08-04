@@ -33,6 +33,14 @@ Backend:
 - Storage: SQLite with WAL mode.
 - Config: environment variables in `backend/src/ccfr/config.py`.
 - Importer: Claude Code JSONL project folders under `CCFR_IMPORT_ROOT`.
+- Live watcher: `backend/src/ccfr/ingest/watcher.py`. Runs for the life of
+  the process (started/stopped in `main.py`'s `lifespan`) and incrementally
+  imports new/changed sessions as they're written, so the UI doesn't need a
+  manual "Import" click. Debounces filesystem events (`watchdog`) before
+  calling the existing incremental importer; uses a polling observer instead
+  of native OS events when running in Docker, since bind-mounted volumes on
+  macOS don't reliably forward inotify. The frontend learns about new data by
+  polling, not a push connection -- see "Live alerts" below.
 - API router prefix: `/api`.
 
 Frontend:
@@ -92,6 +100,10 @@ Implemented route groups:
 - Import/cache: `POST /api/imports`, `POST /api/imports/reset`,
   `GET /api/imports`, `GET /api/imports/progress`,
   `GET /api/source/projects`, `GET /api/stats`.
+- Live alerts: `GET /api/alerts/limit-hits` -- rate-limit hits since a
+  `?since=` cursor (default: last 24h), polled by the frontend at ~2s to
+  drive an unseen-count badge on the Limit hits technique. Reuses the
+  detection in `analysis/limits.py`; no separate alert storage.
 - Local data: `GET /api/projects`, `GET /api/sessions`,
   `GET /api/sessions/{id}`, timeline, trace, turn costs, subagents, findings,
   event detail, and search.
