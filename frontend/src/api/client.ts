@@ -11,6 +11,7 @@ import type {
   EventDetail,
   ImportProgress,
   ImportSummary,
+  LimitHitsAlertResponse,
   LimitsResponse,
   Project,
   RiskFinding,
@@ -252,6 +253,11 @@ export function getUsageCharacteristics(filters: UsageMapFilters = {}) {
 
 export function getLimits() {
   return request<LimitsResponse>("/analytics/limits");
+}
+
+export function getRecentLimitHits(since?: string) {
+  const query = since ? `?since=${encodeURIComponent(since)}` : "";
+  return request<LimitHitsAlertResponse>(`/alerts/limit-hits${query}`);
 }
 
 export function getSettings() {

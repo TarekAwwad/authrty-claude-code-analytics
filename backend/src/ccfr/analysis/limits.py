@@ -305,7 +305,7 @@ def _era_for(ts: datetime, history: list[dict[str, str]]) -> str:
     return label
 
 
-def _hit_payload(hit: LimitHit) -> dict[str, Any]:
+def hit_payload(hit: LimitHit) -> dict[str, Any]:
     blocked = hit.blocked_minutes
     return {
         "ts": hit.ts.isoformat(),
@@ -453,7 +453,7 @@ def limits_analytics(
             "plan_history": history,
             "method_note": METHOD_NOTE,
         },
-        "hits": [_hit_payload(h) for h in hits],
+        "hits": [hit_payload(h) for h in hits],
         "windows": [
             {
                 "start": w.start.isoformat(),

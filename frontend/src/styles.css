@@ -114,6 +114,7 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .sb-subitem.active .sb-dot { background: var(--accent); opacity: 1; }
 .sb-tag { margin-left: auto; font-style: normal; font-size: 8.5px; letter-spacing: .5px;
   color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; }
+.sb-tag.is-alert { color: var(--warning); border-color: var(--warning); }
 
 .sb-bottom {
   margin-top: auto;
@@ -318,6 +319,7 @@ html:has(.glossary-dialog[open]) { overflow: hidden; }
 }
 
 .console-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.console-label-right { display: flex; align-items: center; gap: 10px; }
 
 .eyebrow { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .07em;
   text-transform: uppercase; color: var(--muted); }
@@ -453,9 +455,10 @@ h3 {
 .card-count { font-size: 11.5px; color: var(--faint); }
 .card-count b { color: var(--text); font-weight: 700; }
 .card-pad { padding: 13px 16px; }
-.status-badge { font-size: 10.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px; }
+.status-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
 .status-badge.ok { color: var(--asst); background: color-mix(in srgb, var(--asst) 14%, transparent); }
 .status-badge.warn { color: var(--loop); background: color-mix(in srgb, var(--loop) 14%, transparent); }
+.status-badge.neutral { color: var(--muted); background: color-mix(in srgb, var(--muted) 14%, transparent); }
 .import-row {
   display: grid; grid-template-columns: 8px minmax(0, 1fr) auto auto; gap: 14px;
   padding: 12px 16px; align-items: center; border-top: 1px solid var(--border);

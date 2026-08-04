@@ -17,6 +17,7 @@ import { useDataScope } from "./shell/useDataScope";
 import { DEFAULT_TECHNIQUE } from "./discover/techniques";
 import { useCollapsed } from "./shell/useCollapsed";
 import { useGlossaryHint } from "./shell/useGlossaryHint";
+import { useLiveAlerts } from "./shell/useLiveAlerts";
 import { useSettings } from "./shell/useSettings";
 import { PrivacyModeProvider } from "./shell/PrivacyModeContext";
 import { useTheme } from "./theme/useTheme";
@@ -44,6 +45,7 @@ function App() {
   const { collapsed, toggle: toggleCollapsed } = useCollapsed();
   const { historicalPricing, setHistoricalPricing, privacyMode, setPrivacyMode } = useSettings();
   const { seen: glossaryHintSeen, dismiss: dismissGlossaryHint } = useGlossaryHint();
+  const { unseenCount: limitHitsUnseenCount, markSeen: markLimitHitsSeen } = useLiveAlerts();
   const [glossaryOpen, setGlossaryOpen] = React.useState(false);
   const autoRouted = React.useRef(false);
 
@@ -90,6 +92,7 @@ function App() {
   const selectTechnique = (key: string) => {
     setDiscoverTechnique(key);
     setView("discover");
+    if (key === "limits") markLimitHitsSeen();
   };
 
   // Opening the glossary (from the button or the hint's CTA) counts as
@@ -111,6 +114,7 @@ function App() {
         onSelectView={setView}
         onSelectScope={setScope}
         onSelectTechnique={selectTechnique}
+        limitHitsUnseenCount={limitHitsUnseenCount}
         onToggleCollapsed={toggleCollapsed}
         onToggleTheme={toggle}
         onOpenGlossary={openGlossary}

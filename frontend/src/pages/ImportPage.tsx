@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderInput, RotateCcw, Search, Trash2 } from "lucide-react";
-import { createImport, discoverSourceProjects, getCacheStats, getImportProgress, getRuntimeConfig, loadDemoData, resetImports } from "../api/client";
+import { Clock, FolderInput, RotateCcw, Search, Trash2 } from "lucide-react";
+import { createImport, discoverSourceProjects, getCacheStats, getImportProgress, getRuntimeConfig, listImports, loadDemoData, resetImports } from "../api/client";
 import type { DiscoveredProject } from "../api/types";
 import { useImportRoot } from "./useImportRoot";
 import LoadingBar from "../components/LoadingBar";
+
+const RECENT_IMPORT_MS = 5 * 60 * 1000;
 
 function ImportPage() {
   const queryClient = useQueryClient();
@@ -21,6 +23,14 @@ function ImportPage() {
     enabled: root.length > 0,
   });
   const stats = useQuery({ queryKey: ["stats"], queryFn: getCacheStats });
+  // Polled independently of a manual action so the live watcher's background
+  // imports show up here too, not just imports this tab itself triggered.
+  const imports = useQuery({ queryKey: ["imports"], queryFn: listImports, refetchInterval: 5000 });
+  const lastImportedAtRaw = imports.data?.[0]?.imported_at;
+  const lastImportedAt = typeof lastImportedAtRaw === "string" ? lastImportedAtRaw : null;
+  // "Recent" is a rough signal that the live watcher (not just this tab) is
+  // actively pulling in data -- not a precise freshness guarantee.
+  const isRecentImport = lastImportedAt != null && Date.now() - new Date(lastImportedAt).getTime() < RECENT_IMPORT_MS;
 
   const invalidateAll = async () => {
     await Promise.all([
@@ -74,11 +84,17 @@ function ImportPage() {
             Mounted source
             {isDocker && <span className="docker-badge">Docker</span>}
           </p>
-          {isOverridden && !isDocker && (
-            <button type="button" className="link-reset" onClick={resetToDefault}>
-              Reset to default
-            </button>
-          )}
+          <div className="console-label-right">
+            <span className={`status-badge ${isRecentImport ? "ok" : "neutral"}`}>
+              <Clock size={11} />
+              {lastImportedAt ? `Last synced ${formatSyncedAt(lastImportedAt)}` : "No imports yet"}
+            </span>
+            {isOverridden && !isDocker && (
+              <button type="button" className="link-reset" onClick={resetToDefault}>
+                Reset to default
+              </button>
+            )}
+          </div>
         </div>
 
         <form
@@ -236,6 +252,12 @@ function formatImported(iso: string): string {
   const days = Math.round(hrs / 24);
   if (days < 30) return `${days}d ago`;
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function formatSyncedAt(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "unknown";
+  return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
 function Metric({ label, value }: { label: string; value: number }) {

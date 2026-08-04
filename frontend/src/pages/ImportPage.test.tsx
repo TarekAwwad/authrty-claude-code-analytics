@@ -177,6 +177,39 @@ describe("ImportPage", () => {
     await waitFor(() => expect(loadDemo).toHaveBeenCalledTimes(1));
   });
 
+  it("shows 'No imports yet' when the imports table is empty", async () => {
+    vi.spyOn(client, "discoverSourceProjects").mockResolvedValue([]);
+
+    renderPage();
+
+    expect(await screen.findByText("No imports yet")).toBeInTheDocument();
+  });
+
+  it("shows when it last synced, including imports this tab didn't trigger", async () => {
+    vi.spyOn(client, "discoverSourceProjects").mockResolvedValue([]);
+    vi.mocked(client.listImports).mockResolvedValue([
+      { id: 2, source_path: "/srv/Data", imported_at: new Date().toISOString(), file_count: 1, status: "completed", error_count: 0 },
+      { id: 1, source_path: "/srv/Data", imported_at: "2020-01-01T00:00:00Z", file_count: 1, status: "completed", error_count: 0 },
+    ] as never);
+
+    renderPage();
+
+    const badge = await screen.findByText(/^Last synced /);
+    expect(badge).toHaveClass("ok");
+  });
+
+  it("shows a neutral (not 'live') badge when the last sync is stale", async () => {
+    vi.spyOn(client, "discoverSourceProjects").mockResolvedValue([]);
+    vi.mocked(client.listImports).mockResolvedValue([
+      { id: 1, source_path: "/srv/Data", imported_at: "2020-01-01T00:00:00Z", file_count: 1, status: "completed", error_count: 0 },
+    ] as never);
+
+    renderPage();
+
+    const badge = await screen.findByText(/^Last synced /);
+    expect(badge).toHaveClass("neutral");
+  });
+
   it("hides the demo card once projects exist in the source", async () => {
     vi.spyOn(client, "discoverSourceProjects").mockResolvedValue([
       { name: "d--Alpha", imported: false, session_count: 0, last_imported_at: null },

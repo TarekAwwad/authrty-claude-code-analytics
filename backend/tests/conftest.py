@@ -2,7 +2,21 @@ from __future__ import annotations
 
 import pytest
 
+import ccfr.ingest.watcher as watcher_mod
 import ccfr.settings as settings_mod
+
+
+@pytest.fixture(autouse=True)
+def isolate_live_watcher(tmp_path, monkeypatch):
+    """Keep the always-on LogWatcher from watching the real repo Data/ dir.
+
+    main.py's lifespan starts a LogWatcher on every app startup, including
+    every ``TestClient(app)`` used across this suite. LogWatcher.start() is a
+    no-op when its source root doesn't exist, so pointing it at an unused
+    tmp_path subdirectory is enough to keep the whole suite from spawning real
+    filesystem observers; a test exercising the watcher itself overrides this.
+    """
+    monkeypatch.setattr(watcher_mod, "import_root", lambda: tmp_path / "_ambient_no_watch")
 
 
 @pytest.fixture(autouse=True)

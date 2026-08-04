@@ -738,6 +738,11 @@ class LimitsResponse(BaseModel):
     eras: list[LimitEraOut] = Field(default_factory=list)
 
 
+class LimitHitsAlertResponse(BaseModel):
+    hits: list[LimitHitOut] = Field(default_factory=list)
+    checked_at: str
+
+
 class ContributionPreviewResponse(BaseModel):
     manifest: dict[str, Any]
     bundle: dict[str, Any]

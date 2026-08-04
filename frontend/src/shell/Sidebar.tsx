@@ -18,6 +18,9 @@ interface Props {
   onSelectView: (view: View) => void;
   onSelectScope: (scope: DataScope) => void;
   onSelectTechnique: (key: string) => void;
+  // Unseen rate-limit-hit count from the live watcher (see useLiveAlerts),
+  // surfaced on the "Limit hits" technique rather than as new top-level UI.
+  limitHitsUnseenCount?: number;
   onToggleCollapsed: () => void;
   onToggleTheme: () => void;
   onOpenGlossary: () => void;
@@ -40,6 +43,7 @@ export default function Sidebar({
   onSelectView,
   onSelectScope,
   onSelectTechnique,
+  limitHitsUnseenCount = 0,
   onToggleCollapsed,
   onToggleTheme,
   onOpenGlossary,
@@ -94,6 +98,11 @@ export default function Sidebar({
                     >
                       <span className="sb-dot" aria-hidden="true" />
                       <span className="sb-label">{tech.label}</span>
+                      {tech.key === "limits" && limitHitsUnseenCount > 0 && (
+                        <span className="sb-tag is-alert" aria-label={`${limitHitsUnseenCount} new limit hits`}>
+                          {limitHitsUnseenCount}
+                        </span>
+                      )}
                     </button>
                   ))}
                 </div>

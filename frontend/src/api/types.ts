@@ -722,6 +722,11 @@ export interface LimitsResponse {
   eras: LimitEraEntry[];
 }
 
+export interface LimitHitsAlertResponse {
+  hits: LimitHitEntry[];
+  checked_at: string;
+}
+
 export interface ContributionManifest {
   session_count: number;
   sequence_step_count: number;
