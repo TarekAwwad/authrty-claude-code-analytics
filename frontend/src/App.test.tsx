@@ -54,6 +54,7 @@ vi.mock("./api/client", () => ({
     active: false, import_id: null, project_count: 0, session_count: 0,
     event_count: 0, subagent_count: 0, memory_count: 0, persisted_output_count: 0,
   })),
+  getRecentLimitHits: vi.fn(async () => ({ hits: [], checked_at: new Date().toISOString() })),
   getCostAnalytics: vi.fn(async () => ({
     meta: { available: false, unpriced_models: [], total_usd: 0, total_tokens: 0,
       available_projects: [], available_models: [], bucket: "day" },

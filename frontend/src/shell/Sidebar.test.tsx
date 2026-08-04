@@ -93,6 +93,18 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("button", { name: "Subgroups" })).not.toBeInTheDocument();
   });
 
+  it("shows an unseen-count badge on Limit hits when there are new hits", () => {
+    setup({ view: "discover", limitHitsUnseenCount: 3 });
+    const limitHitsButton = screen.getByRole("button", { name: /Limit hits/ });
+    expect(within(limitHitsButton).getByText("3")).toBeInTheDocument();
+  });
+
+  it("hides the Limit hits badge when there are no unseen hits", () => {
+    setup({ view: "discover", limitHitsUnseenCount: 0 });
+    const limitHitsButton = screen.getByRole("button", { name: "Limit hits" });
+    expect(within(limitHitsButton).queryByText(/^\d+$/)).not.toBeInTheDocument();
+  });
+
   it("fires footer actions", () => {
     const props = setup();
     fireEvent.click(screen.getByRole("button", { name: "Open glossary" }));
