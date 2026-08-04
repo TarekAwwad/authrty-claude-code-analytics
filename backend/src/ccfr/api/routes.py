@@ -4,7 +4,7 @@ import json
 import secrets
 import time
 from dataclasses import asdict, replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -22,7 +22,7 @@ from ccfr.analysis.context_economics import (
     session_context_economics,
 )
 from ccfr.analysis.discovery import discovery_analytics
-from ccfr.analysis.limits import limits_analytics
+from ccfr.analysis.limits import detect_limit_hits, hit_payload, limits_analytics
 from ccfr.analysis.team_bundles import (
     build_team_bundle,
     delete_team_member,
@@ -48,6 +48,7 @@ from ccfr.api.schemas import (
     ImportProgressResponse,
     ImportRequest,
     ImportSummaryResponse,
+    LimitHitsAlertResponse,
     LimitsResponse,
     ProjectResponse,
     RiskFindingResponse,
@@ -661,3 +662,18 @@ def get_limits(
         conn, historical=historical, date_from=date_from, date_to=date_to,
         plan_history=read_settings().plan_history,
     ))
+
+
+@router.get("/alerts/limit-hits", response_model=LimitHitsAlertResponse)
+def get_recent_limit_hits(
+    since: str | None = Query(default=None, description="ISO 8601 timestamp; defaults to the last 24h."),
+    conn: Connection = Depends(get_db),
+) -> LimitHitsAlertResponse:
+    # Cheap live-alert poll for the sidebar badge -- bounded to a recent window by
+    # default so an omitted cursor never falls back to scanning the whole corpus.
+    date_from = since or (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    hits = detect_limit_hits(conn, date_from=date_from)
+    return LimitHitsAlertResponse(
+        hits=[hit_payload(h) for h in hits],
+        checked_at=datetime.now(timezone.utc).isoformat(),
+    )
