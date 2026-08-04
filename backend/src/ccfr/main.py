@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ccfr.api import router
 from ccfr.config import allowed_hosts, allowed_origins, app_version, database_path, webui_dir
+from ccfr.ingest.watcher import LogWatcher
 from ccfr.storage import connect, init_db
 
 
@@ -26,7 +27,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         init_db(conn)
     finally:
         conn.close()
-    yield
+    # Always-on live ingestion: incrementally imports new/changed sessions as
+    # Claude Code writes them, so the UI doesn't need a manual "Import" click.
+    watcher = LogWatcher()
+    watcher.start()
+    try:
+        yield
+    finally:
+        watcher.stop()
 
 
 def _mount_webui(app: FastAPI) -> None:
