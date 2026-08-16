@@ -8,11 +8,12 @@ data as sensitive.
 
 - Read `README.md`, `PRIVACY.md`, `SECURITY.md`, and `docs/architecture.md`.
 - Check `git status` before editing so you do not overwrite unrelated work.
-- Do not commit raw Claude Code exports, derived databases, team bundles,
-  contribution bundles, logs, environment files, dependency folders, or build
-  output.
+- Do not commit raw Claude Code exports, derived databases, team bundles, logs,
+  environment files, dependency folders, or build output.
 - Use synthetic or heavily redacted fixtures when adding tests or examples.
 - Keep documentation factual. Do not describe planned features as implemented.
+- For release candidates, complete the
+  [release checklist](docs/release-checklist.md) before tagging.
 
 ## Local Development
 
