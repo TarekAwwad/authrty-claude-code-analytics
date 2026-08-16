@@ -1,6 +1,6 @@
 # Documentation Audit
 
-Audit date: 2026-08-10.
+Audit date: 2026-08-16.
 
 This is a dated repository snapshot, not a promise that documentation will stay
 current automatically. It records the public documentation and release-hardening
@@ -33,7 +33,7 @@ Apache-2.0 on the Change Date stated in `LICENSE`.
 | `README.md` | current | Main product claims, evidence vocabulary, input/output model, navigation, reset scope, package/Docker/development instructions, pricing caveats, and source-available license summary match the implementation. |
 | `backend/README.md` | current | Package-index description matches the installed `uvx`/`pipx` application and its current screens and limitations. |
 | `CHANGELOG.md` | current | The dated `0.2.0` section records the credibility cleanup, v3 Team bundles, hardening changes, current Sessions/workspace changes, and removed features. |
-| `docs/architecture.md` | current | Re-audited on 2026-08-10 against current tables, migrations, routes, modules, runtime shapes, request guards, and frontend navigation. |
+| `docs/architecture.md` | current | Re-audited on 2026-08-16 against current tables, migrations, routes, modules, runtime shapes, request guards, and frontend navigation. Its documented `/api` surface was compared against the running application's OpenAPI schema. |
 | `docs/documentation-audit.md` | current dated snapshot | Updated for the 0.2.0 release-hardening pass. |
 | `docs/release-checklist.md` | current | Covers version/changelog agreement, security and privacy review, audits, multi-version tests, package smoke checks, and publication verification. |
 | `PRIVACY.md` | current | Describes sensitive local cache content, current reset semantics, Team schema v3, legacy import handling, structural fingerprinting, and enforced import/request limits. |
@@ -45,7 +45,7 @@ Apache-2.0 on the Change Date stated in `LICENSE`.
 | `frontend/package.json`, `frontend/vite.config.ts` | current | Scripts and the Vite `5174` development/proxy behavior match documented commands. |
 | `Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` | current | Compose exposes frontend `5173` and backend `8000` on host loopback and mounts source, Team, pricing, and cache paths as documented. |
 | `scripts/README.md`, `scripts/capture-*.mjs` | current | Document and automate the synthetic demo/media capture flow using current UI selectors. |
-| `docs/screenshots/*`, `docs/media/shots/*`, `docs/media/demo.webm` | current | Regenerated from the synthetic dataset on 2026-07-21 with the current capture scripts. README references current PNGs and links to the refreshed WebM. |
+| `docs/screenshots/*`, `docs/media/shots/*`, `docs/media/demo.webm` | current | Regenerated from the synthetic dataset on 2026-08-16 with the current capture scripts, which refuse to capture unless the loaded corpus is exactly the bundled `demo-*` projects. README references current PNGs and links to the refreshed WebM. |
 
 ## Current Product Reality
 
@@ -206,18 +206,35 @@ Implementation inspected during this documentation pass:
 - `frontend/src/App.tsx`, `shell/navConfig.ts`, and
   `discover/techniques.tsx` for mounted screens and navigation.
 
-The most recent repository-wide verification was the 2026-08-10 0.2.0
+The most recent repository-wide verification was the 2026-08-16 0.2.0
 release-readiness pass:
 
-- backend: 529 tests passed on the local Python 3.12 environment;
+- backend: 529 tests passed on the local Python 3.12.0 environment;
 - Ruff correctness checks passed;
-- frontend: 326 tests passed from a clean temporary install;
-- frontend production build passed;
+- frontend: 326 tests across 43 files passed against a clean
+  `npm ci --ignore-scripts` tree;
+- frontend production build passed and staged the packaged UI and data assets;
 - `npm audit --audit-level=moderate`: no reported vulnerabilities;
-- `pip-audit`: no known vulnerabilities in the updated runtime environment;
-- the 0.2.0 sdist and wheel built successfully, bundled the UI, pricing table,
-  and synthetic demo, installed into a clean virtual environment, and reported
-  the expected package version and assets.
+- `pip-audit`: no known vulnerabilities. It additionally reports that the local
+  `checkyouragent` project version cannot be audited because that version is not
+  published yet, which is expected before a release and is not a finding;
+- `git diff --check` and `docker compose config -q` reported no problems;
+- the 0.2.0 sdist and wheel built successfully. The wheel bundles
+  `ccfr/webui/index.html`, `ccfr/_assets/pricing.csv`, and the 110-file
+  synthetic demo export; it installs into a clean virtual environment and
+  reports the expected package version and asset paths;
+- both console entry points (`checkyouragent` and `cya`) run from the installed
+  wheel, and `serve` returns the bundled interface and API documentation on
+  loopback;
+- the installed wheel imported its own packaged demo export (3 projects, 46
+  sessions, 708 events, 0 import errors) and answered every local session and
+  analytics route, with every observed model priced from the packaged table;
+- the request guards behave as documented: an unexpected `Host` header is
+  rejected, state-changing requests carrying an untrusted `Origin` or cross-site
+  Fetch Metadata are rejected, and a non-browser client that sends no browser
+  headers is still served;
+- the headless `export-bundle` command produced a schema v3 structural bundle
+  containing no project names, file names, or local identifiers.
 
 CI now repeats backend tests on Python 3.11, 3.12, and 3.13 and performs the
 package smoke path before release.

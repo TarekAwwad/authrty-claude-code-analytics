@@ -1,6 +1,6 @@
 # Architecture
 
-Audit date: 2026-07-21.
+Audit date: 2026-08-16.
 
 Check Your Agent is a local FastAPI and React application over a rebuildable
 SQLite cache. The current importer supports Claude Code project exports. The

@@ -6,7 +6,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-08-10
+## [0.2.0] - 2026-08-16
 
 ### Added
 - Limit-hit analysis can now switch between recorded token volume and estimated
