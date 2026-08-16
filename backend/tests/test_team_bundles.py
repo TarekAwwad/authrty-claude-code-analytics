@@ -563,6 +563,34 @@ def test_validate_team_bundle_rejects_non_int_generated_seq(tmp_path):
         team_bundles.validate_team_bundle(bad)
 
 
+@pytest.mark.parametrize(
+    "invalid_date",
+    ["zzzz-not-a-date", "2026-6-18", "20260618", "2026-06-18T00:00:00Z"],
+)
+def test_validate_team_bundle_rejects_noncanonical_dates(tmp_path, invalid_date):
+    data = _bundle_from_sanitized(tmp_path).to_dict()
+    bad = {**data, "generated_at": invalid_date}
+    with pytest.raises(ValueError, match="generated_at"):
+        team_bundles.validate_team_bundle(bad)
+
+
+def test_validate_team_bundle_rejects_generated_seq_above_sqlite_limit(tmp_path):
+    data = _bundle_from_sanitized(tmp_path).to_dict()
+    bad = {**data, "generated_seq": team_bundles.MAX_GENERATED_SEQ + 1}
+    with pytest.raises(ValueError, match="generated_seq"):
+        team_bundles.validate_team_bundle(bad)
+
+
+def test_validate_team_bundle_rejects_excessive_session_count(tmp_path):
+    data = _bundle_from_sanitized(tmp_path).to_dict()
+    bad = {
+        **data,
+        "sessions": [None] * (team_bundles.MAX_SESSIONS_PER_BUNDLE + 1),
+    }
+    with pytest.raises(ValueError, match="sessions list is too long"):
+        team_bundles.validate_team_bundle(bad)
+
+
 def test_delete_team_member_removes_only_that_member(tmp_path):
     bundle = _bundle_from_sanitized(tmp_path).to_dict()
     other = copy.deepcopy(bundle)

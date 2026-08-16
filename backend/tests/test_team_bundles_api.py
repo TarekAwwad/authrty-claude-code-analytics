@@ -132,6 +132,19 @@ def test_team_import_is_no_network_and_idempotent(client, monkeypatch):
     assert Path(export["path"]).is_relative_to(bundle_root)
 
 
+def test_team_import_rejects_oversized_path_bundle(client, monkeypatch):
+    c, _conn, bundle_root = client
+    oversized = bundle_root / "oversized.json"
+    oversized.parent.mkdir(parents=True, exist_ok=True)
+    oversized.write_text("01234567890", encoding="utf-8")
+    monkeypatch.setattr(routes, "MAX_API_REQUEST_BYTES", 10)
+
+    response = c.post("/api/team/import", json={"path": str(oversized)})
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "Team bundle file is too large"
+
+
 def test_team_import_accepts_browser_selected_bundle_payload(client, monkeypatch):
     import socket
     import urllib.request
@@ -188,6 +201,20 @@ def test_team_import_accepts_legacy_precanonical_export_hash(client):
     assert resp.json()["bundle_id"] != bundle["bundle_id"]
     dashboard = c.get("/api/team/dashboard").json()
     assert "sequence" not in dashboard
+
+
+def test_team_import_rejects_generated_seq_above_sqlite_limit(client):
+    c, _conn, _bundle_root = client
+    bundle = c.post("/api/team/export-preview", json=_export_body()).json()["bundle"]
+    bundle["generated_seq"] = 10**100
+
+    response = c.post(
+        "/api/team/import-bundle",
+        json={"filename": "oversized-sequence.json", "bundle": bundle},
+    )
+
+    assert response.status_code == 400
+    assert "generated_seq" in response.json()["detail"]
 
 
 def test_team_import_rejects_outside_root_and_invalid_profile_schema(client, tmp_path):
@@ -257,6 +284,18 @@ def test_team_dashboard_reports_distinct_project_count(client):
 
     assert expected > 0
     assert body["meta"].get("project_count") == expected
+
+
+def test_team_cost_endpoint_rejects_oversized_date_range(client):
+    c, _conn, _bundle_root = client
+
+    response = c.get(
+        "/api/team/analytics/cost",
+        params={"date_from": "1900-01-01", "date_to": "2100-12-31"},
+    )
+
+    assert response.status_code == 400
+    assert "too many buckets" in response.json()["detail"]
 
 
 def test_team_cost_endpoint_returns_cost_shape(client):

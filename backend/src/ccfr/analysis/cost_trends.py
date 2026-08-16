@@ -6,6 +6,11 @@ from statistics import median
 from typing import Any, Literal
 
 BucketSize = Literal["day", "week"]
+MAX_TREND_BUCKETS = 3_660
+
+
+class CostTrendRangeError(ValueError):
+    """An invalid or excessive requested trend range."""
 
 
 def _coerce_day(value: str | None) -> date | None:
@@ -39,6 +44,10 @@ def _range_keys(
 ) -> list[str]:
     start = _coerce_day(range_start)
     end = _coerce_day(range_end)
+    if range_start is not None and start is None:
+        raise CostTrendRangeError("date_from must begin with an ISO date (YYYY-MM-DD)")
+    if range_end is not None and end is None:
+        raise CostTrendRangeError("date_to must begin with an ISO date (YYYY-MM-DD)")
     observed_days = [
         day
         for key in observed
@@ -51,6 +60,13 @@ def _range_keys(
     if start is None or end is None or end < start:
         return sorted(observed)
 
+    step_days = 1 if bucket_size == "day" else 7
+    bucket_count = ((end - start).days // step_days) + 1
+    if bucket_count > MAX_TREND_BUCKETS:
+        raise CostTrendRangeError(
+            f"date range produces too many buckets (max {MAX_TREND_BUCKETS})"
+        )
+
     keys: list[str] = []
     seen: set[str] = set()
     cursor = start
@@ -59,7 +75,7 @@ def _range_keys(
         if key not in seen:
             keys.append(key)
             seen.add(key)
-        cursor += timedelta(days=1 if bucket_size == "day" else 7)
+        cursor += timedelta(days=step_days)
     return keys
 
 

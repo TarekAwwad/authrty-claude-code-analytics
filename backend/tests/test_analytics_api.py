@@ -52,6 +52,24 @@ def test_cost_analytics_endpoint_returns_payload(client: TestClient) -> None:
     assert body["over_time"][0]["priced_session_count"] == 1
 
 
+def test_cost_analytics_endpoint_rejects_oversized_or_invalid_date_range(
+    client: TestClient,
+) -> None:
+    oversized = client.get(
+        "/api/analytics/cost",
+        params={"date_from": "1900-01-01", "date_to": "2100-12-31"},
+    )
+    invalid = client.get(
+        "/api/analytics/cost",
+        params={"date_from": "not-a-date"},
+    )
+
+    assert oversized.status_code == 400
+    assert "too many buckets" in oversized.json()["detail"]
+    assert invalid.status_code == 400
+    assert "date_from" in invalid.json()["detail"]
+
+
 def test_cost_analytics_endpoint_applies_model_filter(client: TestClient) -> None:
     resp = client.get("/api/analytics/cost", params={"model": "claude-sonnet-4-6"})
     assert resp.status_code == 200

@@ -47,6 +47,9 @@ RESERVED_LEVELS = ("sessions", "raw")
 _EXT_RE = re.compile(r"^[a-z0-9_+-]{1,12}\Z")
 _MAX_TOOLS_PER_SESSION = 300
 _MAX_FILE_TYPES_PER_SESSION = 100
+MAX_SESSIONS_PER_BUNDLE = 50_000
+MAX_GENERATED_SEQ = (1 << 63) - 1
+MAX_COUNTER_VALUE = (1 << 63) - 1
 
 
 def privacy_level_of(profile: str | None) -> str:
@@ -455,6 +458,10 @@ def _validate_v1(payload: dict[str, Any]) -> dict[str, Any]:
     raw_sessions = payload.get("sessions")
     if not isinstance(raw_sessions, list):
         raise ValueError("sessions must be a list")
+    if len(raw_sessions) > MAX_SESSIONS_PER_BUNDLE:
+        raise ValueError(
+            f"sessions list is too long (max {MAX_SESSIONS_PER_BUNDLE})"
+        )
 
     raw_base = {
         "schema_version": LEGACY_SCHEMA_VERSION,
@@ -532,6 +539,10 @@ def _validate_modern(
     raw_sessions = payload.get("sessions")
     if not isinstance(raw_sessions, list):
         raise ValueError("sessions must be a list")
+    if len(raw_sessions) > MAX_SESSIONS_PER_BUNDLE:
+        raise ValueError(
+            f"sessions list is too long (max {MAX_SESSIONS_PER_BUNDLE})"
+        )
 
     sessions: list[dict[str, Any]] = []
     seen_sids: set[str] = set()
@@ -1030,8 +1041,12 @@ def _required_str(value: Any, name: str) -> str:
 
 def _date_or_string(value: Any, name: str) -> str:
     text = _required_str(value, name)
-    if "T" in text:
-        raise ValueError(f"{name} must be date-only")
+    try:
+        parsed = date.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an ISO date (YYYY-MM-DD)") from exc
+    if parsed.isoformat() != text:
+        raise ValueError(f"{name} must be an ISO date (YYYY-MM-DD)")
     return text
 
 
@@ -1047,8 +1062,10 @@ def _generated_seq(value: Any) -> int:
         return 0
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError("generated_seq must be a non-negative integer")
-    if value < 0:
-        raise ValueError("generated_seq must be a non-negative integer")
+    if value < 0 or value > MAX_GENERATED_SEQ:
+        raise ValueError(
+            f"generated_seq must be between 0 and {MAX_GENERATED_SEQ}"
+        )
     return value
 
 
@@ -1199,9 +1216,9 @@ def _sequence(value: Any) -> list[dict[str, Any]]:
 def _nonnegative_int(value: Any) -> int:
     try:
         parsed = int(value or 0)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return 0
-    return max(0, parsed)
+    return min(MAX_COUNTER_VALUE, max(0, parsed))
 
 
 def _json(value: Any) -> str:

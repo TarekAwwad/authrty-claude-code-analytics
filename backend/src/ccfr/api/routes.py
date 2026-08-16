@@ -20,6 +20,7 @@ from ccfr.analysis.context_economics import (
     context_economics_analytics,
     session_context_economics,
 )
+from ccfr.analysis.cost_trends import CostTrendRangeError
 from ccfr.analysis.discovery import discovery_analytics
 from ccfr.analysis.limits import limits_analytics
 from ccfr.analysis.team_bundles import (
@@ -35,6 +36,7 @@ from ccfr.analysis.team_cost import team_cost_analytics
 from ccfr.analysis.usage_map import usage_map_analytics, usage_map_evidence
 from ccfr.analysis.usage_characteristics import usage_characteristics_analytics
 from ccfr.naming import project_display_name
+from ccfr.security import MAX_API_REQUEST_BYTES
 from ccfr.api.schemas import (
     CacheStatsResponse,
     ContextEconomicsResponse,
@@ -265,6 +267,12 @@ def team_import(payload: TeamImportRequest, conn: Connection = Depends(get_db)) 
     if not path.is_file():
         raise HTTPException(status_code=400, detail=f"Team bundle not found: {path}")
     try:
+        bundle_size = path.stat().st_size
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if bundle_size > MAX_API_REQUEST_BYTES:
+        raise HTTPException(status_code=413, detail="Team bundle file is too large")
+    try:
         with path.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
         result = import_team_bundle(conn, data, source_path=path)
@@ -324,11 +332,18 @@ def get_team_cost_analytics(
     conn: Connection = Depends(get_db),
     historical: bool = Depends(get_historical_pricing),
 ) -> CostAnalyticsResponse:
-    return CostAnalyticsResponse(
-        **team_cost_analytics(
-            conn, date_from=date_from, date_to=date_to, model=model, project_id=project_id, historical=historical
+    try:
+        payload = team_cost_analytics(
+            conn,
+            date_from=date_from,
+            date_to=date_to,
+            model=model,
+            project_id=project_id,
+            historical=historical,
         )
-    )
+    except CostTrendRangeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CostAnalyticsResponse(**payload)
 
 
 @router.post("/imports", response_model=ImportSummaryResponse)
@@ -558,12 +573,18 @@ def get_cost_analytics(
     conn: Connection = Depends(get_db),
     historical: bool = Depends(get_historical_pricing),
 ) -> CostAnalyticsResponse:
-    return CostAnalyticsResponse(
-        **analytics.cost_analytics(
-            conn, date_from=date_from, date_to=date_to, project_id=project_id, model=model,
+    try:
+        payload = analytics.cost_analytics(
+            conn,
+            date_from=date_from,
+            date_to=date_to,
+            project_id=project_id,
+            model=model,
             historical=historical,
         )
-    )
+    except CostTrendRangeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CostAnalyticsResponse(**payload)
 
 
 @router.get("/analytics/discovery", response_model=DiscoveryResponse)
