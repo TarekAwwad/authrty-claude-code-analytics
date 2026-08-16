@@ -80,6 +80,10 @@ def _mount_docs(app: FastAPI) -> None:
             swagger_js_url="/docs-assets/swagger-ui-bundle.js",
             swagger_css_url="/docs-assets/swagger-ui.css",
             swagger_favicon_url="/docs-assets/favicon-32x32.png",
+            # The bundle's default validator badge only skips URLs containing
+            # localhost/127.0.0.1, so a non-loopback deployment would send the
+            # spec URL to validator.swagger.io.
+            swagger_ui_parameters={"validatorUrl": None},
         )
 
 

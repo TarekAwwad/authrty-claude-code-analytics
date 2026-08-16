@@ -34,6 +34,15 @@ def test_docs_page_references_no_external_hosts(client):
     assert "http://" not in resp.text
 
 
+def test_docs_page_disables_spec_validator(client):
+    # swagger-ui's bundled default is validator.swagger.io; its badge is only
+    # suppressed by a substring match on localhost/127.0.0.1, so non-loopback
+    # deployments would send the spec URL to swagger.io. The page config must
+    # switch the validator off explicitly.
+    page = client.get("/docs").text
+    assert '"validatorUrl": null' in page
+
+
 def test_docs_page_assets_are_served_locally(client):
     page = client.get("/docs").text
     for path in (

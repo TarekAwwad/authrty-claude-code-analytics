@@ -148,7 +148,32 @@ def test_allowed_hosts_env_override_is_split_and_trimmed(monkeypatch):
     assert config.allowed_hosts() == ["app.local", "*"]
 
 
+def test_app_version_reads_pyproject_in_source_checkout(monkeypatch, tmp_path):
+    # The Docker image runs from source without installing the package, so
+    # source-checkout mode must take the version straight from pyproject.toml
+    # rather than from (possibly absent or stale) installed metadata.
+    backend = tmp_path / "backend"
+    backend.mkdir()
+    (backend / "pyproject.toml").write_text(
+        '[project]\nname = "checkyouragent"\nversion = "7.7.7-test"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "_source_checkout_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_pkg_version", lambda _name: "9.9.9-test")
+    assert config.app_version() == "7.7.7-test"
+
+
+def test_app_version_survives_unreadable_pyproject(monkeypatch, tmp_path):
+    backend = tmp_path / "backend"
+    backend.mkdir()
+    (backend / "pyproject.toml").write_text("not [valid toml", encoding="utf-8")
+    monkeypatch.setattr(config, "_source_checkout_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_pkg_version", lambda _name: "9.9.9-test")
+    assert config.app_version() == "9.9.9-test"
+
+
 def test_app_version_reads_from_package_metadata(monkeypatch):
+    monkeypatch.setattr(config, "_source_checkout_root", lambda: None)
     monkeypatch.setattr(config, "_pkg_version", lambda _name: "9.9.9-test")
     assert config.app_version() == "9.9.9-test"
 
@@ -159,5 +184,6 @@ def test_app_version_falls_back_when_package_missing(monkeypatch):
     def _raise(_name):
         raise PackageNotFoundError("checkyouragent")
 
+    monkeypatch.setattr(config, "_source_checkout_root", lambda: None)
     monkeypatch.setattr(config, "_pkg_version", _raise)
     assert config.app_version() == "0.2.0"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import tomllib
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from pathlib import Path
 
@@ -169,14 +170,32 @@ def is_docker() -> bool:
     return Path("/.dockerenv").exists()
 
 
+def _source_checkout_version() -> str | None:
+    """Version straight from backend/pyproject.toml, or None outside a checkout."""
+    source = _source_checkout_root()
+    if source is None:
+        return None
+    try:
+        with (source / "backend" / "pyproject.toml").open("rb") as fh:
+            version = tomllib.load(fh).get("project", {}).get("version")
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    return version if isinstance(version, str) and version else None
+
+
 def app_version() -> str:
     """App release version recorded in team bundles.
 
-    Resolves from the installed ``checkyouragent`` package metadata so the
-    version has a single source (``pyproject.toml``). Falls back to the pinned
-    baseline when the package is not installed, e.g. a bare source checkout
-    without an editable install.
+    The version has a single source: ``pyproject.toml``. In a source checkout
+    (including the Docker image, which runs from source and does not install
+    the package) it is read from that file directly, which also sidesteps
+    stale editable-install metadata. Installed wheels resolve the
+    ``checkyouragent`` package metadata instead. The literal is a last-resort
+    baseline for environments where neither is available.
     """
+    version = _source_checkout_version()
+    if version is not None:
+        return version
     try:
         return _pkg_version("checkyouragent")
     except PackageNotFoundError:
