@@ -135,12 +135,15 @@ def webui_dir() -> Path:
 def allowed_origins() -> list[str]:
     """CORS origins permitted to call the API.
 
-    Defaults to the local frontend dev server. Override with a comma-separated
-    list in CCFR_ALLOWED_ORIGINS.
+    Defaults to the Docker frontend and Vite development origins. Override with
+    a comma-separated list in CCFR_ALLOWED_ORIGINS.
     """
     raw = os.getenv(
         "CCFR_ALLOWED_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
+        (
+            "http://localhost:5173,http://127.0.0.1:5173,"
+            "http://localhost:5174,http://127.0.0.1:5174"
+        ),
     )
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 

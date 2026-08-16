@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ccfr.api import router
 from ccfr.config import allowed_hosts, allowed_origins, app_version, database_path, webui_dir
+from ccfr.security import LocalRequestGuardMiddleware
 from ccfr.storage import connect, init_db
 
 
@@ -59,18 +60,19 @@ def _mount_webui(app: FastAPI) -> None:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Check Your Agent", version=app_version(), lifespan=lifespan)
+    origins = allowed_origins()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=allowed_origins(),
+        allow_origins=origins,
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    # Reject requests carrying a foreign Host header. The API is unauthenticated,
-    # so this is what actually makes the 127.0.0.1 bind private: it defeats DNS
-    # rebinding (a page pointing its domain at 127.0.0.1 then talking to the API
-    # same-origin) and the no-preflight cross-origin POSTs that rebinding enables.
-    # Added after CORS so it wraps outermost and screens the Host first.
+    # CORS controls which browsers may read responses; this guard separately
+    # rejects cross-origin state changes and oversized API bodies.
+    app.add_middleware(LocalRequestGuardMiddleware, allowed_origins=origins)
+    # Reject foreign Host headers to defeat DNS rebinding. Added last so it wraps
+    # the other middleware and screens the Host before the request guard runs.
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts())
     app.include_router(router)
     _mount_webui(app)

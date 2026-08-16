@@ -123,6 +123,21 @@ def test_data_dir_reports_clear_error_when_home_is_unresolvable(monkeypatch, tmp
         config.data_dir()
 
 
+def test_allowed_origins_include_docker_and_vite_frontends(monkeypatch):
+    monkeypatch.delenv("CCFR_ALLOWED_ORIGINS", raising=False)
+    assert config.allowed_origins() == [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ]
+
+
+def test_allowed_origins_env_override_is_split_and_trimmed(monkeypatch):
+    monkeypatch.setenv("CCFR_ALLOWED_ORIGINS", " http://app.local , https://app.local , ")
+    assert config.allowed_origins() == ["http://app.local", "https://app.local"]
+
+
 def test_allowed_hosts_defaults_to_loopback(monkeypatch):
     monkeypatch.delenv("CCFR_ALLOWED_HOSTS", raising=False)
     assert config.allowed_hosts() == ["localhost", "127.0.0.1"]
