@@ -234,7 +234,11 @@ release-readiness pass:
   Fetch Metadata are rejected, and a non-browser client that sends no browser
   headers is still served;
 - the headless `export-bundle` command produced a schema v3 structural bundle
-  containing no project names, file names, or local identifiers.
+  containing no project names, file names, or local identifiers;
+- `/docs` on the installed wheel loads Swagger UI from the packaged
+  `ccfr/docs_assets/` files with no reference to any external host and with the
+  spec validator disabled; ReDoc is off, and the SPA fallback answers `/redoc`.
+  CI and the release workflow now require those assets in the built wheel.
 
 CI now repeats backend tests on Python 3.11, 3.12, and 3.13 and performs the
 package smoke path before release.

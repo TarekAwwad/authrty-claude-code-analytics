@@ -67,7 +67,8 @@ jobs:
         run: |
           whl="$(ls dist/checkyouragent-*.whl)"
           python -m zipfile -l "$whl" > /tmp/wheel-contents.txt
-          for path in "ccfr/webui/index.html" "ccfr/_assets/pricing.csv" "ccfr/_assets/claude-export/"; do
+          for path in "ccfr/webui/index.html" "ccfr/_assets/pricing.csv" "ccfr/_assets/claude-export/" \
+                      "ccfr/docs_assets/swagger-ui-bundle.js" "ccfr/docs_assets/swagger-ui.css"; do
             if ! grep -qF "$path" /tmp/wheel-contents.txt; then
               echo "wheel is missing $path — refusing to publish" >&2
               exit 1
