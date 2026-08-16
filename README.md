@@ -1,6 +1,7 @@
 # Check Your Agent
 
-[**checkyouragent.dev**](https://checkyouragent.dev) · local, privacy-strict forensics for Claude Code spend.
+Local, evidence-backed forensics for Claude Code spend.
+[checkyouragent.dev](https://checkyouragent.dev)
 
 Claude Code writes a detailed record of every session to `~/.claude/projects`.
 Check Your Agent turns that record into an estimated API-equivalent cost,
@@ -33,10 +34,12 @@ helps you investigate *why* a session was expensive or unusual.
 - **Explore** — limit-hit analysis, estimated context opportunity, and Usage
   Drivers, plus an **Experimental** section for the observed-activity Usage
   Mindmap and non-causal subgroup associations.
-- **Team bundles** — export content-free aggregates at structural or team
-  privacy levels, then import them for team Overview and Cost views. New exports
-  use schema v3; v1 and v2 bundles remain importable after sanitization.
-- **Privacy mode** blurs sensitive UI text for safe screenshots.
+- **Team bundles** — export allowlisted aggregates designed to omit raw
+  conversation content at structural or team privacy levels, then import them
+  for team Overview and Cost views. New exports use schema v3; v1 and v2 bundles
+  remain importable after sanitization.
+- **Privacy mode** reduces visible sensitive text. Review every screenshot before
+  sharing it; display blur is not data sanitization.
 
 Experimental views deliberately make narrower claims. Usage Mindmap counts
 observed tool calls and text-only assistant steps, then classifies that activity
@@ -62,7 +65,7 @@ import.
 
 ## Screenshots
 
-[![Check Your Agent — demo screencast](docs/media/demo.gif)](docs/media/demo.gif)
+[![Check Your Agent — demo screencast](docs/screenshots/triage-board.png)](docs/media/demo.webm)
 
 *Loading the built-in demo data, scanning Sessions, and opening Context Economics. [Full-resolution recording](docs/media/demo.webm).*
 
@@ -71,7 +74,7 @@ screens, not live demos.
 
 | Import | Sessions | Session workspace |
 | --- | --- | --- |
-| ![Import page showing source status, cache totals, and project synchronization controls](docs/screenshots/import.png) | ![Sessions board showing supported findings, observed impact, activity, and estimated cost](docs/screenshots/triage-board.png) | ![Session workspace showing summary metrics, subagents, tool activity, timeline, trace lanes, and token chart](docs/screenshots/session-workspace.png) |
+| ![Import page showing source status, cache totals, and project synchronization controls](docs/screenshots/import.png) | ![Sessions board showing supported findings, observed impact, activity, and estimated cost](docs/screenshots/triage-board.png) | ![Session workspace showing trace lanes, token chart, event timeline, and selected-event inspector](docs/screenshots/session-workspace.png) |
 
 | Cost analytics | Subgroup discovery | Context economics |
 | --- | --- | --- |
@@ -88,10 +91,10 @@ honest map and when to reach for each.
 
 | Tool | Best for | Trade-off vs Check Your Agent |
 | --- | --- | --- |
-| [ccusage](https://github.com/ryoppippi/ccusage) | Instant daily/monthly/session cost totals from the CLI (`npx ccusage`) | Descriptive accounting only — no supported session findings or evidence receipts |
+| [ccusage](https://github.com/ccusage/ccusage) | Fast daily, monthly, and session usage/cost reports across coding-agent CLIs (`npx ccusage`) | Descriptive accounting rather than local evidence-backed session investigation |
 | [token-dashboard](https://github.com/nateherkai/token-dashboard) | A local dashboard over the same logs, with rule-based suggestions | Shallower attribution: heuristic rules rather than calibrated context-carry accounting |
-| [Sniffly](https://github.com/chiphuyen/sniffly) | Error-pattern stats across sessions | Unmaintained since 2025; focused on errors, not spend |
-| [Anthropic native analytics](https://code.claude.com/docs/en/analytics) | Team adoption and per-user spend, zero setup | Needs a Team/Enterprise plan; aggregate reporting only, no per-session "why" |
+| [Sniffly](https://github.com/chiphuyen/sniffly) | Error-pattern stats across sessions | Focused on errors rather than estimated cost and evidence-backed investigation |
+| [Anthropic native analytics](https://code.claude.com/docs/en/analytics) | Organization usage, spend, adoption, and team insights for Team/Enterprise and Claude Console API customers | Aggregate service-side reporting rather than local raw-session investigation |
 | **Check Your Agent** | Deep local forensics: which sessions merit investigation, with observed activity, estimated cost, and receipts | Heavier setup than a one-line CLI; Claude Code only (single agent) |
 
 Short version: reach for `ccusage` when you want a number in ten seconds; reach
@@ -107,11 +110,12 @@ what to change.
 - It does not preserve a durable archive of sessions that disappear from the
   source export. Re-importing a changed project rebuilds that project in the
   SQLite cache from the current files on disk.
-- `Reset local cache` rebuilds local import tables while preserving settings and
-  imported Team data. Team data has its own reset action. Neither reset deletes
+- **Reset local data** rebuilds local import tables while preserving settings and
+  imported Team data. Remove imported members separately from Team Import; the
+  Team reset API can clear all imported bundles. Neither operation deletes
   exported team bundle JSON files from disk.
 - Team aggregate views do not include per-session drilldowns because team
-  bundles intentionally omit raw session detail.
+  bundles are designed to omit raw session detail.
 - The backend is unauthenticated and intended for loopback-only use.
 
 ## Input Data
@@ -141,7 +145,7 @@ source data continues to import where possible.
 
 ## Output Data
 
-Local runs write rebuildable state under the data directory:
+Source-checkout runs write rebuildable state under the repository data directory:
 
 ```text
 .ccfr-data/
@@ -149,6 +153,9 @@ Local runs write rebuildable state under the data directory:
   settings.json
   team-bundles/
 ```
+
+Installed `uvx`/`pipx` runs default to the same layout under
+`~/.checkyouragent/`. `CCFR_DATA_DIR` overrides either location.
 
 Docker uses a named volume for `/app/data` and mounts `./TeamBundles` at
 `/team-bundles`. Team bundle export writes JSON files under
@@ -166,8 +173,9 @@ With `uv` (or `pipx`) installed, run the app without cloning or building anythin
 uvx checkyouragent          # or: pipx run checkyouragent
 ```
 
-This serves the app on `http://127.0.0.1:8000`, opens your browser, and defaults
-the import root to `~/.claude/projects`. Useful flags:
+This serves the app on `http://127.0.0.1:8000`, opens your browser, and uses
+`~/.claude/projects` as the import root when it exists, otherwise `./Data`.
+Useful flags:
 
 ```bash
 checkyouragent serve --import-root /path/to/exports

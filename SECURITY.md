@@ -33,10 +33,16 @@ Useful reports include:
 
 - The backend is unauthenticated and intended for loopback-only use.
 - Docker binds the backend and frontend to `127.0.0.1` by default.
+- The backend validates local `Host` headers by default to reduce DNS-rebinding
+  exposure.
+- State-changing browser requests must be same-origin or use a configured
+  `CCFR_ALLOWED_ORIGINS` origin. Cross-site Fetch Metadata is rejected, and
+  API request bodies are capped at 50 MiB.
 - Do not expose the backend or frontend to the public internet.
 - Do not bind the backend to `0.0.0.0` outside a trusted development setup
-  unless you add authentication and request protections.
-- CORS is not authentication. Treat the local API as trusted-user-only.
+  unless you add authentication and access controls.
+- CORS and browser-origin checks are not authentication. Treat the running
+  local API and every non-browser client with local access as trusted.
 
 ## Sensitive Data
 

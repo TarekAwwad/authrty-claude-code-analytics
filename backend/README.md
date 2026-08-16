@@ -1,13 +1,16 @@
 # Check Your Agent
 
-Local, privacy-strict forensics for Claude Code spend. Claude Code writes a
-complete record of every session to `~/.claude/projects`. Check Your Agent
-turns that record into answers: how much each session cost, how much of that
-cost was context waste (re-read files, oversized tool results, late
-compaction), and which sessions went off the rails. It runs entirely
-locally — no accounts, no telemetry, no uploads — and never modifies the
-original logs. Tools like ccusage tell you *what* you spent; Check Your Agent
-tells you *why*, and what to change.
+Local, evidence-backed forensics for Claude Code sessions. Claude Code writes a
+detailed record of every session to `~/.claude/projects`. Check Your Agent
+turns that record into estimated API-equivalent cost, observed activity, and
+supported findings linked to evidence receipts. It runs entirely locally — no
+accounts, no telemetry, no uploads — and never modifies the original logs.
+Tools like ccusage tell you *what* you used; Check Your Agent helps you
+investigate *why* a session was expensive or unusual.
+
+API-equivalent costs are estimates from recorded token counts and bundled
+pricing tables, not invoice amounts. Findings and experimental associations
+are leads to investigate, not causal conclusions.
 
 ## Run
 
@@ -16,30 +19,44 @@ uvx checkyouragent
 ```
 
 (or `pipx run checkyouragent`). This serves the app on port 8000, opens your
-browser, and defaults the import root to `~/.claude/projects`. `cya` is an
-identical, shorter alias.
+browser, and uses `~/.claude/projects` as the import root when it exists,
+otherwise `./Data`. `cya` is an identical, shorter alias.
 
 Flags:
 
-- `--import-root` — export root to scan (default: `~/.claude/projects`).
+- `--import-root` — export root to scan (default: `~/.claude/projects` when
+  present, otherwise `./Data`).
 - `--port` — bind port (default: 8000).
 - `--no-browser` — do not open a browser.
 - `--demo` — use the bundled synthetic demo dataset instead of a real export.
 
 ## What It Shows
 
-- **Overview** — a triage board that ranks sessions by risk, findings,
-  errors, loops, subagent fanout, and estimated cost.
+- **Sessions** — an investigation board with supported findings, observed
+  errors, subagent fanout, event volume, duration, estimated API-equivalent
+  cost, search, filters, and sorting.
 - **Session workspace** — timeline, trace, subagent, findings, and raw event
-  inspection for a single session.
-- **Cost analytics** — spend by project, model, and token category, with
-  historical or current pricing.
-- **Context Economics** — avoidable vs. necessary spend, so you can see what
-  drove your token footprint.
-- **Usage mindmap** — a visual map of usage patterns across your exports.
-- **Team bundles** — export content-free aggregates for team Overview and
-  Cost views.
-- **Privacy mode** — blurs sensitive UI text for safe screenshots.
+  inspection for a single session, with receipt links from each supported
+  finding back to the recorded events.
+- **Cost** — estimated API-equivalent cost by project, model, and token
+  category; cost over time, spike detection, turn distribution, and session
+  outliers, with optional date-aware historical pricing.
+- **Limit hits** — recorded limit notices and reconstructed five-hour windows,
+  viewed by recorded token volume or estimated API-equivalent cost.
+- **Context Economics** — explicitly defined opportunity signals with receipts
+  and session drilldown; estimated and unattributed values remain distinct.
+- **Usage drivers** — overlapping, cost- or token-weighted characteristics such
+  as subagent activity, large input contexts, and long-running sessions. These
+  shares are independent characteristics, not a breakdown.
+- **Experimental analysis** — an observed-activity Usage Mindmap and subgroup
+  associations with declared samples, uncertainty, and receipts. Neither view
+  claims causal attribution.
+- **Team bundles** — export allowlisted aggregates designed to omit raw
+  conversation content at structural or team privacy levels for team Overview
+  and Cost views. New exports use schema v3; sanitized v1 and v2 imports remain
+  supported.
+- **Privacy mode** — reduces visible sensitive text; screenshots still require
+  review before sharing.
 
 ## Links
 

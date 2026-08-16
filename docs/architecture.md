@@ -1,12 +1,12 @@
 # Architecture
 
-Audit date: 2026-07-05.
+Audit date: 2026-07-21.
 
-Check Your Agent is a local FastAPI + React application over a rebuildable
-SQLite cache. The current implementation is single-provider: Claude Code
-`.claude/projects` exports.
+Check Your Agent is a local FastAPI and React application over a rebuildable
+SQLite cache. The current importer supports Claude Code project exports. The
+application reads source exports but never modifies them.
 
-## Runtime Components
+## Runtime Topology
 
 ```text
 Claude Code project export root
@@ -15,165 +15,217 @@ Claude Code project export root
 backend/src/ccfr/ingest/importer.py
         |
         v
-SQLite cache at CCFR_DB_PATH
-        |
-        +--> backend/src/ccfr/analysis/*
+rebuildable local SQLite cache <------ imported team-bundle JSON
+        |                                      |
+        +--> backend/src/ccfr/analysis/* <------+
         |
         v
-backend/src/ccfr/api/routes.py
+backend/src/ccfr/api/routes.py  (/api)
         |
         v
 frontend/src/App.tsx
 ```
 
-Backend:
+The supported runtime shapes are:
 
-- Entry point: `ccfr.main:app`.
-- Framework: FastAPI.
-- Storage: SQLite with WAL mode.
-- Config: environment variables in `backend/src/ccfr/config.py`.
-- Importer: Claude Code JSONL project folders under `CCFR_IMPORT_ROOT`.
-- API router prefix: `/api`.
+- Installed package: `checkyouragent` (or `cya`) defaults to `serve`, starts
+  Uvicorn on `127.0.0.1:8000`, and serves the bundled React application and API
+  from the same process.
+- Source development: FastAPI runs on port `8000`; Vite runs on port `5174`
+  and proxies `/api` to FastAPI.
+- Docker Compose: the backend is exposed on loopback port `8000`; a separately
+  built nginx frontend is exposed on loopback port `5173`.
 
-Frontend:
+Backend entry points are `ccfr.main:app` for ASGI and `ccfr.cli:main` for the
+command line. The backend uses FastAPI, Pydantic, Uvicorn, and SQLite in WAL
+mode. The frontend uses React 18, Vite, and TanStack Query.
 
-- Entry point: `frontend/src/main.tsx`.
-- App shell: `frontend/src/App.tsx`.
-- Framework: React 18, Vite, TanStack Query.
-- Local dev URL: `http://localhost:5174`.
-- Docker frontend URL: `http://localhost:5173`.
+## Storage Model
 
-Docker:
+The SQLite database is a disposable index, not an archive.
 
-- Root `Dockerfile` builds the backend image.
-- `frontend/Dockerfile` builds a static frontend served by nginx.
-- `docker-compose.yml` runs both services on host loopback.
+Local import tables:
 
-## Data Model
+- Import and source identity: `imports`, `projects`, `sessions`,
+  `import_errors`.
+- Parsed source records: `events`, `messages`, `content_blocks`, `tool_calls`,
+  `tool_results`, `persisted_outputs`, `subagents`.
+- Derived records: `event_edges`, `session_stats`, `session_findings`,
+  `analysis_metadata`, and the FTS5 `search_index` virtual table.
 
-The SQLite cache is rebuilt from imported source files. Core tables include:
+Team tables:
 
-- `imports`, `projects`, `sessions`, `events`.
-- `messages`, `content_blocks`, `tool_calls`, `tool_results`.
-- `persisted_outputs`, `subagents`, `memory_nodes`.
-- `event_edges`, `session_stats`, `search_index`.
-- Sequence/risk tables: `sequence_slices`, `event_features`,
-  `sequence_patterns`, `pattern_hits`, `risk_findings`.
-- Team tables: `team_bundles`, `team_bundle_sessions`.
+- `team_bundles` stores one imported bundle revision per member.
+- `team_bundle_sessions` stores the bundle's sanitized session aggregates.
 
-`settings.json` lives outside SQLite under `CCFR_DATA_DIR` and stores app
-preferences, privacy mode, historical-pricing mode, contributor identity, and
-team export preferences.
+Database migration removes the retired `memory_nodes`, `event_features`,
+`sequence_slices`, `risk_findings`, `pattern_hits`, and `sequence_patterns`
+tables. They are not part of the current model.
 
-## Import Flow
+`settings.json` lives under `CCFR_DATA_DIR`, outside SQLite, so a local-data
+reset does not remove it. It stores the historical-pricing and privacy-mode
+preferences, subscription plan history, the random local bundle identity and
+export sequence, and team-export form preferences.
+
+## Import and Rebuild Flow
 
 The importer:
 
-- Scans immediate child directories of `CCFR_IMPORT_ROOT` as projects.
-- Reads `*.jsonl` session files.
-- Reads per-session `subagents/agent-*.jsonl` and
-  `subagents/agent-*.meta.json`.
-- Indexes `tool-results/*.txt`.
-- Reads `memory/*.md`.
-- Records malformed JSONL and bad metadata as import errors where possible.
-- Rebuilds derived edges, session stats, search rows, sequence features, and
-  risk findings after import.
+1. Treats each immediate child directory of `CCFR_IMPORT_ROOT` as one project.
+2. Reads project-root `*.jsonl` session files.
+3. Reads `subagents/agent-*.jsonl` and `agent-*.meta.json` inside UUID-named
+   session directories.
+4. Indexes metadata and the first-line preview of `tool-results/*.txt` files.
+5. Parses events, messages, tool calls/results, token usage, and subagent data.
+6. Rebuilds event edges, subagent/session statistics, full-text search rows,
+   and evidence-backed session findings.
 
-Current limitation: when a project's source signature changes, the importer
-deletes and rebuilds that project in the SQLite cache from the files currently
-present in the source tree. There is no implemented durable archive for source
-files that disappeared before re-import.
+The project signature covers relative file paths, sizes, and modification
+times. When it changes, that project's cache rows are deleted and rebuilt from
+the source files currently present. A project that disappears from the source
+tree is not automatically archived. The importer deliberately ignores project
+`memory/` directories and removes the retired memory search index during
+migration.
+
+`POST /api/imports/reset` clears local imports and derived analytics while
+preserving imported team bundles and `settings.json`. Team records have their
+own reset and per-member removal routes.
+
+## Team-Bundle Boundary
+
+Team export uses an explicit allowlist in `analysis/team_bundles.py` and shared
+canonicalizers in `analysis/bundle_sanitization.py`. New exports use schema v3;
+the importer also accepts legacy schema v1 and v2 bundles. Implemented privacy
+levels are:
+
+- `structural`: no member/project display names and no tool/file labels.
+- `team`: adds a member display name, project labels, real tool/MCP and
+  subagent-type names with counts, and extension-only file-type mix.
+
+The reserved `sessions` and `raw` levels are rejected. Imported bundles contain
+aggregates rather than raw events, so Team scope has no session drilldown.
+Content omission reduces disclosure but exact dates, token counts, and other
+structural aggregates can still fingerprint activity.
+
+The same bundle builder is used by the web API and the headless
+`checkyouragent export-bundle` command.
 
 ## API Surface
 
-Implemented route groups:
+All application routes use the `/api` prefix.
 
-- Runtime/settings: `GET /api/config`, `GET/PUT /api/settings`.
-- Import/cache: `POST /api/imports`, `POST /api/imports/reset`,
-  `GET /api/imports`, `GET /api/imports/progress`,
-  `GET /api/source/projects`, `GET /api/stats`.
-- Local data: `GET /api/projects`, `GET /api/sessions`,
-  `GET /api/sessions/{id}`, timeline, trace, turn costs, subagents, findings,
-  event detail, and search.
-- Analytics: cost, discovery, context economics, usage map, usage map
-  evidence, and usage characteristics.
-- Team bundles: projects, preview, export, import by path, import by uploaded
-  JSON payload, import list, member delete, team reset, dashboard, and team
-  cost.
-- Contribution bundle: preview and export. The page using these endpoints is
-  not mounted in the main app navigation.
+- Runtime and settings: `GET /config`, `GET /settings`, `PUT /settings`.
+- Local import/cache: `POST /imports`, `POST /imports/demo`,
+  `POST /imports/reset`, `GET /source/projects`, `GET /imports`,
+  `GET /imports/progress`, `GET /stats`.
+- Local records: `GET /projects`, `GET /sessions`, `GET /sessions/{id}`,
+  `GET /events/{id}`, and `GET /search`.
+- Session detail: `GET /sessions/{id}/timeline`, `/trace`, `/turn-costs`,
+  `/subagents`, `/tool-activity`, `/findings`, and `/context-economics`.
+- Local analytics: `GET /analytics/cost`, `/discovery`,
+  `/context-economics`, `/usage-map`, `/usage-map/evidence`,
+  `/usage-characteristics`, and `/limits`.
+- Team export/import: `GET /team/projects`, `POST /team/export-preview`,
+  `POST /team/export`, `POST /team/import`, `POST /team/import-bundle`,
+  `GET /team/imports`, `DELETE /team/members/{member_id}`, and
+  `POST /team/reset`.
+- Team analytics: `GET /team/dashboard` and `/team/analytics/cost`.
 
-## Frontend Screens
+There are no current contribution-bundle API routes.
 
-Local scope:
+## Frontend Navigation
 
-- Import.
-- Export a team bundle.
-- Overview triage board.
-- Cost analytics.
-- Explore: Subgroups, Context economics, Usage Mindmap.
-- Session workspace reached from Overview, Cost, or Explore.
+The sidebar switches between two data scopes.
 
-Team scope:
+This machine:
 
-- Import team bundles.
-- Team Overview.
-- Team Cost.
+- **Import**: discover, import, refresh, or reset local project data; load the
+  bundled synthetic demo.
+- **Export**: preview and write a privacy-controlled team bundle.
+- **Sessions**: filter and sort sessions by observed evidence, activity, and
+  estimated API-equivalent cost.
+- **Cost**: local cost and token analytics.
+- **Explore**: **Limit hits**, **Context economics**, **Usage drivers**,
+  experimental **Usage Mindmap**, and experimental **Subgroups**.
+- **Session workspace**: a drilldown reached from Sessions, Cost, or Explore;
+  it combines summary metrics, subagent/tool activity, trace, timeline, search,
+  supported findings, and event inspection.
 
-Team scope intentionally does not expose session drilldowns because imported
-team bundles do not contain raw per-session events.
+Team:
+
+- **Import**: import, list, and remove team bundles.
+- **Overview**: aggregate team/member activity.
+- **Cost**: aggregate bundle cost; no raw-session panels.
+
+The shell also provides privacy-mode display blur, theme controls, a collapsible
+sidebar, and a glossary. Privacy mode changes presentation only; it does not
+sanitize the underlying cache or API responses.
 
 ## Analysis Modules
 
-- `pricing.py`: baseline and dated snapshot pricing.
-- `metrics.py`: loop statistics.
-- `risk_patterns.py`: deterministic sequence features and heuristic risk
-  findings.
-- `discovery.py`: subgroup discovery for cost, fanout, errors, and rejections.
-- `trace.py`: session event trace payloads.
-- `context_economics.py`: context-carry attribution and waste detectors.
-- `usage_map.py`: workflow-phase and habit aggregation.
-- `usage_characteristics.py`: overlapping usage characteristics.
-- `team_bundles.py` and `team_cost.py`: content-free team sharing and team
-  aggregate cost.
-- `contribution.py`: content-free contribution bundle export.
-- `limits.py`: detects subscription limit-hit events (synthetic rate-limit
-  messages), folds usage into priced 5-hour windows, and derives per-era
-  measured cap zones. Corpus-wide on purpose (limits are account-level).
+- `pricing.py`: baseline and dated-snapshot price timelines and token-category
+  cost estimation.
+- `cost_trends.py`: shared daily/weekly trend bucketing for local and team cost.
+- `session_findings.py`: import-time, evidence-backed finding receipts.
+- `trace.py` and `metrics.py`: trace lanes/spans and neutral same-tool streak
+  display metadata.
+- `discovery.py`: corpus subgroup associations with support and uncertainty
+  gates.
+- `context_economics.py`: estimated context-carry attribution and opportunity
+  detectors.
+- `usage_map.py`: deterministic classification of observed assistant activity
+  into workflow phases and neutral observations.
+- `usage_characteristics.py`: independent, overlapping usage-driver shares.
+- `limits.py`: corpus-wide recorded subscription-limit hits and reconstructed
+  five-hour usage windows.
+- `team_bundles.py`, `bundle_sanitization.py`, and `team_cost.py`: privacy-level
+  bundle export/import, canonicalization, team aggregation, and cost analytics.
+
+The former `risk_patterns.py` and contribution analysis modules are no longer
+part of the current implementation.
 
 ## Configuration Reference
 
+Important environment variables:
+
 ```text
-CCFR_DATA_DIR=<repo>/.ccfr-data
+CCFR_DATA_DIR=<source checkout>/.ccfr-data
 CCFR_DB_PATH=<CCFR_DATA_DIR>/ccfr.sqlite3
-CCFR_IMPORT_ROOT=<repo>/Data
+CCFR_IMPORT_ROOT=<source checkout>/Data
+CCFR_DEMO_DIR=<source checkout>/demo/claude-export
 CCFR_TEAM_BUNDLE_ROOT=<CCFR_DATA_DIR>/team-bundles
-CCFR_PRICING_PATH=<repo>/pricing.csv
-CCFR_PRICING_DIR=<repo>/pricing
+CCFR_PRICING_PATH=<source checkout>/pricing.csv
+CCFR_PRICING_DIR=<source checkout>/pricing
+CCFR_WEBUI_DIR=<installed package>/ccfr/webui
 CCFR_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 CCFR_ALLOWED_HOSTS=localhost,127.0.0.1
 ```
 
-`CCFR_ALLOWED_ORIGINS` matters only when the browser calls the backend
-cross-origin. In local Vite development the frontend normally uses the `/api`
-proxy instead.
+These are source-checkout defaults. An installed package defaults
+`CCFR_DATA_DIR` to `~/.checkyouragent`; `serve` prefers
+`~/.claude/projects` as its import root when that directory exists, then falls
+back to `./Data`. Explicit environment variables and CLI flags take precedence.
 
-`CCFR_ALLOWED_HOSTS` is the accepted `Host` header allow-list. It is what keeps
-the unauthenticated 127.0.0.1 bind private against DNS rebinding: a page that
-rebinds its domain to 127.0.0.1 reaches the app same-origin, but its forged
-`Host` is rejected. `serve --host <non-loopback>` sets it to `*` (guard off) so
-a deliberate network bind still works; set it explicitly to re-restrict.
+## Security Boundary
 
-## Current Security Boundary
+The supported deployment assumes a trusted local user:
 
-The app assumes local trust:
+- The API has no authentication. Normal startup and Docker bind it to loopback.
+- `TrustedHostMiddleware` rejects unexpected `Host` headers by default to
+  reduce DNS-rebinding exposure. A deliberate non-loopback `serve --host`
+  disables that allowlist unless `CCFR_ALLOWED_HOSTS` is set explicitly.
+- CORS restricts browser response access. A separate request guard rejects
+  state-changing requests from untrusted browser origins or cross-site Fetch
+  Metadata while allowing same-origin, configured development origins, and
+  non-browser clients. API request bodies are capped at 50 MiB.
+- Raw exports and the derived cache contain prompts, responses, commands,
+  paths, tool data, and other potentially sensitive content.
+- The Team bundle allowlist is designed to omit raw content but still exposes
+  structural aggregates and, at the `team` level, selected labels. Imports
+  require canonical dates, bound numeric values, at most 50,000 sessions, and
+  the global API body limit; see `PRIVACY.md`.
+- Cost trend responses are capped at 3,660 daily or weekly buckets.
 
-- Backend is unauthenticated but validates the `Host` header (`CCFR_ALLOWED_HOSTS`)
-  so a foreign site cannot reach the loopback API via DNS rebinding.
-- Docker binds backend and frontend to `127.0.0.1`.
-- Raw exports and the derived SQLite cache may contain sensitive content.
-- Team bundles are content-free by design, but structural token/timing/tool
-  patterns can still fingerprint usage.
-
-Do not expose the backend or frontend to a LAN or the public internet without
-adding authentication and additional request protections.
+Do not expose the application to a LAN or the public internet without adding
+authentication, request-forgery protection, transport security, and a review of
+the intended disclosure boundary.
