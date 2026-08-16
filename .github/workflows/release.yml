@@ -102,6 +102,9 @@ jobs:
           test -f "dist/checkyouragent-${GITHUB_REF_NAME#v}.tar.gz"
 
       - name: Publish to PyPI (Trusted Publishing)
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0
+        # v1.14.2 ships Twine 7, which accepts core metadata 2.5. Hatchling 1.32
+        # emits 2.5, so older publish actions reject the wheel with
+        # "InvalidDistribution: '2.5' is not a valid metadata version".
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
         with:
           packages-dir: dist/
