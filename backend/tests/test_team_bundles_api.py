@@ -78,8 +78,12 @@ def test_team_export_writes_under_bundle_root_without_network(client, monkeypatc
     assert len(written) == 1
     assert body["path"] == str(written[0])
     parsed = json.loads(written[0].read_text(encoding="utf-8"))
+    assert parsed["schema_version"] == 3
     assert parsed["privacy_level"] == "structural"
     assert "profile" not in parsed
+    for session in parsed["sessions"]:
+        assert {"risk_categories", "sequence"}.isdisjoint(session)
+        assert {"loops", "max_repeat"}.isdisjoint(session["stats"])
     assert parsed["bundle_id"] == body["bundle_id"]
     assert body["session_count"] == 3
 
@@ -126,6 +130,19 @@ def test_team_import_is_no_network_and_idempotent(client, monkeypatch):
     assert conn.execute("SELECT COUNT(*) FROM team_bundles").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM team_bundle_sessions").fetchone()[0] == 3
     assert Path(export["path"]).is_relative_to(bundle_root)
+
+
+def test_team_import_rejects_oversized_path_bundle(client, monkeypatch):
+    c, _conn, bundle_root = client
+    oversized = bundle_root / "oversized.json"
+    oversized.parent.mkdir(parents=True, exist_ok=True)
+    oversized.write_text("01234567890", encoding="utf-8")
+    monkeypatch.setattr(routes, "MAX_API_REQUEST_BYTES", 10)
+
+    response = c.post("/api/team/import", json={"path": str(oversized)})
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "Team bundle file is too large"
 
 
 def test_team_import_accepts_browser_selected_bundle_payload(client, monkeypatch):
@@ -183,7 +200,21 @@ def test_team_import_accepts_legacy_precanonical_export_hash(client):
     assert resp.json()["imported"] is True
     assert resp.json()["bundle_id"] != bundle["bundle_id"]
     dashboard = c.get("/api/team/dashboard").json()
-    assert {"sym": "CALL:other", "count": 1} in dashboard["sequence"]
+    assert "sequence" not in dashboard
+
+
+def test_team_import_rejects_generated_seq_above_sqlite_limit(client):
+    c, _conn, _bundle_root = client
+    bundle = c.post("/api/team/export-preview", json=_export_body()).json()["bundle"]
+    bundle["generated_seq"] = 10**100
+
+    response = c.post(
+        "/api/team/import-bundle",
+        json={"filename": "oversized-sequence.json", "bundle": bundle},
+    )
+
+    assert response.status_code == 400
+    assert "generated_seq" in response.json()["detail"]
 
 
 def test_team_import_rejects_outside_root_and_invalid_profile_schema(client, tmp_path):
@@ -228,6 +259,13 @@ def test_team_dashboard_aggregates_imported_bundles(client):
     assert body["meta"]["session_count"] == 3
     assert body["tokens"]["input"] > 0
     assert body["tokens"]["output"] > 0
+    assert {"risk_categories", "sequence"}.isdisjoint(body)
+    assert {"loops", "max_repeat"}.isdisjoint(body["stats"])
+    assert body["reliability"]["session_count"] == body["meta"]["session_count"]
+    assert body["reliability"]["errors_per_session"] == pytest.approx(
+        body["reliability"]["error_count"] / body["reliability"]["session_count"]
+    )
+    assert all(set(model) == {"model", "tokens"} for model in body["models"])
     assert {"provider": "claude", "session_count": 3} in body["providers"]
     assert any(item["reason"] == "tool_use" for item in body["stop_reasons"])
     assert any(item["agent_type"] == "general-purpose" for item in body["subagents"])
@@ -246,6 +284,18 @@ def test_team_dashboard_reports_distinct_project_count(client):
 
     assert expected > 0
     assert body["meta"].get("project_count") == expected
+
+
+def test_team_cost_endpoint_rejects_oversized_date_range(client):
+    c, _conn, _bundle_root = client
+
+    response = c.get(
+        "/api/team/analytics/cost",
+        params={"date_from": "1900-01-01", "date_to": "2100-12-31"},
+    )
+
+    assert response.status_code == 400
+    assert "too many buckets" in response.json()["detail"]
 
 
 def test_team_cost_endpoint_returns_cost_shape(client):

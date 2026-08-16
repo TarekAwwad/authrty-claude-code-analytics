@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionCard } from "../api/types";
+import { getSubagents } from "../api/client";
 import SessionWorkspace from "./SessionWorkspace";
 
 vi.mock("../api/client", () => ({
@@ -21,6 +22,7 @@ vi.mock("../api/client", () => ({
     },
   })),
   getSubagents: vi.fn(async () => []),
+  getToolActivity: vi.fn(async () => []),
   getSessionFindings: vi.fn(async () => []),
   getEvent: vi.fn(async () => null),
   search: vi.fn(async () => []),
@@ -62,21 +64,22 @@ function baseSession(id: number): SessionCard {
     persisted_output_count: 0,
     input_tokens: 1000,
     output_tokens: 500,
-    loop_count: 2,
-    max_repeat: 7,
     duration_seconds: 1320,
     max_agent_events: 100,
     finding_count: 1,
-    pattern_risk_score: 42,
-    top_finding_category: null,
-    top_finding_severity: null,
     top_finding_title: null,
+    top_finding_basis: null,
     cost_usd: 0.48,
     cost_available: true,
   };
 }
 
-function renderWorkspace(options: { initialEventId?: number | null; backLabel?: string; onBack?: () => void } = {}) {
+function renderWorkspace(options: {
+  initialEventId?: number | null;
+  backLabel?: string;
+  onBack?: () => void;
+  historical?: boolean;
+} = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
@@ -99,17 +102,33 @@ describe("SessionWorkspace", () => {
     expect(container.querySelector(".session-toolbar")).not.toBeNull();
     expect(container.querySelector(".session-overview .session-summary-grid")).not.toBeNull();
     expect(container.querySelector(".session-workspace")).not.toBeNull();
-    expect(screen.getByRole("heading", { name: "Event density" })).toBeInTheDocument();
+    expect(screen.getByText("Estimated API-equivalent cost")).toBeInTheDocument();
+    expect(screen.getByText("Turns")).toBeInTheDocument();
+    expect(screen.getByText("Session span")).toBeInTheDocument();
+    expect(screen.getByText("Observed errors")).toBeInTheDocument();
+    expect(screen.queryByText("Risk score")).not.toBeInTheDocument();
+    expect(screen.queryByText("Max loop")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Subagents - 0" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Tool usage" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Tool activity" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Event density" })).not.toBeInTheDocument();
   });
 
-  it("renders trace timeline and inspector without switching tabs", async () => {
+  it("passes the existing historical-pricing mode to subagent activity", async () => {
+    vi.mocked(getSubagents).mockClear();
+    renderWorkspace({ historical: false });
+
+    await waitFor(() => expect(getSubagents).toHaveBeenCalledWith(1, false));
+  });
+
+  it("keeps Trace visible alongside Timeline and Inspector", async () => {
     renderWorkspace();
 
     expect(await screen.findByTestId("trace-view")).toBeInTheDocument();
     expect(screen.getByTestId("timeline-panel")).toBeInTheDocument();
     expect(screen.getByTestId("inspector-panel")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show trace" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Hide trace" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/loops/i)).not.toBeInTheDocument();
   });
 
   it("shows an origin-aware back control when provided", async () => {
@@ -121,7 +140,7 @@ describe("SessionWorkspace", () => {
     expect(onBack).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps a deep-linked event selected on entry", async () => {
+  it("keeps a deep-linked event selected in Trace", async () => {
     renderWorkspace({ initialEventId: 42 });
 
     expect(await screen.findByTestId("trace-view")).toHaveAttribute("data-selected-event-id", "42");

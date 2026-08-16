@@ -1,321 +1,263 @@
 # Documentation Audit
 
-Audit date: 2026-07-05.
+Audit date: 2026-08-16.
 
-Scope: repository documentation, docs-like configuration, UI copy entry points,
-package metadata, Docker/development configuration, and implementation surfaces
-used to verify product behavior.
+This is a dated repository snapshot, not a promise that documentation will stay
+current automatically. It records the public documentation and release-hardening
+pass for the 0.2.0 candidate. Product claims were checked against the backend
+schema and routes, importer, analysis modules, frontend navigation, package
+metadata, and runtime configuration at that date.
+
+## Status Summary
+
+The public text now describes the current product model:
+
+- local Claude Code import into a rebuildable cache, not a durable archive;
+- a Sessions investigation board rather than a risk-ranked Overview;
+- supported findings tied to recorded evidence rather than opaque scores;
+- observed, estimated, inferred, and associated values labelled by basis;
+- Team bundle schema v3 without retired risk, loop, sequence, or memory fields;
+- separate local-data and Team reset behavior;
+- current Explore navigation and current package/Docker/development commands;
+- an unauthenticated, loopback-oriented service with explicit browser-origin,
+  request-size, and local-data sensitivity boundaries.
+
+No public documentation should describe the repository as open source. It is
+source-available under the Business Source License 1.1 and converts to
+Apache-2.0 on the Change Date stated in `LICENSE`.
 
 ## Documentation Inventory
 
-| File or path | Classification | Why |
+| File or path | Status at audit date | Notes |
 | --- | --- | --- |
-| `README.md` | current | Rewritten in this audit to describe the implemented local app, inputs, outputs, Docker/local commands, team bundles, maturity, and limitations. |
-| `docs/architecture.md` | current | Added in this audit because the tracked repository did not have a current architecture overview. |
-| `docs/documentation-audit.md` | current | Added in this audit to hold inventory, product reality, validation notes, and gaps. |
-| `PRIVACY.md` | current | Updated to reflect actual local storage, team bundle disclosure levels, reset behavior, and the unmounted contribution page. |
-| `SECURITY.md` | current | Updated to reflect loopback-only unauthenticated assumptions, CSRF/local API risk, team bundle sensitivity, and generated data paths. |
-| `CONTRIBUTING.md` | current | Updated with current local/Docker commands, Vite port, dependency commands, and documentation expectations. |
-| `CODE_OF_CONDUCT.md` | current | Still accurate; no product feature claims beyond privacy-safe conduct. |
-| `LICENSE` | current | License metadata is consistent with the repository being BUSL-1.1. |
-| `.github/workflows/ci.yml` | current | CI commands match existing backend/frontend scripts: `uv run --extra dev pytest`, `npm ci`, `npm run build`, `npm test`, and production `npm audit`. |
-| `Dockerfile` | current | Backend Dockerfile matches the documented backend image and `/imports` defaults. It copies `pricing.csv` but relies on compose to mount the optional `pricing/` directory. |
-| `frontend/Dockerfile` | current | Builds the Vite frontend with `VITE_API_BASE=http://localhost:8000/api` and serves it through nginx on port `5173`. |
-| `docker-compose.yml` | current | Runs backend and frontend on host loopback, mounts `Data`, `TeamBundles`, `pricing.csv`, and `pricing/`. |
-| `docker-compose-local.yml` | duplicate or redundant | Local, ignored compose variant for a backend-only topology with host-specific mount paths. It is useful locally but should not be treated as canonical documentation. |
-| `.dockerignore` | missing important information before audit; current after audit | Updated to exclude `TeamBundles/`, `.ccfr-data/`, `.claude/`, and logs from Docker build context. |
-| `.gitignore` | current | Excludes generated data, local env, dependency/build output, local agent notes, WIP plans, and pricing snapshots. |
-| `backend/pyproject.toml` | current | Package metadata uses `checkyouragent`; the Python import namespace remains `ccfr`. |
-| `frontend/package.json` | current | Scripts exist and work with the documented frontend workflow. Private package metadata uses `checkyouragent-frontend`. |
-| `frontend/vite.config.ts` | current | Confirms the local dev server default port is `5174` and `/api` proxies to `localhost:8000`. |
-| `frontend/index.html` | current | Browser title and static description metadata use `Check Your Agent`. |
-| `frontend/src/shell/Sidebar.tsx` | current | UI wordmark is `Check Your Agent`. |
-| `pricing.csv` | current as app data | Valid baseline CSV for the app's pricing loader. External price accuracy was not verified; docs now warn that pricing may lag. |
-| `pricing/` | duplicate or redundant local data | Ignored local snapshot directory with dated price CSVs. The feature is documented, but these local files are not tracked product docs. |
-| `docs/screenshots/*.png` | current references, not regenerated | README references only screenshot files that exist. Screenshots were not regenerated or visually revalidated in this audit. |
-| `PR-team-bundle-sharing.md` | current local PR note | Updated from future-tense PR copy to implemented-state notes and current limitations. The file is untracked in this workspace. |
-| `CLAUDE.md` | current local agent note | Updated because the previous ignored local note said Docker was backend-only and Context Economics was not started. |
-| `AGENT.md` | current local agent note | Ignored local note with broad vision language. Product name now matches `Check Your Agent`. |
-| `WIP-plans/codex-support-*.md` | planned or implied, not implemented | Useful planning docs for Codex support. They must not be read as current product capability. |
-| `WIP-plans/local-archive-otel-retention-*.md` | planned or implied, not implemented | Useful planning/review docs for archive, retention, and OTEL. No archive/OTEL implementation exists today. |
-| `frontend/src/contribute/ContributePage.tsx` | partially implemented UI copy | Page and API client exist, but `App.tsx` never renders the page in main navigation. Its dataset upload URL is marked with a TODO. |
+| `README.md` | current | Main product claims, evidence vocabulary, input/output model, navigation, reset scope, package/Docker/development instructions, pricing caveats, and source-available license summary match the implementation. |
+| `backend/README.md` | current | Package-index description matches the installed `uvx`/`pipx` application and its current screens and limitations. |
+| `CHANGELOG.md` | current | The dated `0.2.0` section records the credibility cleanup, v3 Team bundles, hardening changes, current Sessions/workspace changes, and removed features. |
+| `docs/architecture.md` | current | Re-audited on 2026-08-16 against current tables, migrations, routes, modules, runtime shapes, request guards, and frontend navigation. Its documented `/api` surface was compared against the running application's OpenAPI schema. |
+| `docs/documentation-audit.md` | current dated snapshot | Updated for the 0.2.0 release-hardening pass. |
+| `docs/release-checklist.md` | current | Covers version/changelog agreement, security and privacy review, audits, multi-version tests, package smoke checks, and publication verification. |
+| `PRIVACY.md` | current | Describes sensitive local cache content, current reset semantics, Team schema v3, legacy import handling, structural fingerprinting, and enforced import/request limits. |
+| `SECURITY.md` | current | States the unauthenticated loopback trust model, sensitive-data handling, Host-header and browser-origin guards, request-size cap, and relevant report categories. |
+| `CONTRIBUTING.md` | current | Uses current test/dev commands and requires factual docs, synthetic fixtures, privacy/security review, and the release checklist. |
+| `LICENSE`, `backend/LICENSE` | current | Both carry the BUSL-1.1 terms and Additional Use Grant; the license itself says it is not an Open Source license. |
+| `CODE_OF_CONDUCT.md` | current | Contains no changing product capability claims. |
+| `backend/pyproject.toml` | current | Package name, entry points, Python support, license, project links, build inputs, and development dependencies match the code. |
+| `frontend/package.json`, `frontend/vite.config.ts` | current | Scripts and the Vite `5174` development/proxy behavior match documented commands. |
+| `Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` | current | Compose exposes frontend `5173` and backend `8000` on host loopback and mounts source, Team, pricing, and cache paths as documented. |
+| `scripts/README.md`, `scripts/capture-*.mjs` | current | Document and automate the synthetic demo/media capture flow using current UI selectors. |
+| `docs/screenshots/*`, `docs/media/shots/*`, `docs/media/demo.webm` | current | Regenerated from the synthetic dataset on 2026-08-16 with the current capture scripts, which refuse to capture unless the loaded corpus is exactly the bundled `demo-*` projects. README references current PNGs and links to the refreshed WebM. |
 
-## Product Reality Extraction
+## Current Product Reality
 
-### Facts From Code
+### Runtime and data source
 
-- Product type: local FastAPI + React app over a rebuildable SQLite cache.
-- Public product name: Check Your Agent.
-- Internal namespace and local paths still use `ccfr` for code imports,
-  environment variables, local storage keys, and generated data paths.
-- Supported data source: Claude Code `.claude/projects`-style JSONL exports.
-- Default local import root: `<repo>/Data`.
-- Default local database: `<repo>/.ccfr-data/ccfr.sqlite3`.
-- Default team bundle root: `<repo>/.ccfr-data/team-bundles`.
-- Docker import root: `/imports`, mounted from `./Data`.
-- Docker team bundle root: `/team-bundles`, mounted from `./TeamBundles`.
-- Backend route prefix: `/api`.
-- Backend is unauthenticated and intended for loopback-only use.
-- Frontend local dev port is `5174`; Docker frontend port is `5173`.
-- Local frontend dev uses Vite proxy for `/api`.
-- Docker frontend is built with `VITE_API_BASE=http://localhost:8000/api`.
-- Importer scans immediate child directories of the import root as projects.
-- Importer reads main session `*.jsonl`, per-session subagent JSONL/meta,
-  `tool-results/*.txt`, and `memory/*.md`.
-- Importer records malformed JSONL and bad subagent metadata as import errors
-  where possible.
-- Re-importing a changed project deletes and rebuilds that project's SQLite rows
-  from the current source files.
-- `POST /api/imports/reset` drops the cache tables listed in
-  `DROP_TABLES`, including `team_bundles` and `team_bundle_sessions`.
-- `settings.json` persists outside SQLite and survives `reset_db`.
-- Cost analytics load prices from `pricing.csv` plus optional dated snapshot
-  files named `pricing-YYYY-MM-DD.csv`.
-- Missing model price rows make cost estimates partial or unavailable.
-- Local scope exposes Import, Export, Overview, Cost, Explore, and session
-  workspace.
-- Team scope exposes Import, Overview, and Cost.
-- Explore ready techniques are Subgroups, Context economics, and Usage Mindmap.
-- Sequence mining and anomalies exist only as `status: "soon"` technique
-  entries.
-- Team bundles have implemented `structural` and `team` privacy levels.
-- Team bundle `sessions` and `raw` privacy levels are reserved and rejected by
-  backend validation.
-- Team aggregate Cost hides session-level panels because bundles lack raw event
-  detail.
-- Contribution preview/export APIs exist.
-- `ContributePage` exists and has tests, but is not mounted in `App.tsx`.
+- Public product and Python package name: **Check Your Agent** /
+  `checkyouragent`; internal Python namespace and environment-variable prefix:
+  `ccfr` / `CCFR_`.
+- Supported source: Claude Code `.claude/projects`-style exports only.
+- The importer reads project-root session JSONL, UUID-session subagent JSONL and
+  metadata, and persisted `tool-results/*.txt` metadata/previews.
+- Project `memory/` directories may exist in the source but are intentionally
+  ignored. The retired memory index is dropped during database migration.
+- Raw source files are read-only. A changed project is rebuilt in SQLite from
+  the files currently on disk; disappeared source data is not durably archived.
+- The installed command is `checkyouragent` with the `cya` alias. With no
+  subcommand both default to `serve` on loopback port `8000`.
 
-### Implemented Features
+### Current storage
 
-- Project discovery from a configured import root.
-- Import all new projects or one project.
-- Import progress polling.
-- Cache stats and import history.
-- Project/session listing with search and filters.
-- Full-text search over sessions, messages, tool calls, subagents, and memory.
-- Event detail API with optional raw JSON.
-- Session timeline, trace, subagent list, findings, and turn-cost breakdown.
-- Risk pattern extraction and session risk triage.
-- Cost analytics with project/model/date filters.
-- Historical/current pricing toggle persisted in settings.
-- Subgroup discovery for cost, fanout cost, tool errors, and rejected slices.
-- Context economics with redundant re-read, oversized result, late compaction,
-  and stale continuation detectors.
-- Usage mindmap with workflow phases, habits/tools lens, date/project filters,
-  main/subagent origin filter, previous-period compare, JSON export, and PNG
-  export.
-- Usage characteristics dialog.
-- Team bundle export preview/export.
-- Team bundle import from browser JSON payload or backend-visible path.
-- Team import list, member delete, team reset, team dashboard, and team cost.
-- Privacy mode blur for sensitive UI text.
-- Theme switch and collapsible sidebar.
-- Glossary dialog.
+- Core local tables are `imports`, `projects`, `sessions`, `events`, `messages`,
+  `content_blocks`, `tool_calls`, `tool_results`, `persisted_outputs`,
+  `subagents`, and `import_errors`.
+- Derived local tables are `event_edges`, `session_stats`, `session_findings`,
+  `analysis_metadata`, and the FTS5 `search_index`.
+- Team imports use `team_bundles` and `team_bundle_sessions`.
+- Risk-pattern, sequence-feature, loop-stat, and memory-index tables are retired
+  and removed by migration.
+- `settings.json` is outside SQLite and preserves display/pricing preferences,
+  plan history, and Team export identity/preferences across a local-data reset.
+- A local reset preserves imported Team rows. Team reset/removal is separate.
+  Neither operation deletes original exports or already-written bundle files.
 
-### Partially Implemented Features
+### Current navigation
 
-- Contribution bundles: backend and page component exist, but the page is not
-  reachable from main navigation and the public dataset URL is still marked
-  `TODO(confirm)`.
-- Historical pricing snapshots: loader and Docker mounts exist, but the tracked
-  repository only guarantees `pricing.csv`. Local `pricing/` snapshots are
-  ignored.
-- Team bundles: aggregate views work, but there is no raw/session-level team
-  drilldown by design.
+This machine:
 
-### Planned Or Implied But Not Implemented
+- Import
+- Export
+- Sessions
+- Cost
+- Explore: Limit hits, Context economics, Usage drivers, experimental Usage
+  Mindmap, and experimental Subgroups
+- Session workspace, reached as a drilldown rather than a permanent nav item
 
-- Codex/OpenAI/other-agent import.
-- Durable archive for source-pruned sessions.
-- OpenTelemetry receiver.
-- Claude hook inbox or live capture.
-- Agent SDK SessionStore import.
-- Archive delete/prune APIs.
-- Sequence mining Explore view.
-- Anomaly detection Explore view.
-- Raw-session team sharing.
-- Public contribution dataset workflow in the main app.
+Team:
 
-### Removed Or Obsolete Claims Found
+- Import
+- Overview
+- Cost
 
-- `CLAUDE.md` claimed Docker was backend-only; current compose runs backend and
-  frontend.
-- `CLAUDE.md` claimed Context Economics was not started; it is implemented and
-  exposed as a ready Explore technique.
-- README and Contributing previously documented local frontend URL
-  `http://localhost:5173`; current Vite config uses `5174`.
-- Team bundle PR notes were written as new/future PR copy; the implementation is
-  present.
+Team data has no raw event/session drilldown because bundles contain aggregates.
 
-### Supported Inputs
+### Current analysis claims
 
-- Claude Code project directories directly under `CCFR_IMPORT_ROOT`.
-- Session JSONL files.
-- Subagent JSONL and subagent metadata files.
-- Text persisted outputs under `tool-results/*.txt`.
-- Memory markdown under `memory/*.md`.
-- Team bundle JSON files matching schema v1 or v2.
-- Pricing CSV files with model and token category columns.
+- **Observed** values come directly from imported records or deterministic
+  counts/classifications over those records.
+- **Estimated** values include API-equivalent cost and context opportunity.
+  They depend on local pricing and explicit detector assumptions; they are not
+  invoices or guaranteed savings.
+- **Inferred** limit windows reconstruct account-level five-hour periods from
+  recorded usage and rate-limit notices. Missing notices or usage outside the
+  exported Claude Code corpus remain invisible.
+- **Associated** subgroup findings are non-causal statistical comparisons with
+  declared samples, uncertainty, multiple-comparison correction, and example
+  receipts.
+- Supported session findings detect specific recorded conditions and link back
+  to evidence. They do not recreate the removed risk score/tier system.
+- Usage Mindmap classifies observed assistant activity; it does not allocate
+  message cost to workflow phases.
+- Usage Drivers entries overlap and therefore need not sum to 100%.
 
-### Supported Outputs
+### Team bundles
 
-- Local SQLite cache.
-- Local settings JSON.
-- Local contribution bundle JSON files under `.ccfr-data/contributions`.
-- Local team bundle JSON files under `CCFR_TEAM_BUNDLE_ROOT/exports`.
-- Browser-rendered analytics dashboards.
-- Usage mindmap JSON and PNG exports.
-- API JSON responses under `/api`.
+- New exports use schema v3 and `structural` or `team` privacy levels.
+- Schema v1 and v2 imports remain accepted, but deprecated risk, sequence, and
+  loop fields are stripped before current persistence.
+- `sessions` and `raw` privacy levels are reserved and rejected.
+- The schema-v3 allowlist is designed to omit prompts, assistant text,
+  reasoning, raw JSON, previews, commands, paths, branches, filenames, and tool
+  input/output; incomplete date validation remains a documented exception risk.
+- Structural aggregates can still fingerprint activity. Team-level bundles
+  additionally disclose the selected member/project labels, tool mix,
+  subagent-type mix, and file-extension mix.
 
-### Known Limitations
+## Removed or Obsolete Claims
 
-- Current import cache is not a durable archive. Source deletion or Claude Code
-  retention pruning can affect future re-imports.
-- Resetting imports drops imported team bundle records in SQLite.
-- Backend has no authentication or CSRF protection.
-- Local API should not be exposed beyond loopback.
-- Cost estimates depend on local pricing CSVs and may be incomplete.
-- Context economics assumes a fixed context window constant in code for Claude
-  data and uses heuristics, not ground truth.
-- Team bundles are content-free but still structurally fingerprint usage.
-- Privacy mode is display-only; it is not data sanitization.
-- Screenshots are static and were not regenerated in this audit.
+These features or claims must not be presented as current:
 
-## Usage Validation
+- numeric risk scores, risk tiers, and a risk-ranked Overview board;
+- loop/max-repeat metrics and the passive event-density chart;
+- `risk_patterns.py`, sequence-pattern caches, or a shipped sequence-mining
+  view;
+- memory Markdown indexing or memory search;
+- a contribution page, contribution API, or public contribution workflow;
+- Team bundle risk categories, inferred patterns, or event sequences;
+- cap-zone, percentile, near-miss, or plan-fit verdicts in Limit hits;
+- causal subgroup conclusions, cost attribution by Usage Mindmap phase, or
+  guaranteed Context Economics savings;
+- Team raw-session sharing or Team session drilldowns;
+- Codex/OpenAI/other-agent import, live hooks, OpenTelemetry ingestion, or a
+  durable source-pruning archive.
 
-Validated by inspection:
+## Supported Inputs and Outputs
 
-- `docker-compose.yml` defines backend and frontend services and exposes
-  `127.0.0.1:8000` and `127.0.0.1:5173`.
-- `frontend/vite.config.ts` sets dev port `5174` and proxies `/api` to
-  `http://localhost:8000`.
-- `frontend/package.json` defines `dev`, `build`, `preview`, and `test`.
-- `backend/pyproject.toml` defines the Python package, dev dependency group,
-  and pytest config.
-- README-referenced screenshot files exist under `docs/screenshots/`.
-- README-referenced docs exist after this audit.
+Inputs:
 
-Command validation performed during this audit:
+- Claude Code project directories directly below `CCFR_IMPORT_ROOT`.
+- Main-session and subagent JSONL, subagent metadata JSON, and persisted-output
+  text files in the supported layout.
+- Team bundle JSON schema v1, v2, or v3.
+- A baseline pricing CSV and optional dated pricing snapshots.
 
-- `docker compose config`: passed. Docker emitted warnings about denied access
-  to the local Docker user config file, but still rendered the expected
-  backend/frontend service configuration and loopback ports.
-- `cd backend; uv run --extra dev pytest`: passed, 382 tests.
-- `cd frontend; npm test`: passed, 39 test files and 282 tests.
-- `cd frontend; npm run build`: passed, TypeScript check and Vite production
-  build completed.
+Outputs:
 
-Commands intentionally not run:
+- A rebuildable local SQLite cache containing sensitive parsed and derived
+  records.
+- Local `settings.json`.
+- Team bundle JSON under `CCFR_TEAM_BUNDLE_ROOT/exports`, or a path chosen by
+  the headless `export-bundle` command.
+- Local browser dashboards and API JSON responses.
+- Usage Mindmap JSON/PNG exports.
 
-- `docker compose up --build`, because it starts long-running services.
-- `npm ci`, because it removes and reinstalls `node_modules`; script existence
-  was validated instead.
+The retired contribution output directory is not a current output.
 
-## Missing Documentation
+## Known Limitations That Documentation Must Preserve
 
-| Missing doc | Urgency | Why it matters |
+- The database is not a durable archive. Re-import follows the current source
+  tree.
+- The backend is unauthenticated and intended for loopback use. Browser-origin
+  and Fetch Metadata checks protect state-changing routes, but they are not
+  authentication and non-browser clients with local access remain trusted.
+- Local raw/derived data and evidence receipts may contain prompts, paths,
+  commands, errors, tool arguments, or accidentally pasted credentials.
+- Privacy mode is display-only and does not sanitize the database, API, or a
+  screenshot automatically.
+- Pricing may be missing or outdated. Dollar values are API-equivalent
+  estimates, can be partial, and do not model subscription billing.
+- Team bundle imports enforce canonical ISO dates, signed 64-bit numeric bounds,
+  a 50,000-session limit, and a 50 MiB API body cap. These resource limits do
+  not make bundle content trustworthy.
+- Team bundle structural data can be identifying even without raw content.
+- The app must not be exposed to a LAN or public network without authentication
+  and additional request protections.
+- The project is source-available, not OSI open source under its current
+  license.
+
+## Verification Evidence
+
+Implementation inspected during this documentation pass:
+
+- `backend/src/ccfr/storage/database.py` for schema, migrations, and reset sets;
+- `backend/src/ccfr/ingest/importer.py` for accepted files and rebuild behavior;
+- `backend/src/ccfr/api/routes.py` for the complete `/api` surface;
+- `backend/src/ccfr/analysis/*` for current analysis and Team boundaries;
+- `backend/src/ccfr/config.py`, `settings.py`, `main.py`, and `cli.py` for paths,
+  runtime shapes, middleware, and command behavior;
+- `frontend/src/App.tsx`, `shell/navConfig.ts`, and
+  `discover/techniques.tsx` for mounted screens and navigation.
+
+The most recent repository-wide verification was the 2026-08-16 0.2.0
+release-readiness pass:
+
+- backend: 529 tests passed on the local Python 3.12.0 environment;
+- Ruff correctness checks passed;
+- frontend: 326 tests across 43 files passed against a clean
+  `npm ci --ignore-scripts` tree;
+- frontend production build passed and staged the packaged UI and data assets;
+- `npm audit --audit-level=moderate`: no reported vulnerabilities;
+- `pip-audit`: no known vulnerabilities. It additionally reports that the local
+  `checkyouragent` project version cannot be audited because that version is not
+  published yet, which is expected before a release and is not a finding;
+- `git diff --check` and `docker compose config -q` reported no problems;
+- the 0.2.0 sdist and wheel built successfully. The wheel bundles
+  `ccfr/webui/index.html`, `ccfr/_assets/pricing.csv`, and the 110-file
+  synthetic demo export; it installs into a clean virtual environment and
+  reports the expected package version and asset paths;
+- both console entry points (`checkyouragent` and `cya`) run from the installed
+  wheel, and `serve` returns the bundled interface and API documentation on
+  loopback;
+- the installed wheel imported its own packaged demo export (3 projects, 46
+  sessions, 708 events, 0 import errors) and answered every local session and
+  analytics route, with every observed model priced from the packaged table;
+- the request guards behave as documented: an unexpected `Host` header is
+  rejected, state-changing requests carrying an untrusted `Origin` or cross-site
+  Fetch Metadata are rejected, and a non-browser client that sends no browser
+  headers is still served;
+- the headless `export-bundle` command produced a schema v3 structural bundle
+  containing no project names, file names, or local identifiers;
+- `/docs` on the installed wheel loads Swagger UI from the packaged
+  `ccfr/docs_assets/` files with no reference to any external host and with the
+  spec validator disabled; ReDoc is off, and the SPA fallback answers `/redoc`.
+  CI and the release workflow now require those assets in the built wheel.
+
+CI now repeats backend tests on Python 3.11, 3.12, and 3.13 and performs the
+package smoke path before release.
+
+## Remaining Documentation Work
+
+| Gap | Priority | Reason |
 | --- | --- | --- |
-| Troubleshooting guide | medium | Common failures include wrong import root, Docker volume confusion, stale backend process on port 8000, missing price rows, and CORS when bypassing the Vite proxy. |
-| Team bundle schema/reference | medium | Team sharing is implemented and privacy-sensitive; a schema/reference would help reviewers and managers understand exactly what travels. |
-| Import format reference | medium | Users need examples of accepted Claude Code export layout, subagent files, persisted outputs, and memory files. |
-| Data retention/archive status | high | Current cache can lose sessions if the source is pruned and re-imported. This should stay visible until archive work exists. |
-| Screenshot refresh process | low | Static screenshots exist, but there is no note explaining when/how to regenerate them. |
-| Public contribution workflow | low | Contribution code exists but is not reachable; docs should wait until the route and dataset target are confirmed. |
-| Configuration reference page | low | README and architecture list env vars, but a dedicated config page would be easier as variables grow. |
+| Dedicated Team bundle schema reference | medium | Privacy docs summarize disclosure, but integrators need a field-by-field v3 reference, versioning rules, validation limits, and legacy-import behavior. |
+| Durable archive status/design | medium | The limitation is documented, but any future archive implementation needs a separate retention and deletion contract. |
 
-## Terminology Cleanup
+## Audit Maintenance Rules
 
-Chosen terms for docs in this audit:
+When implementation changes any route, table, import source, output, screen,
+command, default path, privacy field, reset behavior, or security boundary:
 
-- Use **Check Your Agent** for public product references.
-- Use `ccfr` only for internal code namespace, environment variables,
-  localStorage keys, and generated data paths.
-- Use **local scope** or **This machine** for local imported Claude Code data.
-- Use **team scope** for imported content-free team bundles.
-- Use **team bundle** for shared JSON aggregate files.
-- Use **structural** and **team** for implemented bundle privacy levels.
-- Use **Explore** for the feature group that contains Subgroups, Context
-  economics, and Usage Mindmap.
-- Use **SQLite cache** for the resettable derived database, not archive.
-
-## Roadmap Cleanup
-
-Implemented:
-
-- Claude Code import.
-- Local Overview, Cost, Explore, Session workspace.
-- Team bundle export/import and aggregate team Overview/Cost.
-- Context economics and usage mindmap.
-- Historical pricing toggle.
-
-In progress or partially implemented:
-
-- Contribution bundle export, because page code and APIs exist but main routing
-  and dataset target are not complete.
-
-Planned:
-
-- Sequence mining.
-- Anomaly detection.
-- Durable local archive for source-pruned sessions.
-- Codex/other-agent support.
-
-Being considered:
-
-- OpenTelemetry receiver.
-- Hook-based capture.
-- SDK SessionStore import.
-- Archive prune/delete workflows.
-- Raw/session-level team sharing.
-
-Not currently planned in implemented code:
-
-- Remote hosted backend.
-- Built-in authentication.
-- External telemetry upload.
-- Mutating Claude Code source exports.
-
-## Files Updated In This Audit
-
-- `README.md`
-- `docs/architecture.md`
-- `docs/documentation-audit.md`
-- `PRIVACY.md`
-- `SECURITY.md`
-- `CONTRIBUTING.md`
-- `LICENSE`
-- `backend/pyproject.toml`
-- `backend/src/ccfr/__init__.py`
-- `backend/src/ccfr/main.py`
-- `frontend/package.json`
-- `frontend/index.html`
-- `.dockerignore`
-- `PR-team-bundle-sharing.md`
-- `CLAUDE.md` (ignored local agent note)
-- `AGENT.md` (ignored local agent note)
-
-## Files Left Unchanged
-
-- `CODE_OF_CONDUCT.md`
-- `.github/workflows/ci.yml`
-- `.gitignore`
-- `Dockerfile`
-- `frontend/Dockerfile`
-- `frontend/nginx.conf`
-- `frontend/src/shell/Sidebar.tsx`
-- `frontend/vite.config.ts`
-- `docs/screenshots/*.png`
-- `WIP-plans/*`
-
-## Assumptions
-
-- Public docs and metadata should use Check Your Agent; `ccfr` remains the
-  internal namespace for imports, environment variables, local storage keys, and
-  generated data paths.
-- Ignored local planning docs are useful context but should not be presented as
-  current product capability.
-- Pricing CSVs are local app inputs; this audit did not verify vendor pricing
-  against external sources.
-- Documentation should be truthful about current reset/source-pruning behavior
-  even though WIP plans propose safer archive semantics.
+1. Update the user-facing document that owns the behavior.
+2. Update `docs/architecture.md` when the technical surface changes.
+3. Add an `[Unreleased]` changelog entry for user-visible changes.
+4. Refresh synthetic screenshots/demo media for visible UI changes.
+5. Replace the date and re-verify this audit rather than labelling an old audit
+   as current without inspection.

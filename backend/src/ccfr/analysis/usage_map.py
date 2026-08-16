@@ -1,10 +1,9 @@
-"""Usage Mindmap: corpus-wide workflow-phase and habit aggregation.
+"""Experimental activity map: corpus-wide workflow-phase observations.
 
 Classifies every assistant event into workflow phases via deterministic tool
-rules, attributes real message cost to those phases (every dollar in the
-filtered corpus lands in exactly one phase, so the map always sums to the true
-total), and runs a registry of habit detectors whose findings hang off the
-phases as good/anti leaves.
+rules. Every tool call counts as one observed activity in its classified phase;
+a text-only assistant step counts once as Synthesize. Pattern detectors hang
+neutral observations off those phases. No message cost is allocated to phases.
 
 Computation is on-demand from the rebuildable SQLite cache, like discovery.py.
 Design doc: docs/superpowers/specs/2026-06-11-usage-mindmap-design.md
@@ -44,6 +43,11 @@ PHASES: list[dict[str, str]] = [
     {"key": "converse", "label": "Synthesize"},
 ]
 PHASE_KEYS = [p["key"] for p in PHASES]
+ACTIVITY_BASIS = "tool_calls_and_assistant_steps"
+ACTIVITY_METHODOLOGY = (
+    "Each tool call counts once in its classified phase; a text-only assistant "
+    "step counts once as Synthesize. This is observed activity, not cost attribution."
+)
 
 _TOOL_PHASE: dict[str, str] = {
     "Read": "explore", "Grep": "explore", "Glob": "explore", "LS": "explore",
@@ -82,7 +86,7 @@ def classify_tool_call(tool_name: str | None, command: str | None = None) -> str
     return _TOOL_PHASE.get(tool_name, "converse")
 
 
-# --- Event records and cost attribution --------------------------------------
+# --- Event records and observed activity -------------------------------------
 
 @dataclass(frozen=True)
 class ToolCallRec:
@@ -109,57 +113,47 @@ class EventRec:
     input_context_tokens: int = 0  # base + 5m + 1h + read (no output)
 
 
-def event_phase_weights(event: EventRec) -> dict[str, float]:
-    """Equal split of an event across its tool calls' phases; text-only events
-    are Converse. Weights always sum to 1.0 so attribution conserves cost."""
+def event_phase_activity(event: EventRec) -> dict[str, int]:
+    """Observed activity counts by phase for one assistant event.
+
+    Each real tool call counts once. An assistant event without tool calls is
+    one text-only Synthesize step. Message cost and token volume play no role.
+    """
     if not event.tool_calls:
-        return {"converse": 1.0}
-    weights: dict[str, float] = defaultdict(float)
-    share = 1.0 / len(event.tool_calls)
+        return {"converse": 1}
+    counts: dict[str, int] = defaultdict(int)
     for call in event.tool_calls:
-        weights[classify_tool_call(call.tool_name, call.command)] += share
-    return dict(weights)
+        counts[classify_tool_call(call.tool_name, call.command)] += 1
+    return dict(counts)
 
 
 def aggregate_phases(events: list[EventRec]) -> dict[str, dict[str, Any]]:
-    """Per-phase accumulation of cost, tokens, tool counts and sessions, plus a
-    per-tool breakdown under "tools" (keyed by tool name).
-
-    `sessions` is the set of session ids with at least one event touching the
-    phase; `tokens` is a float (weighted sum) — callers round at presentation.
-    Tool entries carry each call's equal share of its event, so the entries
-    inside a phase sum exactly to the phase cost; calls with no tool name keep
-    their cost on the phase but get no tool entry.
-    """
+    """Accumulate integer activity, call, session, and origin counts by phase."""
     acc: dict[str, dict[str, Any]] = {
-        key: {"cost_usd": 0.0, "tokens": 0.0, "tool_count": 0, "sessions": set(),
-              "tools": {}, "main_cost": 0.0, "subagent_cost": 0.0,
-              "main_tokens": 0.0, "subagent_tokens": 0.0}
+        key: {"activity_count": 0, "tool_count": 0,
+              "text_assistant_step_count": 0, "sessions": set(), "tools": {},
+              "main_activity_count": 0, "subagent_activity_count": 0}
         for key in PHASE_KEYS
     }
     for event in events:
-        for phase, weight in event_phase_weights(event).items():
+        for phase, count in event_phase_activity(event).items():
             bucket = acc[phase]
-            bucket["cost_usd"] += event.cost * weight
-            bucket["tokens"] += event.tokens * weight
+            bucket["activity_count"] += count
             bucket["sessions"].add(event.session_db_id)
             if event.agent_id is None:
-                bucket["main_cost"] += event.cost * weight
-                bucket["main_tokens"] += event.tokens * weight
+                bucket["main_activity_count"] += count
             else:
-                bucket["subagent_cost"] += event.cost * weight
-                bucket["subagent_tokens"] += event.tokens * weight
-        share = 1.0 / len(event.tool_calls) if event.tool_calls else 0.0
+                bucket["subagent_activity_count"] += count
+        if not event.tool_calls:
+            acc["converse"]["text_assistant_step_count"] += 1
         for call in event.tool_calls:
             bucket = acc[classify_tool_call(call.tool_name, call.command)]
             bucket["tool_count"] += 1
             if call.tool_name is None:
                 continue
             tool = bucket["tools"].setdefault(call.tool_name, {
-                "cost_usd": 0.0, "tokens": 0.0, "count": 0, "sessions": set()})
-            tool["cost_usd"] += event.cost * share
-            tool["tokens"] += event.tokens * share
-            tool["count"] += 1
+                "activity_count": 0, "sessions": set()})
+            tool["activity_count"] += 1
             tool["sessions"].add(event.session_db_id)
     return acc
 
@@ -305,9 +299,7 @@ def load_events(
 
 # --- Habit detectors ----------------------------------------------------------
 # Each detector is a pure function over one session's ordered EventRecs and
-# returns HabitFindings. Future sequence mining registers detectors in
-# SESSION_DETECTORS below; surfacing them as status "candidate" leaves
-# additionally needs a status field on HabitFinding and a registry entry.
+# returns HabitFindings. SESSION_DETECTORS below is the explicit registry.
 
 BLIND_RETRY_MIN = 3   # identical failing attempts in a row to flag
 PLAN_BURST_MIN = 5    # edit calls after a plan step to count as a planned burst
@@ -320,7 +312,6 @@ class HabitFinding:
     session_db_id: int
     session_title: str
     project_name: str
-    cost_usd: float
     count: int
     exemplar_event_ids: tuple[int, ...]
     detail: str
@@ -328,13 +319,12 @@ class HabitFinding:
 
 @dataclass(frozen=True)
 class FlatCall:
-    """One tool call with its phase and equal share of its event's cost."""
+    """One observed tool call with its classified phase and evidence fields."""
     event_id: int
     phase: str
     tool_name: str | None
     signature: str | None
     is_error: bool
-    cost_share: float
 
 
 def _flatten(events: list[EventRec]) -> list[FlatCall]:
@@ -342,7 +332,6 @@ def _flatten(events: list[EventRec]) -> list[FlatCall]:
     for event in events:
         if not event.tool_calls:
             continue
-        share = event.cost / len(event.tool_calls)
         for call in event.tool_calls:
             calls.append(FlatCall(
                 event_id=event.event_id,
@@ -350,15 +339,14 @@ def _flatten(events: list[EventRec]) -> list[FlatCall]:
                 tool_name=call.tool_name,
                 signature=call.signature,
                 is_error=call.is_error,
-                cost_share=share,
             ))
     return calls
 
 
 def detect_blind_retry(session_events: list[EventRec]) -> list[HabitFinding]:
     """Same tool, identical input, >= BLIND_RETRY_MIN consecutive attempts, all
-    failing. Cost counts every attempt after the first (the first failure is
-    legitimate discovery; the repeats are the waste)."""
+    failing. The strict identical-input and all-failing evidence gates keep the
+    observation distinct from ordinary iterative recovery."""
     if not session_events:
         return []
     head = session_events[0]
@@ -373,7 +361,6 @@ def detect_blind_retry(session_events: list[EventRec]) -> list[HabitFinding]:
                 session_db_id=head.session_db_id,
                 session_title=head.session_title,
                 project_name=head.project_name,
-                cost_usd=sum(c.cost_share for c in run[1:]),
                 count=len(run),
                 exemplar_event_ids=(run[0].event_id,),
                 detail=(f"{run[0].tool_name} retried {len(run)}x "
@@ -397,15 +384,13 @@ def detect_blind_retry(session_events: list[EventRec]) -> list[HabitFinding]:
 
 def detect_tdd_loop(session_events: list[EventRec]) -> list[HabitFinding]:
     """Fail -> edit -> the same verify command passes. One finding per session
-    aggregating all cycles. Cost counts the two verify turns of each cycle (the
-    edits in between are Implement-phase work and are measured there)."""
+    aggregating all observed cycles."""
     if not session_events:
         return []
     head = session_events[0]
     pending: dict[str, dict[str, Any]] = {}  # verify signature -> failing state;
     # stale entries for commands that never re-run are harmless (sessions are bounded).
     cycles = 0
-    cost = 0.0
     exemplars: list[int] = []
     for call in _flatten(session_events):
         if call.phase == "implement":
@@ -414,16 +399,14 @@ def detect_tdd_loop(session_events: list[EventRec]) -> list[HabitFinding]:
         elif call.phase == "verify" and call.signature:
             if call.is_error:
                 # Re-failing overwrites the state: the edit gate resets, and
-                # only the latest failing turn's cost is counted — conservative
-                # by design.
+                # only the latest failing turn is retained.
                 pending[call.signature] = {
-                    "cost": call.cost_share, "edited": False, "event_id": call.event_id,
+                    "edited": False, "event_id": call.event_id,
                 }
             else:
                 state = pending.pop(call.signature, None)
                 if state and state["edited"]:
                     cycles += 1
-                    cost += state["cost"] + call.cost_share
                     exemplars.append(state["event_id"])
     if cycles == 0:
         return []
@@ -433,7 +416,6 @@ def detect_tdd_loop(session_events: list[EventRec]) -> list[HabitFinding]:
         session_db_id=head.session_db_id,
         session_title=head.session_title,
         project_name=head.project_name,
-        cost_usd=cost,
         count=cycles,
         exemplar_event_ids=tuple(exemplars[:5]),
         detail=f"{cycles} fail-edit-pass cycle{'s' if cycles != 1 else ''}",
@@ -441,9 +423,7 @@ def detect_tdd_loop(session_events: list[EventRec]) -> list[HabitFinding]:
 
 
 def detect_delegation(session_events: list[EventRec]) -> list[HabitFinding]:
-    """Work dispatched to subagents. Cost counts the dispatching turns only —
-    the delegated work itself appears in its own phases (its events carry the
-    subagent's agent_id and classify normally)."""
+    """Observed Task/Agent calls that dispatched work to subagents."""
     if not session_events:
         return []
     head = session_events[0]
@@ -456,7 +436,6 @@ def detect_delegation(session_events: list[EventRec]) -> list[HabitFinding]:
         session_db_id=head.session_db_id,
         session_title=head.session_title,
         project_name=head.project_name,
-        cost_usd=sum(c.cost_share for c in dispatches),
         count=len(dispatches),
         exemplar_event_ids=tuple(dict.fromkeys(c.event_id for c in dispatches))[:5],
         detail=(f"{len(dispatches)} subagent "
@@ -466,9 +445,7 @@ def detect_delegation(session_events: list[EventRec]) -> list[HabitFinding]:
 
 def detect_plan_before_burst(session_events: list[EventRec]) -> list[HabitFinding]:
     """A planning step (TodoWrite / plan mode) precedes at least PLAN_BURST_MIN
-    edit calls anywhere later in the session. Cost counts the planning turns
-    plus those edit calls — the size of the behavior, not a counterfactual
-    saving."""
+    edit calls anywhere later in the session."""
     if not session_events:
         return []
     head = session_events[0]
@@ -479,15 +456,12 @@ def detect_plan_before_burst(session_events: list[EventRec]) -> list[HabitFindin
     implements = [c for c in calls[first_plan + 1:] if c.phase == "implement"]
     if len(implements) < PLAN_BURST_MIN:
         return []
-    plan_calls = [c for c in calls if c.phase == "plan"]
     return [HabitFinding(
         habit_key="plan-before-burst",
         phase="plan",
         session_db_id=head.session_db_id,
         session_title=head.session_title,
         project_name=head.project_name,
-        cost_usd=(sum(c.cost_share for c in plan_calls)
-                  + sum(c.cost_share for c in implements)),
         count=len(implements),
         exemplar_event_ids=(calls[first_plan].event_id,),
         detail=f"planning preceded {len(implements)} edit calls",
@@ -531,7 +505,7 @@ def detect_context_habits(
     """Adapter over the Context Economics detectors. Threads are loaded for the
     whole project corpus (load_threads has no date filter — thresholds stay
     corpus-calibrated); findings are then filtered to the window by their entry
-    timestamp. Finding cost is the detector's counterfactual savings claim.
+    timestamp.
     Performance: runs the full context-economics pipeline on every call;
     memoise at the call site if this ends up on a hot path."""
     threads, _skipped = load_threads(conn, project_id=project_id)
@@ -553,7 +527,6 @@ def detect_context_habits(
                 session_db_id=rec.session_id,
                 session_title=rec.session_title,
                 project_name=rec.project_name,
-                cost_usd=rec.savings_usd,
                 count=1,
                 exemplar_event_ids=(rec.event_id,) if rec.event_id is not None else (),
                 detail=rec.label,
@@ -562,38 +535,30 @@ def detect_context_habits(
 
 
 HABITS: list[dict[str, str]] = [
-    {"key": "tdd-loop", "label": "Test-driven loops", "polarity": "good",
-     "rule": "A test command fails, edits follow, and the same command later "
-             "passes. Cost counts the two verify turns of each cycle."},
-    {"key": "delegation", "label": "Subagent delegation", "polarity": "good",
-     "rule": "Work dispatched to subagents (Task/Agent calls). Cost counts the "
-             "dispatching turns; the delegated work is measured in its own phases."},
-    {"key": "plan-before-burst", "label": "Plan before implementing", "polarity": "good",
+    {"key": "tdd-loop", "label": "Test-driven loops",
+     "rule": "Observed sequence: a test command fails, edits follow, and the "
+             "same command later passes."},
+    {"key": "delegation", "label": "Subagent delegation",
+     "rule": "Observed Task/Agent calls dispatching work to subagents."},
+    {"key": "plan-before-burst", "label": "Plan before implementing",
      "rule": f"A planning step (TodoWrite, plan mode) precedes at least "
-             f"{PLAN_BURST_MIN} edit calls later in the session. Cost counts "
-             "the planning turns plus those edit calls."},
-    {"key": "blind-retry", "label": "Blind retry loops", "polarity": "anti",
+             f"{PLAN_BURST_MIN} observed edit calls later in the session."},
+    {"key": "blind-retry", "label": "Repeated identical failures",
      "rule": f"The same tool called with identical input at least "
-             f"{BLIND_RETRY_MIN} times in a row, every attempt failing. Cost "
-             "counts every attempt after the first."},
-    {"key": "re-reads", "label": "Repeated file re-reads", "polarity": "anti",
+             f"{BLIND_RETRY_MIN} times in a row, with every attempt failing."},
+    {"key": "re-reads", "label": "Repeated file re-reads",
      "rule": "The same file read into the context repeatedly in one epoch "
-             "without an intervening edit (from Context Economics). Cost is the "
-             "carry cost of the duplicate copies."},
-    {"key": "oversized-context", "label": "Oversized tool results", "polarity": "anti",
+             "without an intervening edit (from Context Economics)."},
+    {"key": "oversized-context", "label": "Large tool results",
      "rule": "Single tool results far above this corpus's norm entered the "
-             "context (from Context Economics). Cost is the avoidable carry "
-             "above the corpus median."},
-    {"key": "late-compaction", "label": "Late compaction", "polarity": "anti",
+             "context (from Context Economics)."},
+    {"key": "late-compaction", "label": "Extended high context",
      "rule": "Context stayed near the window limit for many turns without "
-             "compaction (from Context Economics). Cost is the avoidable carry "
-             "of the un-dropped ballast."},
+             "compaction (from Context Economics)."},
 ]
 HABIT_BY_KEY: dict[str, dict[str, str]] = {h["key"]: h for h in HABITS}
 
-# Per-session detectors. Future sequence mining adds entries here; surfacing
-# them as status "candidate" leaves additionally needs a status field on
-# HabitFinding and a registry entry.
+# Per-session detector registry.
 SESSION_DETECTORS: list[Callable[[list[EventRec]], list[HabitFinding]]] = [
     detect_tdd_loop,
     detect_delegation,
@@ -650,10 +615,7 @@ def aggregate_habits(findings: list[HabitFinding]) -> list[dict[str, Any]]:
             "key": habit_key,
             "phase": phase,
             "label": spec["label"],
-            "polarity": spec["polarity"],
-            "status": "confirmed",
-            "cost_usd": round(sum(r.cost_usd for r in recs), 6),
-            "count": sum(r.count for r in recs),
+            "activity_count": sum(r.count for r in recs),
             "session_count": len({r.session_db_id for r in recs}),
         })
     return leaves
@@ -669,9 +631,7 @@ def usage_map_analytics(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> dict[str, Any]:
-    """The full usage-map tree for the filtered corpus. Shares are cost-based
-    when pricing is available (and non-zero), token-based otherwise; either way
-    the phases partition the corpus, so shares sum to 1."""
+    """The activity tree for the filtered corpus; phase counts partition it."""
     timeline = load_price_timeline(pricing_path(), pricing_dir())
     cost_available = timeline.has_prices
     events = load_events(conn, timeline, historical=historical, project_id=project_id,
@@ -682,39 +642,38 @@ def usage_map_analytics(
         date_from=date_from, date_to=date_to,
     )) if events else []
 
-    total_usd = sum(bucket["cost_usd"] for bucket in phase_acc.values())
-    total_tokens = sum(bucket["tokens"] for bucket in phase_acc.values())
-    use_cost = cost_available and total_usd > 0
-    denominator = total_usd if use_cost else float(total_tokens)
+    total_usd = sum(event.cost for event in events)
+    total_tokens = sum(event.tokens for event in events)
+    total_activity = sum(bucket["activity_count"] for bucket in phase_acc.values())
+    tool_call_count = sum(len(event.tool_calls) for event in events)
+    text_step_count = sum(1 for event in events if not event.tool_calls)
 
     phases: list[dict[str, Any]] = []
     for spec in PHASES:
         bucket = phase_acc[spec["key"]]
-        numerator = bucket["cost_usd"] if use_cost else bucket["tokens"]
         tools = sorted(
             (
                 {
                     "key": name,
                     "label": name,
-                    "cost_usd": round(tool["cost_usd"], 6),
-                    "tokens": int(round(tool["tokens"])),
-                    "count": tool["count"],
+                    "activity_count": tool["activity_count"],
                     "session_count": len(tool["sessions"]),
                 }
                 for name, tool in bucket["tools"].items()
             ),
-            key=lambda t: (-t["cost_usd"], -t["tokens"], t["key"]),
+            key=lambda t: (-t["activity_count"], t["key"]),
         )
         phases.append({
             "key": spec["key"],
             "label": spec["label"],
-            "cost_usd": round(bucket["cost_usd"], 6),
-            "tokens": int(round(bucket["tokens"])),
-            "main_cost_usd": round(bucket["main_cost"], 6),
-            "subagent_cost_usd": round(bucket["subagent_cost"], 6),
-            "main_tokens": int(round(bucket["main_tokens"])),
-            "subagent_tokens": int(round(bucket["subagent_tokens"])),
-            "share": round(numerator / denominator, 6) if denominator > 0 else 0.0,
+            "activity_count": bucket["activity_count"],
+            "main_activity_count": bucket["main_activity_count"],
+            "subagent_activity_count": bucket["subagent_activity_count"],
+            "text_assistant_step_count": bucket["text_assistant_step_count"],
+            "activity_share": (
+                round(bucket["activity_count"] / total_activity, 6)
+                if total_activity > 0 else 0.0
+            ),
             "tool_count": bucket["tool_count"],
             "session_count": len(bucket["sessions"]),
             "habits": [leaf for leaf in leaves if leaf["phase"] == spec["key"]],
@@ -730,7 +689,11 @@ def usage_map_analytics(
             "costs_partial": any(not e.priced for e in events),
             "sessions_analyzed": len({e.session_db_id for e in events}),
             "events_classified": len(events),
-            "share_basis": "cost" if use_cost else "tokens",
+            "total_activity_count": total_activity,
+            "tool_call_count": tool_call_count,
+            "text_assistant_step_count": text_step_count,
+            "activity_basis": ACTIVITY_BASIS,
+            "methodology": ACTIVITY_METHODOLOGY,
         },
         "phases": phases,
     }
@@ -750,18 +713,23 @@ def usage_map_evidence(
     date_to: str | None = None,
 ) -> dict[str, Any]:
     """Receipts for one map node: the rule that put it there, and the sessions
-    that fed it (cost-descending). Raises KeyError for unknown nodes."""
+    that fed it (activity-descending). Raises KeyError for unknown nodes."""
     kind, _, key = node.partition(":")
     timeline = load_price_timeline(pricing_path(), pricing_dir())
     events = load_events(conn, timeline, historical=historical, project_id=project_id,
                          date_from=date_from, date_to=date_to)
 
+    session_costs: dict[int, float] = defaultdict(float)
+    for event in events:
+        session_costs[event.session_db_id] += event.cost
     sessions: dict[int, dict[str, Any]] = {}
 
     def entry_for(session_id: int, title: str, project: str) -> dict[str, Any]:
         return sessions.setdefault(session_id, {
             "session_id": session_id, "title": title, "project_name": project,
-            "cost_usd": 0.0, "count": 0, "exemplar_event_ids": [], "detail": None,
+            "activity_count": 0,
+            "session_cost_usd": round(session_costs[session_id], 6),
+            "exemplar_event_ids": [], "detail": None,
         })
 
     if kind == "phase":
@@ -769,17 +737,16 @@ def usage_map_evidence(
         if spec is None:
             raise KeyError(node)
         label, rule = spec["label"], (
-            f"Assistant turns whose tool calls classify as {spec['label']} "
-            "(cost split equally across each turn's tool calls)."
+            f"Observed tool calls classified as {spec['label']}; text-only "
+            "assistant steps classify as Synthesize."
         )
         for event in events:
-            weight = event_phase_weights(event).get(key, 0.0)
-            if weight <= 0:
+            count = event_phase_activity(event).get(key, 0)
+            if count <= 0:
                 continue
             entry = entry_for(event.session_db_id, event.session_title,
                               event.project_name)
-            entry["cost_usd"] += event.cost * weight
-            entry["count"] += 1
+            entry["activity_count"] += count
             if len(entry["exemplar_event_ids"]) < EVIDENCE_EXEMPLARS:
                 entry["exemplar_event_ids"].append(event.event_id)
     elif kind == "habit":
@@ -802,8 +769,7 @@ def usage_map_evidence(
         for finding in findings:
             entry = entry_for(finding.session_db_id, finding.session_title,
                               finding.project_name)
-            entry["cost_usd"] += finding.cost_usd
-            entry["count"] += finding.count
+            entry["activity_count"] += finding.count
             merged = entry["exemplar_event_ids"] + list(finding.exemplar_event_ids)
             entry["exemplar_event_ids"] = list(dict.fromkeys(merged))[:EVIDENCE_EXEMPLARS]
             entry["detail"] = finding.detail
@@ -814,8 +780,7 @@ def usage_map_evidence(
         if not sep or not tool_name or spec is None:
             raise KeyError(node)
         label, rule = tool_name, (
-            f"{tool_name} calls classified as {spec['label']} "
-            "(cost is each call's equal share of its turn)."
+            f"Observed {tool_name} calls classified as {spec['label']}."
         )
         for event in events:
             if not event.tool_calls:
@@ -827,23 +792,22 @@ def usage_map_evidence(
             )
             if matched == 0:
                 continue
-            share = matched / len(event.tool_calls)
             entry = entry_for(event.session_db_id, event.session_title,
                               event.project_name)
-            entry["cost_usd"] += event.cost * share
-            entry["count"] += matched
+            entry["activity_count"] += matched
             if len(entry["exemplar_event_ids"]) < EVIDENCE_EXEMPLARS:
                 entry["exemplar_event_ids"].append(event.event_id)
     else:
         raise KeyError(node)
 
-    rows = sorted(sessions.values(), key=lambda s: s["cost_usd"], reverse=True)
-    for entry in rows:
-        entry["cost_usd"] = round(entry["cost_usd"], 6)
+    rows = sorted(
+        sessions.values(),
+        key=lambda session: (-session["activity_count"], session["session_id"]),
+    )
     return {
         "node": node,
         "label": label,
         "rule": rule,
-        "cost_usd": round(sum(e["cost_usd"] for e in rows), 6),
+        "activity_count": sum(e["activity_count"] for e in rows),
         "sessions": rows[:EVIDENCE_SESSIONS_LIMIT],
     }

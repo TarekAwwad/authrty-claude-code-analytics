@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -29,8 +29,11 @@ class CacheStatsResponse(BaseModel):
     session_count: int
     event_count: int
     subagent_count: int
-    memory_count: int
     persisted_output_count: int
+    observed_date_from: str | None = None
+    observed_date_to: str | None = None
+    last_successful_sync_at: str | None = None
+    latest_import_error_count: int = 0
 
 
 class ImportProgressSummary(BaseModel):
@@ -38,7 +41,6 @@ class ImportProgressSummary(BaseModel):
     session_count: int
     event_count: int
     subagent_count: int
-    memory_count: int
     persisted_output_count: int
     file_count: int
     error_count: int
@@ -62,7 +64,6 @@ class ImportSummaryResponse(BaseModel):
     session_count: int
     event_count: int
     subagent_count: int
-    memory_count: int
     persisted_output_count: int
     file_count: int
     error_count: int
@@ -71,10 +72,27 @@ class ImportSummaryResponse(BaseModel):
 
 class DiscoveredProjectResponse(BaseModel):
     name: str
+    display_name: str
     imported: bool
     session_count: int
     last_imported_at: str | None
     stale: bool = False
+
+
+class ImportErrorResponse(BaseModel):
+    path: str
+    line_no: int | None
+    message: str
+
+
+class ImportRecordResponse(BaseModel):
+    id: int
+    source_path: str
+    imported_at: str
+    file_count: int
+    status: str
+    error_count: int
+    errors: list[ImportErrorResponse] = Field(default_factory=list)
 
 
 class ProjectResponse(BaseModel):
@@ -110,15 +128,11 @@ class SessionCard(BaseModel):
     persisted_output_count: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
-    loop_count: int = 0
-    max_repeat: int = 0
     duration_seconds: int = 0
     max_agent_events: int = 0
     finding_count: int = 0
-    pattern_risk_score: float = 0
-    top_finding_category: str | None = None
-    top_finding_severity: str | None = None
     top_finding_title: str | None = None
+    top_finding_basis: Literal["observed", "estimated", "inferred", "associated"] | None = None
     cost_usd: float = 0
     cost_available: bool = False
 
@@ -135,6 +149,7 @@ class TimelineItem(BaseModel):
     tool_name: str | None = None
     agent_id: str | None = None
     is_sidechain: bool = False
+    is_error: bool = False
     related_event_ids: list[int] = Field(default_factory=list)
 
 
@@ -149,23 +164,34 @@ class SubagentResponse(BaseModel):
     event_count: int
     first_ts: str | None
     last_ts: str | None
+    input_tokens: int
+    output_tokens: int
+    error_count: int
+    api_equivalent_usd: float
+    cost_available: bool
+    unpriced_models: list[str] = Field(default_factory=list)
 
 
-class RiskFindingResponse(BaseModel):
+class ToolActivityResponse(BaseModel):
+    tool_name: str
+    call_count: int
+    error_count: int
+    observed_result_bytes: int
+    persisted_result_bytes: int
+
+
+class SessionFindingResponse(BaseModel):
     id: int
     session_id: int
-    severity: str
+    detector_key: str
+    basis: Literal["observed", "estimated", "inferred", "associated"]
     category: str
     title: str
     explanation: str
-    pattern: list[str] = Field(default_factory=list)
-    support: int
-    positive_support: int
-    negative_support: int
-    lift: float
-    score: float
-    start_event_id: int | None
-    end_event_id: int | None
+    recommendation: str | None = None
+    start_event_id: int | None = None
+    end_event_id: int | None = None
+    evidence_event_ids: list[int] = Field(default_factory=list)
     evidence: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -204,6 +230,15 @@ class TraceLane(BaseModel):
     kind: str
 
 
+class SameToolStreakMetadata(BaseModel):
+    streak_id: str
+    tool_name: str
+    position: int
+    count: int
+    start_event_id: int
+    end_event_id: int
+
+
 class TraceSpan(BaseModel):
     id: str
     event_id: int
@@ -216,12 +251,7 @@ class TraceSpan(BaseModel):
     end_ts: str | None
     tool_use_id: str | None
     tool_name: str | None = None
-    is_loop: bool
-    loop_run_id: str | None = None
-    loop_position: int | None = None
-    loop_count: int | None = None
-    loop_start_event_id: int | None = None
-    loop_end_event_id: int | None = None
+    same_tool_streak: SameToolStreakMetadata | None = None
 
 
 class CostTokens(BaseModel):
@@ -263,6 +293,16 @@ class TreemapProject(BaseModel):
 class OverTimeBucket(BaseModel):
     bucket: str
     per_model: dict[str, float] = Field(default_factory=dict)
+    total_usd: float = 0
+    session_count: int = 0
+    priced_session_count: int = 0
+    unpriced_models: list[str] = Field(default_factory=list)
+    costs_are_lower_bound: bool = False
+    baseline_usd: float | None = None
+    delta_usd: float | None = None
+    delta_pct: float | None = None
+    is_spike: bool = False
+    sessions: list[SpendSpikeSession] = Field(default_factory=list)
 
 
 class CategoryCost(BaseModel):
@@ -313,8 +353,6 @@ class TurnCostDetail(BaseModel):
     tool_call_count: int = 0
     error_count: int = 0
     subagent_count: int = 0
-    loop_count: int = 0
-    max_repeat: int = 0
     models: list[str] = Field(default_factory=list)
     is_outlier: bool = False
 
@@ -341,8 +379,6 @@ class SessionCostEntry(BaseModel):
     tool_call_count: int = 0
     subagent_count: int = 0
     error_count: int = 0
-    loop_count: int = 0
-    max_repeat: int = 0
     finding_count: int = 0
     duration_seconds: int = 0
     turn_cost_stats: TurnCostStats = Field(default_factory=TurnCostStats)
@@ -379,13 +415,16 @@ class SpendSpikeSession(BaseModel):
 class SpendSpike(BaseModel):
     bucket: str
     total_usd: float = 0
+    baseline_usd: float = 0
     delta_usd: float = 0
+    delta_pct: float | None = None
     sessions: list[SpendSpikeSession] = Field(default_factory=list)
 
 
 class DiscoveryExample(BaseModel):
     id: int | None = None
     kind: str
+    event_id: int | None = None
     session_id: str | None = None
     title: str | None = None
     project_name: str | None = None
@@ -401,11 +440,13 @@ class DiscoveryDriver(BaseModel):
     selectors: list[str] = Field(default_factory=list)
     support: int = 0
     positive_support: int = 0
+    complement_count: int = 0
+    complement_positive_count: int = 0
     baseline_rate: float = 0
     subgroup_rate: float = 0
+    complement_rate: float = 0
+    effect_size: float = 0
     subgroup_rate_low: float = 0
-    lift: float = 0
-    score: float = 0
     examples: list[DiscoveryExample] = Field(default_factory=list)
 
 
@@ -414,6 +455,7 @@ class DiscoverySection(BaseModel):
     title: str
     target_label: str
     description: str
+    observation_unit: str
     available: bool = True
     unavailable_reason: str | None = None
     baseline_count: int = 0
@@ -425,7 +467,9 @@ class DiscoveryMeta(BaseModel):
     project_id: int | None = None
     min_support: int = 5
     total_sessions: int = 0
+    total_tool_calls: int = 0
     cost_available: bool = False
+    unpriced_models: list[str] = Field(default_factory=list)
 
 
 class DiscoveryResponse(BaseModel):
@@ -458,6 +502,7 @@ class ContextFinding(BaseModel):
     savings_usd: float = 0
     counterfactual: ContextCounterfactual = Field(default_factory=ContextCounterfactual)
     event_id: int | None = None
+    evidence_event_ids: list[int] = Field(default_factory=list)
 
 
 class ContextThumbnailPoint(BaseModel):
@@ -494,14 +539,13 @@ class ContextTrendBucket(BaseModel):
 class ContextEconomicsMeta(BaseModel):
     project_id: int | None = None
     min_support: int = 3
-    total_usd: float = 0
-    necessary_usd: float = 0
-    avoidable_usd: float = 0
-    unattributed_tokens: int = 0
-    total_tokens: int = 0
-    avoidable_tokens: int = 0
-    avoidable_token_share: float = 0
+    recorded_api_equivalent_usd: float = 0
+    opportunity_usd: float = 0
+    unattributed_usd: float = 0
+    opportunity_tokens: int = 0
     cost_available: bool = False
+    costs_partial: bool = False
+    unpriced_models: list[str] = Field(default_factory=list)
     sessions_analyzed: int = 0
     sessions_skipped: int = 0
     trend: list[ContextTrendBucket] = Field(default_factory=list)
@@ -557,6 +601,8 @@ class AvailableProject(BaseModel):
 class CostAnalyticsMeta(BaseModel):
     available: bool = False
     unpriced_models: list[str] = Field(default_factory=list)
+    costs_partial: bool = False
+    costs_are_lower_bound: bool = False
     total_usd: float = 0
     total_tokens: int = 0
     available_projects: list[AvailableProject] = Field(default_factory=list)
@@ -578,9 +624,7 @@ class CostAnalyticsResponse(BaseModel):
 class UsageTool(BaseModel):
     key: str
     label: str
-    cost_usd: float = 0
-    tokens: int = 0
-    count: int = 0
+    activity_count: int = 0
     session_count: int = 0
 
 
@@ -588,23 +632,18 @@ class UsageHabit(BaseModel):
     key: str
     phase: str
     label: str
-    polarity: str = "anti"
-    status: str = "confirmed"
-    cost_usd: float = 0
-    count: int = 0
+    activity_count: int = 0
     session_count: int = 0
 
 
 class UsagePhase(BaseModel):
     key: str
     label: str
-    cost_usd: float = 0
-    tokens: int = 0
-    main_cost_usd: float = 0
-    subagent_cost_usd: float = 0
-    main_tokens: int = 0
-    subagent_tokens: int = 0
-    share: float = 0
+    activity_count: int = 0
+    main_activity_count: int = 0
+    subagent_activity_count: int = 0
+    text_assistant_step_count: int = 0
+    activity_share: float = 0
     tool_count: int = 0
     session_count: int = 0
     habits: list[UsageHabit] = Field(default_factory=list)
@@ -625,7 +664,11 @@ class UsageMapMeta(BaseModel):
     costs_partial: bool = False
     sessions_analyzed: int = 0
     events_classified: int = 0
-    share_basis: str = "cost"
+    total_activity_count: int = 0
+    tool_call_count: int = 0
+    text_assistant_step_count: int = 0
+    activity_basis: str = "tool_calls_and_assistant_steps"
+    methodology: str = ""
 
 
 class UsageMapResponse(BaseModel):
@@ -637,8 +680,8 @@ class UsageEvidenceSession(BaseModel):
     session_id: int
     title: str = ""
     project_name: str = ""
-    cost_usd: float = 0
-    count: int = 0
+    activity_count: int = 0
+    session_cost_usd: float = 0
     exemplar_event_ids: list[int] = Field(default_factory=list)
     detail: str | None = None
 
@@ -647,7 +690,7 @@ class UsageMapEvidenceResponse(BaseModel):
     node: str
     label: str = ""
     rule: str = ""
-    cost_usd: float = 0
+    activity_count: int = 0
     sessions: list[UsageEvidenceSession] = Field(default_factory=list)
 
 
@@ -681,7 +724,7 @@ class LimitHitOut(BaseModel):
     ts: str
     kind: str
     reset_at: str | None = None
-    blocked_minutes: float | None = None
+    minutes_until_reset: float | None = None
     usage_at_hit: float | None = None
     usage_at_hit_tokens: int | None = None
     occurrence_count: int = 1
@@ -703,17 +746,15 @@ class LimitEraOut(BaseModel):
     era: str = ""
     window_count: int = 0
     session_hit_count: int = 0
-    blocked_minutes: float = 0
-    cap_median_usd: float | None = None
-    cap_min_usd: float | None = None
-    cap_max_usd: float | None = None
-    cap_median_tokens: float | None = None
-    cap_min_tokens: int | None = None
-    cap_max_tokens: int | None = None
-    near_miss_count: int = 0
-    near_miss_count_tokens: int = 0
-    cap_percentile: float | None = None
-    cap_percentile_tokens: float | None = None
+    minutes_until_reset: float = 0
+    hit_level_median_usd: float | None = None
+    hit_level_min_usd: float | None = None
+    hit_level_max_usd: float | None = None
+    hit_level_median_tokens: float | None = None
+    hit_level_min_tokens: int | None = None
+    hit_level_max_tokens: int | None = None
+    hit_level_percentile: float | None = None
+    hit_level_percentile_tokens: float | None = None
     usage_at_hit_usd: list[float] = Field(default_factory=list)
     usage_at_hit_tokens: list[int] = Field(default_factory=list)
 
@@ -724,7 +765,7 @@ class LimitsMeta(BaseModel):
     costs_partial: bool = False
     total_hits: int = 0
     total_windows: int = 0
-    blocked_minutes: float = 0
+    minutes_until_reset: float = 0
     hits_per_week_recent: float = 0
     hit_counts: dict[str, int] = Field(default_factory=dict)
     plan_history: list[dict[str, str]] = Field(default_factory=list)
@@ -736,16 +777,6 @@ class LimitsResponse(BaseModel):
     hits: list[LimitHitOut] = Field(default_factory=list)
     windows: list[LimitWindowOut] = Field(default_factory=list)
     eras: list[LimitEraOut] = Field(default_factory=list)
-
-
-class ContributionPreviewResponse(BaseModel):
-    manifest: dict[str, Any]
-    bundle: dict[str, Any]
-
-
-class ContributionExportResponse(BaseModel):
-    path: str
-    session_count: int
 
 
 class TeamExportPreviewResponse(BaseModel):
@@ -823,12 +854,11 @@ class TeamDashboardResponse(BaseModel):
     meta: dict[str, Any] = Field(default_factory=dict)
     tokens: dict[str, Any] = Field(default_factory=dict)
     stats: dict[str, Any] = Field(default_factory=dict)
+    reliability: dict[str, Any] = Field(default_factory=dict)
     providers: list[dict[str, Any]] = Field(default_factory=list)
     models: list[dict[str, Any]] = Field(default_factory=list)
     stop_reasons: list[dict[str, Any]] = Field(default_factory=list)
-    risk_categories: list[dict[str, Any]] = Field(default_factory=list)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
-    sequence: list[dict[str, Any]] = Field(default_factory=list)
     members: list[dict[str, Any]] = Field(default_factory=list)
     over_time: list[dict[str, Any]] = Field(default_factory=list)
     projects: list[dict[str, Any]] = Field(default_factory=list)

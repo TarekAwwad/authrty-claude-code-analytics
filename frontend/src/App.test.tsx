@@ -48,14 +48,16 @@ vi.mock("./api/client", () => ({
   })),
   getCacheStats: vi.fn(async () => ({
     project_count: 0, session_count: 0, event_count: 0,
-    subagent_count: 0, memory_count: 0, persisted_output_count: 0,
+    subagent_count: 0, persisted_output_count: 0,
+    observed_date_from: null, observed_date_to: null,
+    last_successful_sync_at: null, latest_import_error_count: 0,
   })),
   getImportProgress: vi.fn(async () => ({
     active: false, import_id: null, project_count: 0, session_count: 0,
-    event_count: 0, subagent_count: 0, memory_count: 0, persisted_output_count: 0,
+    event_count: 0, subagent_count: 0, persisted_output_count: 0,
   })),
   getCostAnalytics: vi.fn(async () => ({
-    meta: { available: false, unpriced_models: [], total_usd: 0, total_tokens: 0,
+    meta: { available: false, unpriced_models: [], costs_partial: false, costs_are_lower_bound: false, total_usd: 0, total_tokens: 0,
       available_projects: [], available_models: [], bucket: "day" },
     treemap: [], over_time: [],
     categories: { base_input: { tokens: 0, usd: 0 }, cache_write_5m: { tokens: 0, usd: 0 },
@@ -69,11 +71,14 @@ vi.mock("./api/client", () => ({
     spikes: [],
   })),
   getDiscoveryAnalytics: vi.fn(async () => ({
-    meta: { project_id: null, min_support: 5, total_sessions: 12, cost_available: true },
+    meta: {
+      project_id: null, min_support: 5, total_sessions: 12, total_tool_calls: 34,
+      cost_available: true, unpriced_models: [],
+    },
     sections: {
-      cost: {
-        key: "cost", title: "Cost drivers", target_label: "High-cost sessions",
-        description: "", available: true, unavailable_reason: null,
+      cost_associations: {
+        key: "cost_associations", title: "Cost associations", target_label: "High estimated API-equivalent cost",
+        description: "", observation_unit: "session", available: true, unavailable_reason: null,
         baseline_count: 12, positive_count: 3, results: [{
           id: "model:sonnet",
           title: "Sonnet-heavy sessions",
@@ -81,28 +86,20 @@ vi.mock("./api/client", () => ({
           selectors: ["model = sonnet"],
           support: 6,
           positive_support: 3,
+          complement_count: 6,
+          complement_positive_count: 0,
           baseline_rate: 0.25,
           subgroup_rate: 0.5,
+          complement_rate: 0,
+          effect_size: 0.5,
           subgroup_rate_low: 0.22,
-          lift: 2,
-          score: 1,
           examples: [],
         }],
       },
-      fanout_cost: {
-        key: "fanout_cost", title: "Fanout cost drivers", target_label: "High-cost sessions",
-        description: "", available: false, unavailable_reason: "Price table unavailable.",
-        baseline_count: 0, positive_count: 0, results: [],
-      },
-      tool_errors: {
-        key: "tool_errors", title: "Tool error drivers", target_label: "Tool calls with errors",
-        description: "", available: true, unavailable_reason: null,
-        baseline_count: 0, positive_count: 0, results: [],
-      },
-      rejections: {
-        key: "rejections", title: "Rejection drivers", target_label: "Rejected slices",
-        description: "", available: true, unavailable_reason: null,
-        baseline_count: 0, positive_count: 0, results: [],
+      tool_error_associations: {
+        key: "tool_error_associations", title: "Tool-error associations", target_label: "Recorded tool error",
+        description: "", observation_unit: "tool_call", available: true, unavailable_reason: null,
+        baseline_count: 34, positive_count: 2, results: [],
       },
     },
   })),
@@ -111,10 +108,12 @@ vi.mock("./api/client", () => ({
 vi.mock("./pages/SessionWorkspace", () => ({
   default: ({
     backLabel,
+    historical,
     initialEventId,
     onBack,
   }: {
     backLabel?: string;
+    historical?: boolean;
     initialEventId?: number | null;
     onBack?: () => void;
   }) => (
@@ -124,17 +123,35 @@ vi.mock("./pages/SessionWorkspace", () => ({
           {backLabel}
         </button>
       )}
+      <span data-testid="session-historical-pricing">{String(historical)}</span>
       <span data-testid="session-initial-event">{initialEventId ?? "none"}</span>
     </main>
   ),
 }));
 
 vi.mock("./analytics/CostAnalyticsPage", () => ({
-  default: ({ onOpenSession }: { onOpenSession: (sessionId: number) => void }) => (
+  default: ({
+    onOpenSession,
+    historical,
+    onHistoricalChange,
+  }: {
+    onOpenSession: (sessionId: number) => void;
+    historical: boolean;
+    onHistoricalChange: (value: boolean) => void;
+  }) => (
     <main>
       <button type="button" onClick={() => onOpenSession(7)}>
         Open cost session
       </button>
+      <label>
+        <input
+          type="checkbox"
+          aria-label="Historical pricing"
+          checked={historical}
+          onChange={(event) => onHistoricalChange(event.target.checked)}
+        />
+        Historical pricing
+      </label>
     </main>
   ),
 }));
@@ -176,15 +193,11 @@ function appSession(id: number): SessionCard {
     persisted_output_count: 0,
     input_tokens: 1000,
     output_tokens: 500,
-    loop_count: 2,
-    max_repeat: 7,
     duration_seconds: 1320,
     max_agent_events: 100,
     finding_count: 1,
-    pattern_risk_score: 42,
-    top_finding_category: null,
-    top_finding_severity: null,
     top_finding_title: null,
+    top_finding_basis: null,
     cost_usd: 0.48,
     cost_available: true,
   };
@@ -208,11 +221,15 @@ function renderApp() {
 
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState(null, "", "/");
   vi.mocked(client.listImports).mockResolvedValue([] as never);
   vi.mocked(client.listProjects).mockResolvedValue([] as never);
   vi.mocked(client.listSessions).mockResolvedValue([] as never);
 });
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+});
 
 describe("App", () => {
   it("renders the import screen shell", async () => {
@@ -229,8 +246,8 @@ describe("App", () => {
 
     renderApp();
 
-    // With imports present, the app auto-advances to Overview on first load.
-    await waitFor(() => expect(screen.getByRole("button", { name: "Overview" })).toHaveClass("active"));
+    // With imports present, the app auto-advances to Sessions on first load.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sessions" })).toHaveClass("active"));
 
     fireEvent.click(screen.getByRole("button", { name: "Import" }));
 
@@ -242,6 +259,21 @@ describe("App", () => {
   it("shows the Cost tab in the top nav", async () => {
     renderApp();
     expect(await screen.findByRole("button", { name: "Cost" })).toBeInTheDocument();
+  });
+
+  it("keeps historical pricing on the Cost page and persists it through settings", async () => {
+    renderApp();
+    expect(await screen.findByRole("button", { name: "Cost" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Historical pricing" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cost" }));
+    const control = await screen.findByRole("checkbox", { name: "Historical pricing" });
+    expect(control).toBeChecked();
+    fireEvent.click(control);
+
+    await waitFor(() => expect(vi.mocked(client.updateSettings).mock.calls.some(([settings]) => (
+      settings.historical_pricing === false && settings.privacy_mode === false
+    ))).toBe(true));
   });
 
   it("shows the Explore nav item and switches to the discovery view", async () => {
@@ -288,16 +320,62 @@ describe("App", () => {
     expect(screen.queryByText("Projects in source")).not.toBeInTheDocument();
   });
 
-  it("returns from a session to the originating Overview view", async () => {
+  it("returns from a session to the originating Sessions view", async () => {
     mockImportedSession();
     renderApp();
 
     fireEvent.click(await screen.findByText("App test session"));
 
-    fireEvent.click(await screen.findByRole("button", { name: "Back to Overview" }));
+    expect(screen.getByTestId("session-historical-pricing")).toHaveTextContent("true");
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Overview" })).toHaveClass("active"));
+    fireEvent.click(await screen.findByRole("button", { name: "Back to Sessions" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sessions" })).toHaveClass("active"));
     expect(await screen.findByText("App test session")).toBeInTheDocument();
+  });
+
+  it("adds sessions to browser history and restores the originating view on popstate", async () => {
+    mockImportedSession();
+    const pushState = vi.spyOn(window.history, "pushState");
+    renderApp();
+
+    fireEvent.click(await screen.findByText("App test session"));
+
+    expect(pushState).toHaveBeenCalledWith(
+      {
+        cya: {
+          view: "session",
+          sessionId: 7,
+          origin: "map",
+          eventId: null,
+        },
+      },
+      "",
+      "#session/7",
+    );
+
+    window.dispatchEvent(new PopStateEvent("popstate", { state: { cya: { view: "map" } } }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sessions" })).toHaveClass("active"));
+    expect(await screen.findByText("App test session")).toBeInTheDocument();
+  });
+
+  it("uses Backspace as session Back only outside editable controls", async () => {
+    mockImportedSession();
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    renderApp();
+
+    fireEvent.click(await screen.findByText("App test session"));
+    fireEvent.keyDown(document.body, { key: "Backspace" });
+
+    expect(back).toHaveBeenCalledTimes(1);
+
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    fireEvent.keyDown(input, { key: "Backspace" });
+
+    expect(back).toHaveBeenCalledTimes(1);
+    input.remove();
   });
 
   it("returns from a session to the originating Cost view", async () => {

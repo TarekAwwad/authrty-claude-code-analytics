@@ -1,8 +1,6 @@
 import React from "react";
 import { AlertTriangle, Network, Search } from "lucide-react";
 import type { Project, SessionCard } from "../api/types";
-import { riskScore } from "./riskScore";
-import RiskCell from "./RiskCell";
 import { Blurred } from "../shell/Blurred";
 import LoadingBar from "../components/LoadingBar";
 
@@ -13,26 +11,22 @@ interface Props {
   onOpenSession: (session: SessionCard) => void;
 }
 
-type SortKey = "risk" | "first_ts" | "patterns" | "error_count" | "max_repeat" | "subagent_count" | "event_count" | "cost_usd";
+type SortKey = "first_ts" | "cost_usd" | "error_count" | "finding_count" | "event_count" | "subagent_count";
 
 const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
-  { key: "risk", label: "Highest risk" },
   { key: "first_ts", label: "Newest first" },
-  { key: "patterns", label: "Strongest finding" },
-  { key: "error_count", label: "Most errors" },
-  { key: "max_repeat", label: "Largest loop" },
-  { key: "subagent_count", label: "Most fanout" },
-  { key: "event_count", label: "Highest volume" },
-  { key: "cost_usd", label: "Highest cost" },
+  { key: "cost_usd", label: "Highest estimated API-equivalent cost" },
+  { key: "error_count", label: "Most observed errors" },
+  { key: "finding_count", label: "Supported finding" },
+  { key: "event_count", label: "Highest event volume" },
+  { key: "subagent_count", label: "Most subagents" },
 ];
 
 function sortValue(session: SessionCard, sortKey: SortKey): number {
-  if (sortKey === "risk") return riskScore(session);
   if (sortKey === "first_ts") {
     const timestamp = session.first_ts ? Date.parse(session.first_ts) : Number.NaN;
     return Number.isNaN(timestamp) ? 0 : timestamp;
   }
-  if (sortKey === "patterns") return session.pattern_risk_score;
   return session[sortKey] as number;
 }
 
@@ -47,47 +41,29 @@ function formatSessionStart(value: string | null): string {
   return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-function formatCategory(value: string | null): string {
-  if (!value) return "No findings";
-  return value
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
+function formatBasis(value: SessionCard["top_finding_basis"]): string | null {
+  if (!value) return null;
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function topIssue(session: SessionCard): { title: string; detail: string; tone: "finding" | "warn" | "calm" } {
+function supportedFinding(session: SessionCard): { title: string; detail: string; tone: "finding" | "calm" } {
   if (session.finding_count > 0) {
+    const basis = formatBasis(session.top_finding_basis);
+    const count = `${session.finding_count} finding${session.finding_count === 1 ? "" : "s"}`;
     return {
-      title: session.top_finding_title || formatCategory(session.top_finding_category),
-      detail: `${session.finding_count} finding${session.finding_count === 1 ? "" : "s"}`,
+      title: session.top_finding_title || "Supported finding detected",
+      detail: basis ? `${basis} · ${count}` : count,
       tone: "finding",
     };
   }
-  if (session.loop_count > 0) {
-    return { title: "Loop activity", detail: `max repeat x${session.max_repeat}`, tone: "warn" };
-  }
-  if (session.error_count > 0) {
-    return {
-      title: "Tool errors",
-      detail: `${session.error_count} flagged event${session.error_count === 1 ? "" : "s"}`,
-      tone: "warn",
-    };
-  }
-  if (session.subagent_count > 0) {
-    return {
-      title: "Delegated work",
-      detail: `${session.subagent_count} spawned thread${session.subagent_count === 1 ? "" : "s"}`,
-      tone: "calm",
-    };
-  }
-  return { title: "No immediate issue", detail: "open for details", tone: "calm" };
+  return { title: "No supported finding detected", detail: "", tone: "calm" };
 }
 
 function TriageBoard({ projects, sessions, loading, onOpenSession }: Props) {
   const [query, setQuery] = React.useState("");
   const [projectId, setProjectId] = React.useState<number | "all">("all");
   const [onlyErrors, setOnlyErrors] = React.useState(false);
-  const [sortKey, setSortKey] = React.useState<SortKey>("risk");
+  const [sortKey, setSortKey] = React.useState<SortKey>("first_ts");
 
   const activeProjectId = React.useMemo<number | "all">(() => {
     if (projectId === "all") return projectId;
@@ -112,6 +88,7 @@ function TriageBoard({ projects, sessions, loading, onOpenSession }: Props) {
     : projects.find((project) => project.id === activeProjectId)?.display_name ?? "Project";
   const totalCost = rows.reduce((sum, session) => sum + session.cost_usd, 0);
   const costAvailable = rows.some((session) => session.cost_available);
+  const observedErrorCount = rows.reduce((sum, session) => sum + session.error_count, 0);
 
   const header = (key: SortKey, label: string) => (
     <th
@@ -177,10 +154,9 @@ function TriageBoard({ projects, sessions, loading, onOpenSession }: Props) {
             <table className="triage-table">
               <thead>
                 <tr>
-                  {header("risk", "Risk")}
                   <th>Session</th>
                   {header("first_ts", "Started")}
-                  {header("patterns", "Top issue")}
+                  {header("finding_count", "Supported finding")}
                   <th>Impact</th>
                   {header("cost_usd", "Cost")}
                   <th aria-label="Action" />
@@ -188,7 +164,7 @@ function TriageBoard({ projects, sessions, loading, onOpenSession }: Props) {
               </thead>
               <tbody>
                 {rows.map((session) => {
-                  const issue = topIssue(session);
+                  const finding = supportedFinding(session);
                   return (
                     <tr
                       key={session.id}
@@ -200,9 +176,6 @@ function TriageBoard({ projects, sessions, loading, onOpenSession }: Props) {
                       className="triage-row"
                     >
                       <td>
-                        <RiskCell session={session} />
-                      </td>
-                      <td>
                         <div className="tr-name"><Blurred>{session.title || session.session_id.slice(0, 8)}</Blurred></div>
                         <div className="tr-sub"><Blurred>{session.project_name}{session.title ? ` · ${session.session_id.slice(0, 8)}` : ""}</Blurred></div>
                       </td>
@@ -211,17 +184,20 @@ function TriageBoard({ projects, sessions, loading, onOpenSession }: Props) {
                           <time dateTime={session.first_ts}>{formatSessionStart(session.first_ts)}</time>
                         ) : "—"}
                       </td>
-                      <td className={`cell-issue issue-${issue.tone}`}>
+                      <td className={`cell-issue issue-${finding.tone}`}>
                         <span className="finding-cell">
-                          <Blurred>{issue.title}</Blurred>
+                          <Blurred>{finding.title}</Blurred>
                         </span>
-                        <small>{issue.detail}</small>
+                        {finding.detail && <small>{finding.detail}</small>}
                       </td>
                       <td className="cell-impact">
                         <div className="impact-stack" aria-label="Session impact">
                           {session.error_count > 0 && <span className="impact-chip err">{session.error_count} errors</span>}
-                          {session.loop_count > 0 && <span className="impact-chip loop">x{session.max_repeat} loop</span>}
-                          {session.subagent_count > 0 && <span className="impact-chip fan">{session.subagent_count} fanout</span>}
+                          {session.subagent_count > 0 && (
+                            <span className="impact-chip neutral">
+                              {session.subagent_count} subagent{session.subagent_count === 1 ? "" : "s"}
+                            </span>
+                          )}
                           <span className="impact-chip neutral">{session.event_count.toLocaleString()} events</span>
                         </div>
                         <div className="vol-dur">{Math.round(session.duration_seconds / 60)} min</div>
@@ -253,10 +229,7 @@ function TriageBoard({ projects, sessions, loading, onOpenSession }: Props) {
       <section className="map-footer">
         <span><Network size={16} /> {rows.length.toLocaleString()} sessions</span>
         <span>
-          <AlertTriangle size={16} /> {rows.reduce((sum, session) => sum + session.error_count + session.system_count, 0).toLocaleString()} alert events
-          ({rows.reduce((sum, session) => sum + session.error_count, 0).toLocaleString()} errors,
-          {" "}
-          {rows.reduce((sum, session) => sum + session.system_count, 0).toLocaleString()} system)
+          <AlertTriangle size={16} /> {observedErrorCount.toLocaleString()} observed error{observedErrorCount === 1 ? "" : "s"}
         </span>
       </section>
     </main>

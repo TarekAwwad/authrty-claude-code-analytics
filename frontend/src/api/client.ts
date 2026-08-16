@@ -1,7 +1,5 @@
 import type {
   CacheStats,
-  ContributionExportResult,
-  ContributionPreview,
   ContextEconomicsResponse,
   CostAnalyticsFilters,
   CostAnalyticsResponse,
@@ -10,10 +8,11 @@ import type {
   DiscoveredProject,
   EventDetail,
   ImportProgress,
+  ImportRecord,
   ImportSummary,
   LimitsResponse,
   Project,
-  RiskFinding,
+  SessionFinding,
   RuntimeConfig,
   SearchResult,
   SessionCard,
@@ -29,6 +28,7 @@ import type {
   TeamPreview,
   TeamProjectsResult,
   TimelineItem,
+  ToolActivity,
   TurnCostBreakdown,
   TraceResponse,
   UsageMapResponse,
@@ -97,7 +97,7 @@ export function resetImports() {
 }
 
 export function listImports() {
-  return request<Array<Record<string, unknown>>>("/imports");
+  return request<ImportRecord[]>("/imports");
 }
 
 export function getImportProgress() {
@@ -158,12 +158,17 @@ export function getSessionTurnCosts(sessionId: number) {
   return request<TurnCostBreakdown>(`/sessions/${sessionId}/turn-costs`);
 }
 
-export function getSubagents(sessionId: number) {
-  return request<Subagent[]>(`/sessions/${sessionId}/subagents`);
+export function getSubagents(sessionId: number, historical?: boolean) {
+  const query = historical === undefined ? "" : `?historical=${historical}`;
+  return request<Subagent[]>(`/sessions/${sessionId}/subagents${query}`);
+}
+
+export function getToolActivity(sessionId: number) {
+  return request<ToolActivity[]>(`/sessions/${sessionId}/tool-activity`);
 }
 
 export function getSessionFindings(sessionId: number) {
-  return request<RiskFinding[]>(`/sessions/${sessionId}/findings`);
+  return request<SessionFinding[]>(`/sessions/${sessionId}/findings`);
 }
 
 export function getEvent(eventId: number, includeRaw = true) {
@@ -206,10 +211,9 @@ export function getDiscoveryAnalytics(filters: DiscoveryFilters = {}) {
   return request<DiscoveryResponse>(`/analytics/discovery${query ? `?${query}` : ""}`);
 }
 
-export function getContextEconomics(filters: { projectId?: number | null; minSupport?: number } = {}) {
+export function getContextEconomics(filters: { projectId?: number | null } = {}) {
   const params = new URLSearchParams();
   if (filters.projectId != null) params.set("project_id", String(filters.projectId));
-  if (filters.minSupport != null) params.set("min_support", String(filters.minSupport));
   const query = params.toString();
   return request<ContextEconomicsResponse>(`/analytics/context-economics${query ? `?${query}` : ""}`);
 }
@@ -263,14 +267,6 @@ export function updateSettings(settings: Settings) {
     method: "PUT",
     body: JSON.stringify(settings),
   });
-}
-
-export function getContributionPreview() {
-  return request<ContributionPreview>("/contribution/preview");
-}
-
-export function exportContribution() {
-  return request<ContributionExportResult>("/contribution/export", { method: "POST" });
 }
 
 export function getTeamProjects() {

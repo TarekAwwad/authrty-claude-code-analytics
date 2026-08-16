@@ -66,6 +66,8 @@ def test_team_cost_totals_and_by_model(seeded: sqlite3.Connection) -> None:
     payload = team_cost.team_cost_analytics(seeded)
 
     assert payload["meta"]["available"] is True
+    assert payload["meta"]["costs_partial"] is False
+    assert payload["meta"]["costs_are_lower_bound"] is False
     # opus: 1M base*5 + 1M output*25 = $30 ; sonnet: 1M*3 + 1M*15 = $18 ; total $48
     assert payload["meta"]["total_usd"] == 48.0
     assert payload["meta"]["total_tokens"] == 4_000_000
@@ -86,9 +88,36 @@ def test_team_cost_unavailable_without_price_table(tmp_path: Path, monkeypatch: 
     payload = team_cost.team_cost_analytics(conn)
 
     assert payload["meta"]["available"] is False
+    assert payload["meta"]["costs_partial"] is False
+    assert payload["meta"]["costs_are_lower_bound"] is False
     assert payload["meta"]["total_usd"] == 0
     assert set(payload["meta"]["unpriced_models"]) == {"claude-opus-4-8", "claude-sonnet-4-6"}
     conn.close()
+
+
+def test_team_cost_marks_partial_costs_and_suppresses_spikes(
+    seeded: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    csv = tmp_path / "partial-pricing.csv"
+    csv.write_text(
+        "model,base-input-tokens,5m-cache-writes,1h-cache-writes,cache-hits-&-refreshes,output-tokens\n"
+        "claude-opus-4-8,5,6.25,10,0.50,25\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(team_cost, "pricing_path", lambda: csv)
+
+    payload = team_cost.team_cost_analytics(seeded)
+
+    assert payload["meta"]["available"] is True
+    assert payload["meta"]["costs_partial"] is True
+    assert payload["meta"]["costs_are_lower_bound"] is True
+    assert payload["meta"]["unpriced_models"] == ["claude-sonnet-4-6"]
+    assert payload["spikes"] == []
+    may2 = next(bucket for bucket in payload["over_time"] if bucket["bucket"] == "2026-05-02")
+    assert may2["costs_are_lower_bound"] is True
+    assert may2["unpriced_models"] == ["claude-sonnet-4-6"]
 
 
 def test_team_cost_filters_by_project_id(seeded: sqlite3.Connection) -> None:

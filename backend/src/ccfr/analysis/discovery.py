@@ -9,7 +9,6 @@ from statistics import NormalDist
 from typing import Any
 
 from ccfr.analysis.pricing import TokenBreakdown, cost_usd, load_price_timeline, match_price
-from ccfr.analysis.risk_patterns import _command_family
 from ccfr.naming import project_display_name
 from ccfr.config import pricing_dir, pricing_path
 
@@ -23,7 +22,6 @@ MAX_PAIR_DESCRIPTORS = 80
 # scored — so the per-section false-positive probability stays at most ALPHA
 # regardless of how many conditions are tested.
 ALPHA = 0.05
-MIN_LIFT = 1.15
 
 
 def _adjusted_z(num_candidates: int) -> float:
@@ -42,7 +40,6 @@ class Descriptor:
     key: str
     family: str
     label: str
-    fanout: bool = False
 
 
 @dataclass
@@ -63,46 +60,40 @@ def discovery_analytics(
 ) -> dict[str, Any]:
     """Return on-demand driver discovery results from the rebuildable SQLite cache."""
     min_support = max(1, int(min_support or 1))
-    sessions, cost_available = _session_subjects(conn, project_id=project_id, historical=historical)
+    sessions, cost_available, unpriced_models = _session_subjects(
+        conn, project_id=project_id, historical=historical
+    )
     tool_calls = _tool_call_subjects(conn, project_id=project_id)
-    rejection_slices = _rejection_slice_subjects(conn, project_id=project_id)
 
     cost_section = _section(
-        key="cost",
-        title="Cost drivers",
-        target_label="High-cost sessions",
-        description="Conditions that make a session more likely to land in the top cost band.",
+        key="cost_associations",
+        title="Cost associations",
+        target_label="High estimated API-equivalent cost",
+        description=(
+            "Session attributes associated with the observed top estimated-cost band. "
+            "This is observational, not causal."
+        ),
         subjects=sessions,
         min_support=min_support,
+        observation_unit="session",
         available=cost_available,
-        unavailable_reason=None if cost_available else "Price table unavailable.",
-    )
-    fanout_section = _section(
-        key="fanout_cost",
-        title="Fanout cost drivers",
-        target_label="High-cost sessions",
-        description="Cost drivers that include subagent fanout or Agent orchestration.",
-        subjects=sessions,
-        min_support=min_support,
-        require_fanout=True,
-        available=cost_available,
-        unavailable_reason=None if cost_available else "Price table unavailable.",
+        unavailable_reason=(
+            None
+            if cost_available
+            else "Complete pricing coverage is required for cost associations."
+        ),
     )
     tool_error_section = _section(
-        key="tool_errors",
-        title="Tool error drivers",
+        key="tool_error_associations",
+        title="Tool error associations",
         target_label="Tool calls with errors",
-        description="Tool-call conditions that are more likely to end in an error result.",
+        description=(
+            "Tool-call attributes associated with observed error results. "
+            "Each observation is one tool call."
+        ),
         subjects=tool_calls,
         min_support=min_support,
-    )
-    rejection_section = _section(
-        key="rejections",
-        title="Rejection drivers",
-        target_label="Rejected slices",
-        description="Workflow features that are more likely to appear in rejected slices.",
-        subjects=rejection_slices,
-        min_support=min_support,
+        observation_unit="tool_call",
     )
 
     return {
@@ -110,13 +101,13 @@ def discovery_analytics(
             "project_id": project_id,
             "min_support": min_support,
             "total_sessions": len(sessions),
+            "total_tool_calls": len(tool_calls),
             "cost_available": cost_available,
+            "unpriced_models": unpriced_models,
         },
         "sections": {
-            "cost": cost_section,
-            "fanout_cost": fanout_section,
-            "tool_errors": tool_error_section,
-            "rejections": rejection_section,
+            "cost_associations": cost_section,
+            "tool_error_associations": tool_error_section,
         },
     }
 
@@ -129,7 +120,7 @@ def _section(
     description: str,
     subjects: list[Subject],
     min_support: int,
-    require_fanout: bool = False,
+    observation_unit: str,
     available: bool = True,
     unavailable_reason: str | None = None,
 ) -> dict[str, Any]:
@@ -140,6 +131,7 @@ def _section(
             "title": title,
             "target_label": target_label,
             "description": description,
+            "observation_unit": observation_unit,
             "available": False,
             "unavailable_reason": unavailable_reason,
             "baseline_count": len(subjects),
@@ -148,14 +140,7 @@ def _section(
         }
 
     candidates = _candidate_groups(subjects, min_support=min_support)
-    # Apply the fanout filter first to obtain the set actually scored, then
-    # derive z from that count so the Bonferroni correction reflects the real
-    # number of simultaneous hypotheses tested in this section.
-    scored_candidates = [
-        (descriptors, indexes)
-        for descriptors, indexes in candidates
-        if not require_fanout or any(descriptor.fanout for descriptor in descriptors)
-    ]
+    scored_candidates = candidates
     z = _adjusted_z(len(scored_candidates))
     results = []
     for descriptors, indexes in scored_candidates:
@@ -164,12 +149,15 @@ def _section(
             continue
         results.append(result)
 
-    results.sort(key=lambda item: (-item["score"], -item["support"], item["title"]))
+    results.sort(
+        key=lambda item: (-item["effect_size"], -item["support"], item["title"])
+    )
     return {
         "key": key,
         "title": title,
         "target_label": target_label,
         "description": description,
+        "observation_unit": observation_unit,
         "available": True,
         "unavailable_reason": None,
         "baseline_count": len(subjects),
@@ -218,26 +206,26 @@ def _score_group(
     total = len(subjects)
     positives = sum(1 for subject in subjects if subject.positive)
     support = len(indexes)
-    if total == 0 or positives == 0 or support == 0:
+    complement_count = total - support
+    if total == 0 or positives == 0 or support == 0 or complement_count == 0:
         return None
     positive_support = sum(1 for index in indexes if subjects[index].positive)
     if positive_support == 0:
         return None
+    complement_positive_count = positives - positive_support
     baseline_rate = positives / total
     subgroup_rate = positive_support / support
-    if subgroup_rate <= baseline_rate:
+    complement_rate = complement_positive_count / complement_count
+    if subgroup_rate <= complement_rate:
         return None
-    lift = subgroup_rate / baseline_rate if baseline_rate > 0 else 0.0
-    if lift < MIN_LIFT:
-        return None
+    effect_size = subgroup_rate - complement_rate
     # Significance gate: require the Bonferroni-adjusted Wilson score lower bound
-    # of the subgroup rate to clear the baseline. The caller derives z from
+    # of the subgroup rate to clear the observed complement rate. The caller derives z from
     # _adjusted_z(m) where m is the number of candidates scored in this section,
     # so the family-wise false-positive rate stays at ALPHA across all tests.
     subgroup_rate_low = _wilson_lower_bound(positive_support, support, z)
-    if subgroup_rate_low <= baseline_rate:
+    if subgroup_rate_low <= complement_rate:
         return None
-    score = (support / total) * (subgroup_rate - baseline_rate)
 
     labels = [descriptor.label for descriptor in descriptors]
     examples = [
@@ -252,15 +240,17 @@ def _score_group(
     return {
         "id": "|".join(descriptor.key for descriptor in descriptors),
         "title": title,
-        "summary": _summary(labels, lift),
+        "summary": _summary(labels, effect_size),
         "selectors": labels,
         "support": support,
         "positive_support": positive_support,
+        "complement_count": complement_count,
+        "complement_positive_count": complement_positive_count,
         "baseline_rate": round(baseline_rate, 4),
         "subgroup_rate": round(subgroup_rate, 4),
+        "complement_rate": round(complement_rate, 4),
+        "effect_size": round(effect_size, 4),
         "subgroup_rate_low": round(subgroup_rate_low, 4),
-        "lift": round(lift, 3),
-        "score": round(score, 6),
         "examples": examples,
     }
 
@@ -283,14 +273,24 @@ def _wilson_lower_bound(positives: int, total: int, z: float) -> float:
     return max(0.0, (center - margin) / denom)
 
 
-def _summary(labels: list[str], lift: float) -> str:
-    if len(labels) == 1:
-        return f"{labels[0]} is {lift:.1f}x more likely than baseline."
-    return f"{' and '.join(labels)} is {lift:.1f}x more likely than baseline."
+def _summary(labels: list[str], effect_size: float) -> str:
+    conditions = labels[0] if len(labels) == 1 else " and ".join(labels)
+    points = effect_size * 100
+    return (
+        f"{conditions} is associated with a {points:.1f} percentage-point higher "
+        "observed rate than the complement."
+    )
 
 
-def _session_subjects(conn: sqlite3.Connection, *, project_id: int | None, historical: bool = True) -> tuple[list[Subject], bool]:
-    costs, available = _scoped_session_costs(conn, project_id=project_id, historical=historical)
+def _session_subjects(
+    conn: sqlite3.Connection,
+    *,
+    project_id: int | None,
+    historical: bool = True,
+) -> tuple[list[Subject], bool, list[str]]:
+    costs, available, unpriced_models = _scoped_session_costs(
+        conn, project_id=project_id, historical=historical
+    )
     rows = conn.execute(
         f"""
         SELECT
@@ -299,14 +299,8 @@ def _session_subjects(conn: sqlite3.Connection, *, project_id: int | None, histo
             s.title,
             p.export_name,
             p.inferred_cwd,
-            COALESCE(ss.event_count, 0) AS event_count,
-            COALESCE(ss.turn_count, 0) AS turn_count,
             COALESCE(ss.tool_call_count, 0) AS tool_call_count,
-            COALESCE(ss.subagent_count, 0) AS subagent_count,
-            COALESCE(ss.loop_count, 0) AS loop_count,
-            CAST(
-                ROUND(COALESCE((julianday(s.last_ts) - julianday(s.first_ts)) * 86400, 0)) AS INTEGER
-            ) AS duration_seconds
+            COALESCE(ss.subagent_count, 0) AS subagent_count
         FROM sessions s
         JOIN projects p ON p.id = s.project_id
         LEFT JOIN session_stats ss ON ss.session_id = s.id
@@ -348,7 +342,7 @@ def _session_subjects(conn: sqlite3.Connection, *, project_id: int | None, histo
                 },
             )
         )
-    return subjects, available
+    return subjects, available, unpriced_models
 
 
 def _session_descriptors(
@@ -360,29 +354,17 @@ def _session_descriptors(
 ) -> set[Descriptor]:
     descriptors = {
         _descriptor("project", project, f"Project {project}"),
-        _descriptor("turns", _count_bin(row["turn_count"]), f"{_count_bin(row['turn_count'])} turns"),
-        _descriptor("tools", _count_bin(row["tool_call_count"]), f"{_count_bin(row['tool_call_count'])} tool calls"),
-        _descriptor("subagents", _count_bin(row["subagent_count"]), f"{_count_bin(row['subagent_count'])} subagents", fanout=True),
-        _descriptor("loops", _count_bin(row["loop_count"]), f"{_count_bin(row['loop_count'])} loop runs"),
-        _descriptor("duration", _duration_bin(row["duration_seconds"]), _duration_label(row["duration_seconds"])),
     }
     if int(row["subagent_count"] or 0) > 0:
-        descriptors.add(_descriptor("fanout", "has_subagents", "Has subagents", fanout=True))
+        descriptors.add(_descriptor("fanout", "has_subagents", "Has subagents"))
     else:
         descriptors.add(_descriptor("fanout", "no_subagents", "No subagents"))
-    if int(row["loop_count"] or 0) > 0:
-        descriptors.add(_descriptor("loop_presence", "has_loops", "Has loop activity"))
-    else:
-        descriptors.add(_descriptor("loop_presence", "no_loops", "No loop activity"))
-
     top_model = model_counts.most_common(1)[0][0] if model_counts else "none"
     descriptors.add(_descriptor("top_model", top_model, f"Top model {top_model}"))
     for model in model_counts:
         descriptors.add(_descriptor("model", model, f"Uses {model}"))
     for tool, _count in tool_counts.most_common(8):
-        descriptors.add(
-            _descriptor("tool", tool, f"Uses {tool}", fanout=tool == "Agent")
-        )
+        descriptors.add(_descriptor("tool", tool, f"Uses {tool}"))
     return descriptors
 
 
@@ -405,6 +387,7 @@ def _tool_call_subjects(conn: sqlite3.Connection, *, project_id: int | None) -> 
         f"""
         SELECT
             tc.id,
+            tc.event_id,
             tc.session_id,
             tc.tool_use_id,
             tc.tool_name,
@@ -448,6 +431,7 @@ def _tool_call_subjects(conn: sqlite3.Connection, *, project_id: int | None) -> 
                 example={
                     "id": int(row["session_id"]),
                     "kind": "tool_call",
+                    "event_id": int(row["event_id"]),
                     "session_id": row["session_uuid"],
                     "title": row["title"],
                     "project_name": project,
@@ -460,110 +444,27 @@ def _tool_call_subjects(conn: sqlite3.Connection, *, project_id: int | None) -> 
     return subjects
 
 
-def _rejection_slice_subjects(conn: sqlite3.Connection, *, project_id: int | None) -> list[Subject]:
-    rows = conn.execute(
-        f"""
-        SELECT
-            ss.id,
-            ss.session_id,
-            ss.kind,
-            ss.outcome,
-            ss.length,
-            s.session_id AS session_uuid,
-            s.title,
-            p.export_name,
-            p.inferred_cwd
-        FROM sequence_slices ss
-        JOIN sessions s ON s.id = ss.session_id
-        JOIN projects p ON p.id = s.project_id
-        {_project_where(project_id, "s")}
-        ORDER BY ss.id
-        """,
-        _project_params(project_id),
-    ).fetchall()
-    features = _features_by_slice(conn, project_id=project_id)
-
-    subjects: list[Subject] = []
-    for row in rows:
-        project = project_display_name(row["export_name"], row["inferred_cwd"])
-        descriptors = {
-            _descriptor("project", project, f"Project {project}"),
-            _descriptor("slice_kind", row["kind"], f"{_title(row['kind'])} slices"),
-            _descriptor("slice_length", _slice_length_bin(row["length"]), f"{_slice_length_label(row['length'])} slices"),
-        }
-        descriptors.update(features.get(int(row["id"]), set()))
-        positive = row["outcome"] == "rejected"
-        subjects.append(
-            Subject(
-                id=int(row["id"]),
-                descriptors=descriptors,
-                positive=positive,
-                metric=1.0 if positive else 0.0,
-                example={
-                    "id": int(row["session_id"]),
-                    "kind": "slice",
-                    "session_id": row["session_uuid"],
-                    "title": row["title"],
-                    "project_name": project,
-                    "metric": 1.0 if positive else 0.0,
-                    "metric_label": row["outcome"],
-                    "detail": f"{row['kind']} slice, {int(row['length'] or 0)} features",
-                },
-            )
-        )
-    return subjects
-
-
-def _features_by_slice(conn: sqlite3.Connection, *, project_id: int | None) -> dict[int, set[Descriptor]]:
-    rows = conn.execute(
-        f"""
-        SELECT ef.sequence_slice_id, ef.symbol, ef.family
-        FROM event_features ef
-        JOIN sessions s ON s.id = ef.session_id
-        {_project_where(project_id, "s")}
-        GROUP BY ef.sequence_slice_id, ef.symbol, ef.family
-        """,
-        _project_params(project_id),
-    ).fetchall()
-    by_slice: dict[int, set[Descriptor]] = defaultdict(set)
-    for row in rows:
-        symbol = str(row["symbol"])
-        if _skip_rejection_symbol(symbol):
-            continue
-        family = str(row["family"] or "feature")
-        by_slice[int(row["sequence_slice_id"])].add(
-            _descriptor(f"feature_{family}", symbol, _feature_label(symbol))
-        )
-    return by_slice
-
-
-def _skip_rejection_symbol(symbol: str) -> bool:
-    return (
-        symbol == "RESULT:ok"
-        or symbol.startswith("TEXT:")
-        or symbol.startswith("STOP:")
-        or "user_rejected" in symbol
-        or "permission_denied" in symbol
-    )
-
-
-def _feature_label(symbol: str) -> str:
-    if symbol.startswith("CALL:"):
-        parts = symbol.split(":")
-        if len(parts) >= 3:
-            return f"{parts[1]} {parts[2]} activity".replace("inspect ", "")
-    if symbol.startswith("EVENT:attachment:"):
-        return f"{_title(symbol.removeprefix('EVENT:attachment:'))} attachments"
-    if symbol.startswith("RESULT:error:"):
-        return f"{_title(symbol.removeprefix('RESULT:error:'))} results"
-    return _title(symbol.replace(":", " "))
-
-
-def _scoped_session_costs(conn: sqlite3.Connection, *, project_id: int | None,
-                          historical: bool = True) -> tuple[dict[int, float], bool]:
+def _scoped_session_costs(
+    conn: sqlite3.Connection,
+    *,
+    project_id: int | None,
+    historical: bool = True,
+) -> tuple[dict[int, float], bool, list[str]]:
     timeline = load_price_timeline(pricing_path(), pricing_dir())
     if not timeline.has_prices:
-        return {}, False
+        models = conn.execute(
+            f"""
+            SELECT DISTINCT m.model
+            FROM messages m
+            JOIN events e ON e.id = m.event_id
+            JOIN sessions s ON s.id = e.session_id
+            WHERE m.model IS NOT NULL AND m.model != ''
+            {_project_and(project_id, "s")}
+            ORDER BY m.model
+            """,
+            _project_params(project_id),
+        ).fetchall()
+        return {}, False, [str(row["model"]) for row in models]
     period_expr = timeline.sql_period_expr("e.timestamp", historical=historical)
     rows = conn.execute(
         f"""
@@ -579,16 +480,19 @@ def _scoped_session_costs(conn: sqlite3.Connection, *, project_id: int | None,
         FROM messages m
         JOIN events e ON e.id = m.event_id
         JOIN sessions s ON s.id = e.session_id
-        {_project_where(project_id, "s")}
+        WHERE m.model IS NOT NULL AND m.model != ''
+        {_project_and(project_id, "s")}
         GROUP BY e.session_id, m.model, price_period
         """,
         _project_params(project_id),
     ).fetchall()
     costs: dict[int, float] = {}
+    unpriced_models: set[str] = set()
     for row in rows:
         table = timeline.table_for_period(row["price_period"], historical=historical)
         price = match_price(table, row["model"])
         if price is None:
+            unpriced_models.add(str(row["model"] or "unknown"))
             continue
         breakdown = TokenBreakdown(
             base_input=int(row["base_input"]),
@@ -599,7 +503,11 @@ def _scoped_session_costs(conn: sqlite3.Connection, *, project_id: int | None,
         )
         session_id = int(row["session_id"])
         costs[session_id] = costs.get(session_id, 0.0) + cost_usd(price, breakdown)
-    return {session_id: round(usd, 6) for session_id, usd in costs.items()}, True
+    return (
+        {session_id: round(usd, 6) for session_id, usd in costs.items()},
+        not unpriced_models,
+        sorted(unpriced_models),
+    )
 
 
 def _models_by_session(conn: sqlite3.Connection, *, project_id: int | None) -> dict[int, Counter[str]]:
@@ -650,8 +558,46 @@ def _call_command_family(tool_name: str, raw_json: Any, input_preview: str | Non
     return _command_family(command)
 
 
-def _descriptor(family: str, value: Any, label: str, *, fanout: bool = False) -> Descriptor:
-    return Descriptor(f"{family}={value}", family, label, fanout=fanout)
+def _command_family(command: str) -> str:
+    """Classify command intent directly from a tool-call receipt."""
+    cmd = command.lower().strip()
+    if not cmd:
+        return "empty"
+    if any(token in cmd for token in (
+        "pytest", "vitest", "npm test", "pnpm test", "yarn test",
+        "cargo test", "go test",
+    )):
+        return "test"
+    if any(token in cmd for token in (
+        "ruff", "mypy", "eslint", "tsc", "biome", "prettier --check",
+    )):
+        return "lint_typecheck"
+    if any(token in cmd for token in (
+        "npm run build", "pnpm build", "yarn build", "cargo build",
+        "docker compose",
+    )):
+        return "build"
+    if cmd.startswith("git ") or " git " in cmd:
+        return "git"
+    if any(token in cmd for token in (
+        "npm install", "pnpm install", "yarn add", "uv add", "pip install",
+    )):
+        return "deps"
+    if any(token in cmd for token in ("remove-item", " rm ", "rm -", " del ", " rmdir ")):
+        return "delete"
+    if any(token in cmd for token in ("curl ", "wget ", "invoke-webrequest", "webfetch")):
+        return "network"
+    if "python" in cmd or "node " in cmd:
+        return "script"
+    if any(token in cmd for token in ("rg ", "grep ", "findstr", "select-string")):
+        return "search"
+    if cmd in {"ls", "dir"} or any(token in cmd for token in ("get-childitem", " ls ", " dir ")):
+        return "list"
+    return "other"
+
+
+def _descriptor(family: str, value: Any, label: str) -> Descriptor:
+    return Descriptor(f"{family}={value}", family, label)
 
 
 def _project_where(project_id: int | None, alias: str) -> str:
@@ -679,49 +625,6 @@ def _percentile(values: list[float], pct: float) -> float:
         return ordered[lower]
     weight = pos - lower
     return ordered[lower] * (1 - weight) + ordered[upper] * weight
-
-
-def _count_bin(value: Any) -> str:
-    value = int(value or 0)
-    if value == 0:
-        return "0"
-    if value == 1:
-        return "1"
-    if value <= 3:
-        return "2-3"
-    if value <= 10:
-        return "4-10"
-    return ">10"
-
-
-def _duration_bin(value: Any) -> str:
-    seconds = int(value or 0)
-    if seconds == 0:
-        return "0"
-    if seconds < 600:
-        return "<10m"
-    if seconds < 3600:
-        return "10m-1h"
-    return ">=1h"
-
-
-def _duration_label(value: Any) -> str:
-    return f"Duration {_duration_bin(value)}"
-
-
-def _slice_length_bin(value: Any) -> str:
-    length = int(value or 0)
-    if length < 10:
-        return "<10"
-    if length < 40:
-        return "10-39"
-    if length < 120:
-        return "40-119"
-    return ">=120"
-
-
-def _slice_length_label(value: Any) -> str:
-    return f"{_slice_length_bin(value)} feature"
 
 
 def _title(value: Any) -> str:

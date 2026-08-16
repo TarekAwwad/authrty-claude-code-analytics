@@ -5,13 +5,14 @@ import {
 } from "d3-force";
 import type { UsagePhase } from "../../api/types";
 import { useChartTooltip } from "../context/chartTooltip";
-import { formatTokens, formatUsd } from "../formatting";
-import { buildForceModel, type LeafMode, type MapLink, type MapNode } from "./forceModel";
+import {
+  bubbleMetric, buildForceModel, labelPlate, nodeCollisionRadius,
+  type LeafMode, type MapLink, type MapNode,
+} from "./forceModel";
 
 interface Props {
   phases: UsagePhase[];
-  totalUsd: number;
-  costAvailable: boolean;
+  totalActivity: number;
   selectedNodeId: string | null;
   onSelectNode: (node: MapNode) => void;
   /** Optional: previous-period share per phase key, for compare delta chips. */
@@ -42,12 +43,12 @@ function edgePath(s: MapNode, t: MapNode): string {
 }
 
 export default function MindmapCanvas({
-  phases, totalUsd, costAvailable, selectedNodeId, onSelectNode, previousShares,
+  phases, totalActivity, selectedNodeId, onSelectNode, previousShares,
   leafMode = "habits",
 }: Props) {
   const model = React.useMemo(
-    () => buildForceModel(phases, { totalUsd, costAvailable, leafMode }),
-    [phases, totalUsd, costAvailable, leafMode],
+    () => buildForceModel(phases, { totalActivity, leafMode }),
+    [phases, totalActivity, leafMode],
   );
   const byId = React.useMemo(
     () => new Map(model.nodes.map((n) => [n.id, n])), [model]);
@@ -90,8 +91,7 @@ export default function MindmapCanvas({
       .force("link", forceLink<MapNode, MapLink>(model.links)
         .id((n) => n.id).distance((l) => l.distance).strength(0.8))
       .force("charge", forceManyBody<MapNode>().strength(-220))
-      .force("collide", forceCollide<MapNode>(
-        (n) => n.r + (n.labelTier === "inside" ? 8 : 22)))
+      .force("collide", forceCollide<MapNode>(nodeCollisionRadius).iterations(2))
       .force("x", forceX(0).strength(0.03))
       .force("y", forceY(0).strength(0.03))
       .on("tick", applyPositions);
@@ -228,37 +228,32 @@ export default function MindmapCanvas({
       const phase = phaseByKey.get(node.phaseKey);
       if (!phase) return [];
       return [
-        `${Math.round(phase.share * 1000) / 10}% of spend`,
-        costAvailable ? formatUsd(phase.cost_usd) : formatTokens(phase.tokens),
+        `${Math.round(phase.activity_share * 1000) / 10}% of observed activity`,
+        `${phase.activity_count} observed activities`,
         `${phase.tool_count} tool calls in ${phase.session_count} sessions`,
       ];
     }
     if (node.kind === "habit" && node.grouped) {
       return node.grouped.map((h) =>
-        `${h.label}: ${costAvailable ? formatUsd(h.cost_usd) : `${h.count}x`}`);
+        `${h.label}: ${h.activity_count} observations`);
     }
     if (node.kind === "habit") {
-      return [node.polarity === "good" ? "Good habit" : "Anti-pattern",
-              node.sublabel
-                ? (costAvailable ? `${node.sublabel} of spend` : node.sublabel)
-                : ""].filter(Boolean);
+      return ["Observed pattern", node.sublabel].filter(Boolean);
     }
     if (node.kind === "tool" && node.grouped) {
       return node.grouped.map((t) =>
-        `${t.label}: ${costAvailable ? formatUsd(t.cost_usd) : `${t.count}x`}`);
+        `${t.label}: ${t.activity_count} calls`);
     }
     if (node.kind === "tool") {
       const tool = node.phaseKey && node.toolKey
         ? phaseByKey.get(node.phaseKey)?.tools.find((t) => t.key === node.toolKey)
         : undefined;
       return [
-        node.sublabel
-          ? (costAvailable ? `${node.sublabel} of spend` : node.sublabel)
-          : "",
-        tool ? `${tool.count} calls in ${tool.session_count} sessions` : "",
+        node.sublabel,
+        tool ? `${tool.session_count} sessions` : "",
       ].filter(Boolean);
     }
-    return [costAvailable ? formatUsd(totalUsd) : ""].filter(Boolean);
+    return [`${totalActivity} observed activities`];
   };
 
   const focusSet = hoveredId ? neighbors.get(hoveredId) : null;
@@ -268,15 +263,12 @@ export default function MindmapCanvas({
       <div className="mindmap-legend" aria-hidden="true">
         <span><i className="is-phase" /> phase</span>
         {leafMode === "habits" ? (
-          <>
-            <span><i className="is-good" /> good habit</span>
-            <span><i className="is-anti" /> anti-pattern</span>
-          </>
+          <span><i className="is-pattern" /> observed pattern</span>
         ) : (
           <span><i className="is-tool" /> tool</span>
         )}
       </div>
-      <svg ref={svgRef} role="img" aria-label="Usage map"
+      <svg ref={svgRef} role="img" aria-label="Experimental activity map"
            viewBox={`${-size.width / 2} ${-size.height / 2} ${size.width} ${size.height}`}
            onPointerDown={onPointerDown} onPointerMove={onPointerMove}
            onPointerUp={onPointerUp} onPointerLeave={onPointerUp}>
@@ -303,6 +295,8 @@ export default function MindmapCanvas({
             {model.nodes.map((node) => {
               const chip = deltaChip(node, previousShares);
               const dimmed = focusSet && !focusSet.has(node.id);
+              const plate = labelPlate(node.label);
+              const metric = bubbleMetric(node);
               return (
                 <g key={node.id}
                    ref={(el) => {
@@ -312,7 +306,6 @@ export default function MindmapCanvas({
                    role="button" tabIndex={0}
                    aria-label={`${node.label}${node.sublabel ? `: ${node.sublabel}` : ""}`}
                    className={["mindmap-node", `is-${node.kind}`,
-                     node.polarity ? `is-${node.polarity}` : "",
                      selectedNodeId === node.id ? "is-selected" : "",
                      dimmed ? "is-dimmed" : ""].filter(Boolean).join(" ")}
                    transform={`translate(${node.x},${node.y})`}
@@ -324,50 +317,51 @@ export default function MindmapCanvas({
                    onPointerLeave={() => { setHoveredId(null); hide(); }}>
                   <circle className="mindmap-ring" r={node.r + 4} />
                   <circle className="mindmap-body" r={node.r} />
-                  {node.labelTier === "inside" && (
+                  {node.kind === "center" ? (
                     <>
-                      <text className="mindmap-node-label" textAnchor="middle" dy={-2}>
-                        {node.label}
+                      <text className="mindmap-center-kicker" textAnchor="middle" dy={-13}>
+                        Observed
                       </text>
-                      <text className="mindmap-node-share" textAnchor="middle" dy={13}>
-                        {node.sublabel}
+                      <text className="mindmap-center-value" textAnchor="middle" dy={5}>
+                        {metric}
+                      </text>
+                      <text className="mindmap-center-unit" textAnchor="middle" dy={19}>
+                        activities
                       </text>
                     </>
-                  )}
-                  {node.labelTier === "split" && (
+                  ) : (
                     <>
-                      <text className="mindmap-node-share" textAnchor="middle" dy={4}>
-                        {node.sublabel}
-                      </text>
-                      <text className="mindmap-node-label" textAnchor="middle"
-                            dy={node.r + 14}>
-                        {node.label}
-                      </text>
+                      {metric && (
+                        <text className="mindmap-node-metric" textAnchor="middle"
+                              dy={chip ? -3 : 3}>
+                          {metric}
+                        </text>
+                      )}
+                      {chip && (
+                        <text className="mindmap-delta" textAnchor="middle" dy={12}>
+                          {chip}
+                        </text>
+                      )}
+                      <g className="mindmap-label-plate"
+                         transform={`translate(${-plate.width / 2},${node.r + 6})`}>
+                        <rect width={plate.width} height={18} rx={6} />
+                        <circle className="mindmap-label-dot" cx={9} cy={9} r={2} />
+                        <text x={15} y={12} fontSize="9">
+                          {plate.text}
+                        </text>
+                        {plate.text !== node.label && <title>{node.label}</title>}
+                      </g>
                     </>
-                  )}
-                  {node.labelTier === "below" && (
-                    <>
-                      <text className="mindmap-node-label" textAnchor="middle"
-                            dy={node.r + 13}>
-                        {node.label}
-                      </text>
-                      <text className="mindmap-node-share" textAnchor="middle"
-                            dy={node.r + 25}>
-                        {node.sublabel}
-                      </text>
-                    </>
-                  )}
-                  {chip && (
-                    <text className="mindmap-delta" textAnchor="middle"
-                          dy={node.labelTier === "inside" ? 27 : node.r + 27}>
-                      {chip}
-                    </text>
                   )}
                 </g>
               );
             })}
           </g>
         </g>
+        <text className="mindmap-methodology-label" x={0} y={size.height / 2 - 12}
+              textAnchor="middle">
+          Observed tool calls and text-only assistant steps · not cost attribution
+        </text>
       </svg>
       <div className="mindmap-zoom">
         <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1.2)}>+</button>

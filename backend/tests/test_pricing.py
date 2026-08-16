@@ -11,6 +11,7 @@ from ccfr.analysis.pricing import (
     load_price_timeline,
     match_price,
     normalize_model_key,
+    PUBLIC_MODEL_KEYS,
 )
 
 
@@ -25,6 +26,11 @@ def _write_pricing(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return csv
+
+
+def test_shipped_pricing_models_are_safe_team_model_families() -> None:
+    shipped_pricing = Path(__file__).resolve().parents[2] / "pricing.csv"
+    assert set(load_price_table(shipped_pricing)) <= PUBLIC_MODEL_KEYS
 
 
 def test_normalize_model_key_maps_display_names_to_ids() -> None:
@@ -63,6 +69,22 @@ def test_load_and_match_resolves_models_including_dated_ids(tmp_path: Path) -> N
     # unknown models return None rather than guessing
     assert match_price(table, "gpt-4o") is None
     assert match_price(table, None) is None
+
+
+def test_synthetic_pseudo_model_is_always_non_billable() -> None:
+    price = match_price({}, "<synthetic>")
+
+    assert price == ModelPrice(
+        base_input=0,
+        cache_write_5m=0,
+        cache_write_1h=0,
+        cache_read=0,
+        output=0,
+    )
+    assert cost_usd(
+        price,
+        TokenBreakdown(base_input=1_000_000, output=1_000_000),
+    ) == 0
 
 
 def test_load_tolerates_hyphenated_headers_and_id_style_models(tmp_path: Path) -> None:

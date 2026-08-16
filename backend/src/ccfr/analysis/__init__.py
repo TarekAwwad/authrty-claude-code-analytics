@@ -1,4 +1,4 @@
-from ccfr.analysis.metrics import compute_loop_stats, loop_indices
+from ccfr.analysis.metrics import same_tool_streaks
 from ccfr.analysis.trace import build_trace
 
-__all__ = ["compute_loop_stats", "loop_indices", "build_trace"]
+__all__ = ["same_tool_streaks", "build_trace"]

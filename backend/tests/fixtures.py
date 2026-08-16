@@ -9,12 +9,23 @@ ALPHA_SESSION_ID = "11111111-1111-1111-1111-111111111111"
 ALPHA_SECOND_SESSION_ID = "22222222-2222-2222-2222-222222222222"
 BETA_SESSION_ID = "33333333-3333-3333-3333-333333333333"
 
+TEAM_BUNDLE_SENTINELS = [
+    "SECRET_PROMPT_abc",
+    "SECRET_TOKEN_xyz",
+    "SECRET_OUTPUT_qqq",
+    "SECRET_OUTPUT_rrr",
+    "SECRET_MODEL_zzz",
+    "mcp__SECRETSERVER__deploy",
+    "/Users/real/secret/path",
+    "feature/SECRET_BRANCH",
+    "9.9.9",
+]
+
 SANITIZED_EXPORT_COUNTS = {
     "project_count": 2,
     "session_count": 3,
     "event_count": 20,
     "subagent_count": 1,
-    "memory_count": 2,
     "persisted_output_count": 1,
     "tool_call_count": 6,
     "sidechain_event_count": 3,
@@ -27,6 +38,87 @@ def sanitized_export(tmp_path: Path) -> Path:
     root.mkdir()
     _write_alpha_project(root / "d--Alpha")
     _write_beta_project(root / "d--Beta")
+    return root
+
+
+def sentinel_export(tmp_path: Path) -> Path:
+    """Create one session whose content fields carry privacy sentinels."""
+    root = tmp_path / "sentinel-export"
+    project = root / "d--Secret"
+    session_id = "44444444-4444-4444-4444-444444444444"
+    project.mkdir(parents=True)
+    rows = [
+        {
+            "type": "system",
+            "uuid": "sys",
+            "timestamp": "2026-02-01T08:00:00Z",
+            "cwd": "/Users/real/secret/path",
+            "version": "9.9.9",
+            "entrypoint": "claude",
+            "gitBranch": "feature/SECRET_BRANCH",
+        },
+        {
+            "type": "user",
+            "uuid": "u1",
+            "timestamp": "2026-02-01T08:00:01Z",
+            "message": {
+                "role": "user",
+                "content": "SECRET_PROMPT_abc do the thing",
+            },
+        },
+        {
+            "type": "assistant",
+            "uuid": "a1",
+            "parentUuid": "u1",
+            "timestamp": "2026-02-01T08:00:02Z",
+            "message": {
+                "id": "m1",
+                "role": "assistant",
+                "model": "SECRET_MODEL_zzz",
+                "stop_reason": "tool_use",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "Bash",
+                        "input": {"command": "git push --force SECRET_TOKEN_xyz"},
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "t2",
+                        "name": "mcp__SECRETSERVER__deploy",
+                        "input": {"target": "/Users/real/secret/path"},
+                    },
+                ],
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        },
+        {
+            "type": "user",
+            "uuid": "u2",
+            "parentUuid": "a1",
+            "timestamp": "2026-02-01T08:00:03Z",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "is_error": True,
+                        "content": "Permission denied SECRET_OUTPUT_qqq",
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t2",
+                        "content": "deployed SECRET_OUTPUT_rrr",
+                    },
+                ],
+            },
+        },
+    ]
+    (project / f"{session_id}.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
     return root
 
 

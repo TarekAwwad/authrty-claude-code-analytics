@@ -1,17 +1,17 @@
 import React from "react";
-import { AlertTriangle, Braces, Link2, Repeat } from "lucide-react";
-import type { EventDetail, RiskFinding, SessionCard, Subagent } from "../api/types";
-import type { LoopContext } from "../trace/loopContext";
-import { loopExplanation } from "../trace/loopContext";
+import { AlertTriangle, Braces, Link2 } from "lucide-react";
+import type { EventDetail, SessionCard, SessionFinding, Subagent } from "../api/types";
+import type { SameToolStreakContext } from "../trace/sameToolStreak";
+import { sameToolStreakExplanation } from "../trace/sameToolStreak";
 import { Blurred } from "../shell/Blurred";
 import LoadingBar from "../components/LoadingBar";
 
 interface Props {
   session: SessionCard;
   event: EventDetail | undefined;
-  loopContext?: LoopContext;
+  sameToolStreakContext?: SameToolStreakContext;
   subagents: Subagent[];
-  findings?: RiskFinding[];
+  findings?: SessionFinding[];
   loading: boolean;
   onSelectEvent?: (eventId: number) => void;
 }
@@ -25,8 +25,13 @@ function formatCategory(value: string): string {
     .join(" ");
 }
 
-function InspectorPanel({ event, loopContext, subagents, findings = [], loading, onSelectEvent }: Props) {
+function InspectorPanel({ event, sameToolStreakContext, subagents, findings = [], loading, onSelectEvent }: Props) {
   const [tab, setTab] = React.useState<Tab>("event");
+  const openEvidenceEvent = (eventId: number) => {
+    if (!onSelectEvent) return;
+    onSelectEvent(eventId);
+    setTab("event");
+  };
 
   return (
     <aside className="inspector-panel">
@@ -48,16 +53,14 @@ function InspectorPanel({ event, loopContext, subagents, findings = [], loading,
                 <dt>Type</dt><dd><span className="kind-tag">{event.type}</span></dd>
                 <dt>Role</dt><dd>{event.role || "none"}</dd>
                 <dt>Time</dt><dd>{event.timestamp ? new Date(event.timestamp).toLocaleString() : "unknown"}</dd>
-                <dt>Source</dt><dd>{event.source_path}:{event.line_no}</dd>
-                <dt>Agent</dt><dd>{event.agent_id || "parent session"}</dd>
               </dl>
-              {loopContext && (
-                <div className="loop-evidence-panel">
-                  <p><Repeat size={14} /> Loop evidence</p>
+              {sameToolStreakContext && (
+                <div className="streak-evidence-panel">
+                  <p>Same-tool streak</p>
                   <dl>
-                    <dt>Why</dt><dd>{loopExplanation(loopContext)}</dd>
-                    <dt>Tool</dt><dd>{loopContext.toolName}</dd>
-                    <dt>Position</dt><dd>{loopContext.position} of {loopContext.count}</dd>
+                    <dt>Observed</dt><dd>{sameToolStreakExplanation(sameToolStreakContext)}</dd>
+                    <dt>Tool</dt><dd>{sameToolStreakContext.toolName}</dd>
+                    <dt>Position</dt><dd>{sameToolStreakContext.position} of {sameToolStreakContext.count}</dd>
                   </dl>
                 </div>
               )}
@@ -65,14 +68,32 @@ function InspectorPanel({ event, loopContext, subagents, findings = [], loading,
               {event.tool_calls.length > 0 && <Evidence title="Tool Calls" rows={event.tool_calls} />}
               {event.tool_results.length > 0 && <Evidence title="Tool Results" rows={event.tool_results} />}
               {event.related_event_ids.length > 0 && (
-                <p className="related"><Link2 size={14} /> Related events: {event.related_event_ids.join(", ")}</p>
+                <div className="related">
+                  <Link2 size={14} />
+                  <span>Related events</span>
+                  <div className="related-event-links">
+                    {event.related_event_ids.map((eventId) => (
+                      <button
+                        key={eventId}
+                        type="button"
+                        disabled={!onSelectEvent}
+                        onClick={() => onSelectEvent?.(eventId)}
+                      >
+                        Related event {eventId}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               )}
-              {event.raw_json && (
-                <details className="raw-json">
-                  <summary><Braces size={14} /> Raw JSON</summary>
-                  <pre>{JSON.stringify(event.raw_json, null, 2)}</pre>
-                </details>
-              )}
+              <details className="raw-json inspector-advanced">
+                <summary><Braces size={14} /> Advanced</summary>
+                <dl>
+                  <dt>Source</dt><dd>{event.source_path}</dd>
+                  <dt>Line</dt><dd>{event.line_no}</dd>
+                  <dt>Agent</dt><dd>{event.agent_id || "parent session"}</dd>
+                </dl>
+                {event.raw_json && <pre>{JSON.stringify(event.raw_json, null, 2)}</pre>}
+              </details>
             </>
           )}
         </section>
@@ -102,43 +123,31 @@ function InspectorPanel({ event, loopContext, subagents, findings = [], loading,
 
       {tab === "findings" && (
         <section className="inspect-section">
-          <h3>Findings Â· {findings.length}</h3>
+          <h3>Findings · {findings.length}</h3>
           {findings.length === 0 ? (
-            <p className="muted">No risk pattern findings recorded.</p>
+            <p className="muted">No supported findings detected.</p>
           ) : (
             <div className="finding-list">
               {findings.map((finding) => (
-                <article key={finding.id} className={`finding-card sev-${finding.severity}`}>
+                <article key={finding.id} className="finding-card">
                   <div className="finding-card-head">
                     <span>{formatCategory(finding.category)}</span>
-                    <b>{finding.severity}</b>
+                    <b>Basis: {formatCategory(finding.basis)}</b>
                   </div>
                   <h4>{finding.title}</h4>
                   <p>{finding.explanation}</p>
-                  <div className="finding-metrics">
-                    <span>score {finding.score.toFixed(1)}</span>
-                    <span>lift {finding.lift.toFixed(2)}</span>
-                    <span>support {finding.positive_support}/{finding.support}</span>
-                  </div>
-                  {finding.pattern.length > 0 && (
-                    <ol className="finding-pattern" aria-label={`Pattern for ${finding.title}`}>
-                      {finding.pattern.map((symbol, index) => (
-                        <li key={`${finding.id}-${index}`}>{symbol}</li>
+                  {finding.evidence_event_ids.length > 0 && (
+                    <div className="finding-jumps" aria-label={`Evidence for ${finding.title}`}>
+                      {finding.evidence_event_ids.map((eventId) => (
+                        <button
+                          key={eventId}
+                          type="button"
+                          disabled={!onSelectEvent}
+                          onClick={() => openEvidenceEvent(eventId)}
+                        >
+                          Evidence event {eventId}
+                        </button>
                       ))}
-                    </ol>
-                  )}
-                  {(finding.start_event_id || finding.end_event_id) && (
-                    <div className="finding-jumps">
-                      {finding.start_event_id && (
-                        <button type="button" onClick={() => onSelectEvent?.(finding.start_event_id as number)}>
-                          Start event {finding.start_event_id}
-                        </button>
-                      )}
-                      {finding.end_event_id && finding.end_event_id !== finding.start_event_id && (
-                        <button type="button" onClick={() => onSelectEvent?.(finding.end_event_id as number)}>
-                          End event {finding.end_event_id}
-                        </button>
-                      )}
                     </div>
                   )}
                 </article>

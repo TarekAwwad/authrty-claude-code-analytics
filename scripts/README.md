@@ -23,7 +23,7 @@ npx playwright install chromium
    ```
    (Create the empty import root first: `mkdir -p .demo-empty`.)
 2. Frontend dev server running: `cd frontend && npm run dev` (serves
-   http://localhost:5173).
+   http://localhost:5174).
 3. Optional: `ffmpeg` on PATH to produce `demo.gif` (otherwise only `demo.webm`
    is written). Windows: `winget install Gyan.FFmpeg`.
 
@@ -31,6 +31,12 @@ npx playwright install chromium
 
 ```bash
 cd scripts
-npm run capture-demo            # uses http://localhost:5173
+npm run capture-demo            # uses http://localhost:5174
 DEMO_URL=http://localhost:4173 npm run capture-demo   # custom URL
 ```
+
+Use `npm run capture-shots` to refresh the synthetic README screenshots after
+the same setup. Both scripts wait on current Sessions and Context economics UI
+selectors before writing files under `docs/`. They abort unless the Sessions
+table contains only the complete bundled `demo-*` corpus, preventing accidental
+capture of a real local cache.

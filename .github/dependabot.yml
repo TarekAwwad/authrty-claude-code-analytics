@@ -25,8 +25,13 @@ updates:
     schedule:
       interval: "weekly"
 
-  # Docker base image tag + pinned digest.
+  # Docker base image tags + pinned digests. Dependabot only scans the given
+  # directory for Dockerfiles, so the frontend image needs its own entry.
   - package-ecosystem: "docker"
     directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "docker"
+    directory: "/frontend"
     schedule:
       interval: "weekly"

@@ -12,7 +12,7 @@ const payload: LimitsResponse = {
     costs_partial: false,
     total_hits: 1,
     total_windows: 2,
-    blocked_minutes: 49.3,
+    minutes_until_reset: 49.3,
     hits_per_week_recent: 0.25,
     hit_counts: { session: 1 },
     plan_history: [{ plan: "Max 5x", start_date: "2026-06-10" }],
@@ -21,7 +21,7 @@ const payload: LimitsResponse = {
   hits: [
     {
       ts: "2026-07-03T09:40:44+00:00", kind: "session",
-      reset_at: "2026-07-03T10:30:00+00:00", blocked_minutes: 49.3,
+      reset_at: "2026-07-03T10:30:00+00:00", minutes_until_reset: 49.3,
       usage_at_hit: 76.2, usage_at_hit_tokens: 900000,
       occurrence_count: 2, window_index: 0,
       session_ids: [7], session_titles: ["Ship the release"],
@@ -35,11 +35,12 @@ const payload: LimitsResponse = {
   ],
   eras: [
     {
-      era: "Max 5x", window_count: 2, session_hit_count: 1, blocked_minutes: 49.3,
-      cap_median_usd: 76.2, cap_min_usd: 76.2, cap_max_usd: 76.2,
-      cap_median_tokens: 900000, cap_min_tokens: 900000, cap_max_tokens: 900000,
-      near_miss_count: 0, near_miss_count_tokens: 0,
-      cap_percentile: 0.5, cap_percentile_tokens: 0.95,
+      era: "Max 5x", window_count: 2, session_hit_count: 1, minutes_until_reset: 49.3,
+      hit_level_median_usd: 76.2, hit_level_min_usd: 76.2, hit_level_max_usd: 76.2,
+      hit_level_median_tokens: 900000,
+      hit_level_min_tokens: 900000,
+      hit_level_max_tokens: 900000,
+      hit_level_percentile: 0.5, hit_level_percentile_tokens: 0.95,
       usage_at_hit_usd: [76.2], usage_at_hit_tokens: [900000],
     },
   ],
@@ -68,50 +69,57 @@ function renderPage(onOpenSession = vi.fn()) {
 describe("LimitHits", () => {
   it("renders the stat tiles without per-plan cards", async () => {
     renderPage();
-    expect(await screen.findByText("Time blocked")).toBeInTheDocument();
-    expect(screen.getByText("Capped windows")).toBeInTheDocument();
-    expect(screen.getByText("1 of 2 windows hit a cap")).toBeInTheDocument();
+    expect(await screen.findByText("Time remaining until recorded reset")).toBeInTheDocument();
+    expect(screen.getByText("Recorded session-hit windows")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2")).toBeInTheDocument();
+    expect(screen.queryByText("Time blocked")).not.toBeInTheDocument();
     expect(screen.queryByText("Hits per week")).not.toBeInTheDocument();
     expect(screen.queryByText("Max 5x cap")).not.toBeInTheDocument();
   });
 
   it("shows the windows timeline with its legend and opens the hit detail on click", async () => {
     const onOpenSession = renderPage();
-    await screen.findByText("Time blocked");
+    await screen.findByText("Time remaining until recorded reset");
     expect(screen.getByRole("img", { name: /5-hour windows timeline/ })).toBeInTheDocument();
     expect(screen.getByText("window usage")).toBeInTheDocument();
-    expect(screen.getByText("limit hit")).toBeInTheDocument();
+    expect(screen.getByText("recorded session-limit hit")).toBeInTheDocument();
     expect(screen.getByText("1.0 hits/wk")).toBeInTheDocument();
     expect(screen.getByText(/x-axis: window start date/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /window 1/i }));
     expect(await screen.findByText(/session limit/)).toBeInTheDocument();
+    expect(screen.getByText("Time remaining until recorded reset: 0.8h"))
+      .toBeInTheDocument();
+    expect(screen.getByText("seen 2 times")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Ship the release/ }));
     expect(onOpenSession).toHaveBeenCalledWith(7);
   });
 
-  it("shows the per-plan metrics on the cap zone rows", async () => {
+  it("shows observed hit-level metrics with sample and inferred basis", async () => {
     renderPage();
-    await screen.findByText("Time blocked");
-    expect(screen.getByText(/1 session hit\b/)).toBeInTheDocument();
+    await screen.findByText("Time remaining until recorded reset");
+    expect(screen.getByRole("heading", { name: "Visible usage at recorded hit" }))
+      .toBeInTheDocument();
+    expect(screen.getByText(/sample: 1 recorded session hit/)).toBeInTheDocument();
     expect(screen.getByText(/median \$76\.2/)).toBeInTheDocument();
-    expect(screen.getByText(/avg \$76\.2/)).toBeInTheDocument();
-    expect(screen.getByText(/0\.8h blocked/)).toBeInTheDocument();
-    expect(screen.getByText(/cap at p50 of windows/)).toBeInTheDocument();
-    expect(screen.getByText("min-max cap zone")).toBeInTheDocument();
-    expect(screen.getByText("avg hit")).toBeInTheDocument();
+    expect(screen.getByText(/range \$76\.2.*\$76\.2/)).toBeInTheDocument();
+    expect(screen.getByText(/Observed hit-level percentile p50/)).toBeInTheDocument();
+    expect(screen.getByText(/inferred from 2 reconstructed windows/)).toBeInTheDocument();
+    expect(screen.getByText("observed min–max range")).toBeInTheDocument();
+    expect(screen.queryByText(/avg/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/near-miss/i)).not.toBeInTheDocument();
     expect(screen.getByText(/x-axis: window usage/)).toBeInTheDocument();
   });
 
   it("switches every usage display and percentile to token volume", async () => {
     renderPage();
-    await screen.findByText("Time blocked");
+    await screen.findByText("Time remaining until recorded reset");
     expect(screen.getByRole("button", { name: "Cost" })).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.click(screen.getByRole("button", { name: "Tokens" }));
 
     expect(screen.getByText("tokens per window")).toBeInTheDocument();
     expect(screen.getByText(/median 900k tok/)).toBeInTheDocument();
-    expect(screen.getByText(/cap at p95 of windows/)).toBeInTheDocument();
+    expect(screen.getByText(/Observed hit-level percentile p95/)).toBeInTheDocument();
     expect(screen.getByText(/x-axis: window usage, token volume/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /window 1/i }));
     expect(await screen.findByText(/at 900k tok of window usage/)).toBeInTheDocument();
@@ -134,33 +142,37 @@ describe("LimitHits", () => {
     expect(screen.getByRole("button", { name: "Cost" })).toBeDisabled();
   });
 
-  it("shows a verdict about the active plan", async () => {
+  it("does not render an automatic plan-fit verdict", async () => {
     renderPage();
-    await screen.findByText("Time blocked");
-    expect(
-      screen.getByText(/You hit the Max 5x cap about 1\.0 times a week/),
-    ).toBeInTheDocument();
+    await screen.findByText("Time remaining until recorded reset");
+    expect(screen.queryByText(
+      /comfortably dimensioned|plan fits|well dimensioned|outgrown|headroom|watch the trend/i,
+    )).not.toBeInTheDocument();
   });
 
-  it("shows the headroom message when no session hits exist", () => {
+  it("uses the exact neutral empty state when no session hit was recorded", () => {
     render(<CapZones basis="cost" eras={[{
-      era: "", window_count: 1, session_hit_count: 0, blocked_minutes: 0,
-      cap_median_usd: null, cap_min_usd: null, cap_max_usd: null,
-      cap_median_tokens: null, cap_min_tokens: null, cap_max_tokens: null,
-      near_miss_count: 0, near_miss_count_tokens: 0,
-      cap_percentile: null, cap_percentile_tokens: null,
+      era: "", window_count: 1, session_hit_count: 0, minutes_until_reset: 0,
+      hit_level_median_usd: null, hit_level_min_usd: null, hit_level_max_usd: null,
+      hit_level_median_tokens: null,
+      hit_level_min_tokens: null,
+      hit_level_max_tokens: null,
+      hit_level_percentile: null, hit_level_percentile_tokens: null,
       usage_at_hit_usd: [], usage_at_hit_tokens: [],
     }]} />);
-    expect(screen.getByText(/That is headroom/)).toBeInTheDocument();
+    expect(screen.getByText(
+      "No recorded session-limit hit was found in the available logs.",
+    )).toBeInTheDocument();
   });
 
-  it("draws one axis tick when the measured cap zone sits at zero usage", () => {
+  it("draws one axis tick when the observed hit level sits at zero usage", () => {
     render(<CapZones basis="cost" eras={[{
-      era: "Pro", window_count: 3, session_hit_count: 1, blocked_minutes: 20,
-      cap_median_usd: 0, cap_min_usd: 0, cap_max_usd: 0,
-      cap_median_tokens: 0, cap_min_tokens: 0, cap_max_tokens: 0,
-      near_miss_count: 0, near_miss_count_tokens: 0,
-      cap_percentile: null, cap_percentile_tokens: null,
+      era: "Pro", window_count: 3, session_hit_count: 1, minutes_until_reset: 20,
+      hit_level_median_usd: 0, hit_level_min_usd: 0, hit_level_max_usd: 0,
+      hit_level_median_tokens: 0,
+      hit_level_min_tokens: 0,
+      hit_level_max_tokens: 0,
+      hit_level_percentile: null, hit_level_percentile_tokens: null,
       usage_at_hit_usd: [0], usage_at_hit_tokens: [0],
     }]} />);
     // A zero max used to yield ticks [0, 0, 0]: three labels stacked at the
@@ -170,7 +182,7 @@ describe("LimitHits", () => {
 
   it("edits plan history through the modal and saves it to settings", async () => {
     renderPage();
-    await screen.findByText("Time blocked");
+    await screen.findByText("Time remaining until recorded reset");
     fireEvent.click(screen.getByRole("button", { name: "Plan history" }));
     expect(await screen.findByRole("dialog", { name: "Plan history" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add plan" }));
@@ -188,7 +200,7 @@ describe("LimitHits", () => {
     const { getSettings } = await import("../../api/client");
     vi.mocked(getSettings).mockImplementationOnce(() => new Promise(() => {}));
     renderPage();
-    await screen.findByText("Time blocked");
+    await screen.findByText("Time remaining until recorded reset");
     fireEvent.click(screen.getByRole("button", { name: "Plan history" }));
     expect(await screen.findByRole("dialog", { name: "Plan history" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add plan" })).toBeDisabled();

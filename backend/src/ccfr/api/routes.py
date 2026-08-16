@@ -16,11 +16,11 @@ from ccfr.api import analytics, repository
 from ccfr.api.deps import get_db, get_historical_pricing
 from ccfr.api.import_progress import import_progress_store
 from ccfr.settings import Settings, contributor_identity, read_settings, write_settings
-from ccfr.analysis.contribution import build_contribution, bundle_manifest
 from ccfr.analysis.context_economics import (
     context_economics_analytics,
     session_context_economics,
 )
+from ccfr.analysis.cost_trends import CostTrendRangeError
 from ccfr.analysis.discovery import discovery_analytics
 from ccfr.analysis.limits import limits_analytics
 from ccfr.analysis.team_bundles import (
@@ -36,21 +36,21 @@ from ccfr.analysis.team_cost import team_cost_analytics
 from ccfr.analysis.usage_map import usage_map_analytics, usage_map_evidence
 from ccfr.analysis.usage_characteristics import usage_characteristics_analytics
 from ccfr.naming import project_display_name
+from ccfr.security import MAX_API_REQUEST_BYTES
 from ccfr.api.schemas import (
     CacheStatsResponse,
-    ContributionExportResponse,
-    ContributionPreviewResponse,
     ContextEconomicsResponse,
     CostAnalyticsResponse,
     DiscoveryResponse,
     DiscoveredProjectResponse,
     EventDetail,
     ImportProgressResponse,
+    ImportRecordResponse,
     ImportRequest,
     ImportSummaryResponse,
     LimitsResponse,
     ProjectResponse,
-    RiskFindingResponse,
+    SessionFindingResponse,
     RuntimeConfigResponse,
     SearchResult,
     SessionCard,
@@ -69,6 +69,7 @@ from ccfr.api.schemas import (
     TeamProjectEntry,
     TeamProjectsResponse,
     TimelineItem,
+    ToolActivityResponse,
     TurnCostBreakdown,
     TraceResponse,
     UsageCharacteristicsResponse,
@@ -86,7 +87,7 @@ from ccfr.config import (
     validate_project_name,
 )
 from ccfr.ingest import ImportSummary, discover_projects, import_all_new, import_project
-from ccfr.storage import reset_db
+from ccfr.storage import reset_local_data
 
 router = APIRouter(prefix="/api")
 
@@ -161,17 +162,6 @@ def update_settings(payload: SettingsResponse) -> SettingsResponse:
         current.plan_history = [dict(row) for row in payload.plan_history]
     saved = write_settings(current)
     return SettingsResponse(**asdict(saved))
-
-
-def _current_bundle(conn: Connection):
-    salt, contributor_id = contributor_identity()
-    return build_contribution(
-        conn,
-        salt=salt,
-        contributor_id=contributor_id,
-        app_version=config.app_version(),
-        generated_on=date.today(),
-    )
 
 
 @router.get("/team/projects", response_model=TeamProjectsResponse)
@@ -249,25 +239,6 @@ def _current_team_bundle(conn: Connection, payload: TeamExportRequest, *, persis
     return bundle
 
 
-@router.get("/contribution/preview", response_model=ContributionPreviewResponse)
-def contribution_preview(conn: Connection = Depends(get_db)) -> ContributionPreviewResponse:
-    bundle = _current_bundle(conn)
-    return ContributionPreviewResponse(manifest=bundle_manifest(bundle), bundle=bundle.to_dict())
-
-
-@router.post("/contribution/export", response_model=ContributionExportResponse)
-def contribution_export(conn: Connection = Depends(get_db)) -> ContributionExportResponse:
-    bundle = _current_bundle(conn)
-    out_dir = config.data_dir() / "contributions"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
-    path = out_dir / f"contribution-{stamp}-{secrets.token_hex(4)}.json"
-    # Exclusive create: never silently overwrite a prior export.
-    with path.open("x", encoding="utf-8") as fh:
-        fh.write(json.dumps(bundle.to_dict(), indent=2))
-    return ContributionExportResponse(path=str(path), session_count=len(bundle.sessions))
-
-
 @router.post("/team/export-preview", response_model=TeamExportPreviewResponse)
 def team_export_preview(payload: TeamExportRequest, conn: Connection = Depends(get_db)) -> TeamExportPreviewResponse:
     bundle = _current_team_bundle(conn, payload, persist_seq=False)
@@ -295,6 +266,12 @@ def team_import(payload: TeamImportRequest, conn: Connection = Depends(get_db)) 
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not path.is_file():
         raise HTTPException(status_code=400, detail=f"Team bundle not found: {path}")
+    try:
+        bundle_size = path.stat().st_size
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if bundle_size > MAX_API_REQUEST_BYTES:
+        raise HTTPException(status_code=413, detail="Team bundle file is too large")
     try:
         with path.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -355,11 +332,18 @@ def get_team_cost_analytics(
     conn: Connection = Depends(get_db),
     historical: bool = Depends(get_historical_pricing),
 ) -> CostAnalyticsResponse:
-    return CostAnalyticsResponse(
-        **team_cost_analytics(
-            conn, date_from=date_from, date_to=date_to, model=model, project_id=project_id, historical=historical
+    try:
+        payload = team_cost_analytics(
+            conn,
+            date_from=date_from,
+            date_to=date_to,
+            model=model,
+            project_id=project_id,
+            historical=historical,
         )
-    )
+    except CostTrendRangeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CostAnalyticsResponse(**payload)
 
 
 @router.post("/imports", response_model=ImportSummaryResponse)
@@ -413,7 +397,7 @@ def create_demo_import(conn: Connection = Depends(get_db)) -> ImportSummaryRespo
 
 @router.post("/imports/reset", response_model=dict[str, bool])
 def reset_import(conn: Connection = Depends(get_db)) -> dict:
-    reset_db(conn)
+    reset_local_data(conn)
     import_progress_store.clear()
     return {"ok": True}
 
@@ -428,12 +412,23 @@ def list_source_projects(
         discovered = discover_projects(conn, source)
     except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return [DiscoveredProjectResponse(**d.__dict__) for d in discovered]
+    inferred_cwds: dict[str, str | None] = {}
+    for row in conn.execute(
+        "SELECT export_name, inferred_cwd FROM projects ORDER BY id"
+    ).fetchall():
+        inferred_cwds[str(row["export_name"])] = row["inferred_cwd"]
+    return [
+        DiscoveredProjectResponse(
+            **d.__dict__,
+            display_name=project_display_name(d.name, inferred_cwds.get(d.name)),
+        )
+        for d in discovered
+    ]
 
 
-@router.get("/imports")
-def list_imports(conn: Connection = Depends(get_db)) -> list[dict]:
-    return repository.list_imports(conn)
+@router.get("/imports", response_model=list[ImportRecordResponse])
+def list_imports(conn: Connection = Depends(get_db)) -> list[ImportRecordResponse]:
+    return [ImportRecordResponse(**row) for row in repository.list_imports(conn)]
 
 
 @router.get("/imports/progress", response_model=ImportProgressResponse)
@@ -517,17 +512,34 @@ def get_turn_costs(
 
 
 @router.get("/sessions/{session_id}/subagents", response_model=list[SubagentResponse])
-def get_subagents(session_id: int, conn: Connection = Depends(get_db)) -> list[SubagentResponse]:
+def get_subagents(
+    session_id: int,
+    conn: Connection = Depends(get_db),
+    historical: bool = Depends(get_historical_pricing),
+) -> list[SubagentResponse]:
     if repository.get_session(conn, session_id) is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    return [SubagentResponse(**row) for row in repository.list_subagents(conn, session_id)]
+    return [
+        SubagentResponse(**row)
+        for row in repository.list_subagents(conn, session_id, historical=historical)
+    ]
 
 
-@router.get("/sessions/{session_id}/findings", response_model=list[RiskFindingResponse])
-def get_findings(session_id: int, conn: Connection = Depends(get_db)) -> list[RiskFindingResponse]:
+@router.get("/sessions/{session_id}/tool-activity", response_model=list[ToolActivityResponse])
+def get_tool_activity(
+    session_id: int,
+    conn: Connection = Depends(get_db),
+) -> list[ToolActivityResponse]:
     if repository.get_session(conn, session_id) is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    return [RiskFindingResponse(**row) for row in repository.list_risk_findings(conn, session_id)]
+    return [ToolActivityResponse(**row) for row in repository.list_tool_activity(conn, session_id)]
+
+
+@router.get("/sessions/{session_id}/findings", response_model=list[SessionFindingResponse])
+def get_findings(session_id: int, conn: Connection = Depends(get_db)) -> list[SessionFindingResponse]:
+    if repository.get_session(conn, session_id) is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return [SessionFindingResponse(**row) for row in repository.list_session_findings(conn, session_id)]
 
 
 @router.get("/events/{event_id}", response_model=EventDetail)
@@ -561,12 +573,18 @@ def get_cost_analytics(
     conn: Connection = Depends(get_db),
     historical: bool = Depends(get_historical_pricing),
 ) -> CostAnalyticsResponse:
-    return CostAnalyticsResponse(
-        **analytics.cost_analytics(
-            conn, date_from=date_from, date_to=date_to, project_id=project_id, model=model,
+    try:
+        payload = analytics.cost_analytics(
+            conn,
+            date_from=date_from,
+            date_to=date_to,
+            project_id=project_id,
+            model=model,
             historical=historical,
         )
-    )
+    except CostTrendRangeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CostAnalyticsResponse(**payload)
 
 
 @router.get("/analytics/discovery", response_model=DiscoveryResponse)

@@ -42,7 +42,6 @@ def test_generated_tree_imports_without_errors(tmp_path):
     assert summary.error_count == 0
     assert summary.project_count == 3
     assert summary.session_count == 46
-    assert summary.memory_count == 6
     assert summary.subagent_count >= 24
     names = {row["export_name"] for row in conn.execute("SELECT export_name FROM projects")}
     assert names == {"demo-web-shop", "demo-mobile-app", "demo-data-pipeline"}
@@ -68,16 +67,17 @@ def _priced_conn(tmp_path, monkeypatch):
     return conn
 
 
-def test_all_four_context_archetypes_meet_support(tmp_path, monkeypatch):
+def test_production_context_archetypes_meet_support(tmp_path, monkeypatch):
     from ccfr.analysis.context_economics import context_economics_analytics
 
     conn = _priced_conn(tmp_path, monkeypatch)
     payload = context_economics_analytics(conn, min_support=3)
 
     assert payload["meta"]["cost_available"] is True
-    assert payload["meta"]["avoidable_usd"] > 0
+    assert payload["meta"]["opportunity_usd"] > 0
     by_key = {a["key"]: a for a in payload["archetypes"]}
-    for key in ("rereads", "oversized", "late_compaction", "stale_continuation"):
+    assert set(by_key) == {"rereads", "oversized"}
+    for key in ("rereads", "oversized"):
         assert by_key[key]["meets_support"] is True, key
         assert by_key[key]["findings_count"] >= 3, key
 
@@ -94,6 +94,5 @@ def test_discovery_finds_a_significant_subgroup(tmp_path, monkeypatch):
 
 def test_triage_signals_present(tmp_path, monkeypatch):
     conn = _priced_conn(tmp_path, monkeypatch)
-    assert conn.execute("SELECT MAX(loop_count) FROM session_stats").fetchone()[0] >= 1
     assert conn.execute("SELECT MAX(error_count) FROM session_stats").fetchone()[0] >= 1
     assert conn.execute("SELECT COUNT(*) FROM subagents").fetchone()[0] >= 24

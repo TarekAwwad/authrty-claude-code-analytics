@@ -2,11 +2,9 @@ import React from "react";
 import type { LimitEraEntry } from "../../api/types";
 import {
   basisLabel,
-  eraCap,
-  formatBlocked,
+  eraHitLevel,
   formatLimitTick,
   formatLimitValue,
-  meanUsageAtHit,
   type LimitBasis,
 } from "./limitMath";
 import { useChartTooltip } from "../context/chartTooltip";
@@ -25,21 +23,27 @@ function edgeShift(index: number, count: number): string {
 // any number of plans scales). Only the parts an era actually has are shown.
 function eraSummary(era: LimitEraEntry, basis: LimitBasis): string {
   const hits = era.session_hit_count;
-  const cap = eraCap(era, basis);
-  const avg = meanUsageAtHit(era, basis);
-  const parts = [`${hits} session hit${hits === 1 ? "" : "s"}`];
-  if (cap.median != null) parts.push(`median ${formatLimitValue(cap.median, basis)}`);
-  if (avg != null) parts.push(`avg ${formatLimitValue(avg, basis)}`);
-  if (era.blocked_minutes > 0) parts.push(`${formatBlocked(era.blocked_minutes)} blocked`);
-  parts.push(`${cap.nearMissCount} near-miss${cap.nearMissCount === 1 ? "" : "es"}`);
-  if (cap.percentile != null) {
-    parts.push(`cap at p${Math.round(cap.percentile * 100)} of windows`);
+  const hitLevel = eraHitLevel(era, basis);
+  const parts = [`sample: ${hits} recorded session hit${hits === 1 ? "" : "s"}`];
+  if (hitLevel.median != null) {
+    parts.push(`median ${formatLimitValue(hitLevel.median, basis)}`);
   }
-  return parts.join(", ");
+  if (hitLevel.min != null && hitLevel.max != null) {
+    parts.push(
+      `range ${formatLimitValue(hitLevel.min, basis)}–${formatLimitValue(hitLevel.max, basis)}`,
+    );
+  }
+  if (hitLevel.percentile != null) {
+    parts.push(
+      `Observed hit-level percentile p${Math.round(hitLevel.percentile * 100)}`
+      + ` (inferred from ${era.window_count} reconstructed windows)`,
+    );
+  }
+  return parts.join(" · ");
 }
 
 // Per era: usage-at-hit dots, the min-max band, and a median marker, plus the
-// percentile insight (a cap is a percentile of your windows, not a quota).
+// observed hit-level percentile among reconstructed windows.
 // Rendered in measured pixel space so markers keep their shape at any width;
 // all eras share one scale for the selected basis and the axis at the bottom.
 export default function CapZones({ eras, basis }: {
@@ -65,15 +69,15 @@ export default function CapZones({ eras, basis }: {
     return () => observer.disconnect();
   }, [ref]);
 
-  const zoned = eras.filter((e) => eraCap(e, basis).values.length > 0 || e.blocked_minutes > 0);
+  const zoned = eras.filter((e) => eraHitLevel(e, basis).values.length > 0);
   if (zoned.length === 0) {
     return (
       <div className="empty-state">
-        No session-limit hits, so no measured cap zone. That is headroom.
+        No recorded session-limit hit was found in the available logs.
       </div>
     );
   }
-  const max = Math.max(0, ...zoned.map((e) => eraCap(e, basis).max ?? 0));
+  const max = Math.max(0, ...zoned.map((e) => eraHitLevel(e, basis).max ?? 0));
   const scaleMax = Math.max(1e-9, max);
   const px = (v: number) => PAD + (v / scaleMax) * (width - 2 * PAD);
   // Hits measured at zero usage (a pool filled elsewhere, or no price table)
@@ -83,8 +87,7 @@ export default function CapZones({ eras, basis }: {
   return (
     <div className="limit-zones chart-tooltip-host" ref={ref}>
       {zoned.map((era) => {
-        const avg = meanUsageAtHit(era, basis);
-        const cap = eraCap(era, basis);
+        const hitLevel = eraHitLevel(era, basis);
         return (
         <div key={era.era || "all"} className="limit-zone-row">
           <div className="limit-zone-head">
@@ -92,31 +95,27 @@ export default function CapZones({ eras, basis }: {
             <span>{eraSummary(era, basis)}</span>
           </div>
           <svg width={width} height={STRIP_H} className="limit-zone-strip" role="img"
-               aria-label={`${era.era || "All usage"} cap zone by ${basisLabel(basis)}`}>
+               aria-label={`${era.era || "All usage"} observed hit levels by ${basisLabel(basis)}`}>
             {ticks.map((t) => (
               <line key={t} className="limit-zone-grid"
                     x1={px(t)} y1={3} x2={px(t)} y2={STRIP_H - 3} />
             ))}
             <rect x={PAD} y={STRIP_H / 2 - 2} width={Math.max(0, width - 2 * PAD)}
                   height={4} rx={2} className="lane-track" />
-            {cap.min != null && cap.max != null && (
-              <rect x={px(cap.min)} y={STRIP_H / 2 - 5}
-                    width={Math.max(2, px(cap.max) - px(cap.min))}
+            {hitLevel.min != null && hitLevel.max != null && (
+              <rect x={px(hitLevel.min)} y={STRIP_H / 2 - 5}
+                    width={Math.max(2, px(hitLevel.max) - px(hitLevel.min))}
                     height={10} rx={5} className="limit-zone-band" />
             )}
-            {cap.values.map((v, i) => (
+            {hitLevel.values.map((v, i) => (
               <circle key={i} cx={px(v)} cy={STRIP_H / 2} r={5}
                       className="limit-zone-dot"
-                      onMouseMove={(e) => show(e, formatLimitValue(v, basis), ["window usage when the cap hit"])}
+                      onMouseMove={(e) => show(e, formatLimitValue(v, basis), ["visible usage at recorded hit"])}
                       onMouseLeave={hide} />
             ))}
-            {cap.median != null && (
-              <rect x={px(cap.median) - 1} y={2} width={2} height={STRIP_H - 4}
+            {hitLevel.median != null && (
+              <rect x={px(hitLevel.median) - 1} y={2} width={2} height={STRIP_H - 4}
                     className="limit-zone-median" />
-            )}
-            {avg != null && (
-              <line x1={px(avg)} y1={2} x2={px(avg)} y2={STRIP_H - 2}
-                    className="limit-zone-avg" />
             )}
           </svg>
         </div>
@@ -132,10 +131,9 @@ export default function CapZones({ eras, basis }: {
         ))}
       </div>
       <div className="chip-legend card-bottom-legend limit-legend">
-        <span><i className="is-hit-dot" />usage at a session-limit hit</span>
-        <span><i className="is-band" />min-max cap zone</span>
-        <span><i className="is-median" />median cap</span>
-        <span><i className="is-avg" />avg hit</span>
+        <span><i className="is-hit-dot" />visible usage at recorded hit</span>
+        <span><i className="is-band" />observed min–max range</span>
+        <span><i className="is-median" />median hit level</span>
         <em>{`x-axis: window usage, ${basisLabel(basis)}`}</em>
       </div>
       {tooltip}

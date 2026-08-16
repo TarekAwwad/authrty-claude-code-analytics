@@ -9,23 +9,19 @@ import { Blurred } from "../shell/Blurred";
 
 interface Props {
   projects: Project[];
-  onOpenSession: (sessionId: number) => void;
+  onOpenSession: (sessionId: number, eventId?: number | null) => void;
 }
 
 const SECTION_TABS: Array<{ key: string; label: string }> = [
-  { key: "cost", label: "Cost" },
-  { key: "fanout_cost", label: "Fanout" },
-  { key: "tool_errors", label: "Tool errors" },
-  { key: "rejections", label: "Rejections" },
+  { key: "cost_associations", label: "Cost" },
+  { key: "tool_error_associations", label: "Tool errors" },
 ];
 
 const SUPPORT_OPTIONS = [3, 5, 10, 20];
 
 const OUTCOME_HEADLINES: Record<string, string> = {
-  cost: "What drives high-cost sessions?",
-  fanout_cost: "What drives high-cost fanout sessions?",
-  tool_errors: "What drives tool-call errors?",
-  rejections: "What drives rejected slices?",
+  cost_associations: "Observed cost association",
+  tool_error_associations: "Observed tool-error association",
 };
 
 function formatCount(value: number): string {
@@ -36,12 +32,9 @@ function formatPct(value: number): string {
   return `${(value * 100).toFixed(value > 0 && value < 0.01 ? 2 : 1)}%`;
 }
 
-function formatLift(value: number): string {
-  return `${value.toFixed(value >= 10 ? 1 : 2)}×`;
-}
-
-function formatDelta(from: number, to: number): string {
-  return `+${((to - from) * 100).toFixed(1)} pts`;
+function formatEffect(value: number): string {
+  const points = value * 100;
+  return `${points >= 0 ? "+" : ""}${points.toFixed(1)} pts`;
 }
 
 function formatBarWidth(value: number): string {
@@ -50,6 +43,11 @@ function formatBarWidth(value: number): string {
 
 function formatOutcome(label: string): string {
   return label ? label.charAt(0).toLowerCase() + label.slice(1) : "this outcome";
+}
+
+function unitLabel(section: DiscoverySection, count = 2): string {
+  const singular = section.observation_unit === "session" ? "session" : "tool call";
+  return count === 1 ? singular : `${singular}s`;
 }
 
 function exampleTitle(example: DiscoveryExample): string {
@@ -61,7 +59,7 @@ function ExampleList({
   onOpenSession,
 }: {
   examples: DiscoveryExample[];
-  onOpenSession: (sessionId: number) => void;
+  onOpenSession: (sessionId: number, eventId?: number | null) => void;
 }) {
   if (examples.length === 0) {
     return <p className="discover-muted">No examples available.</p>;
@@ -78,9 +76,10 @@ function ExampleList({
             {meta && <span><Blurred>{meta}</Blurred></span>}
           </div>
           {example.id !== null && (
-            <button type="button" onClick={() => onOpenSession(example.id as number)}>
+            <button type="button"
+                    onClick={() => onOpenSession(example.id as number, example.event_id)}>
               <ExternalLink size={13} />
-              Open session
+              Open receipt
             </button>
           )}
         </li>
@@ -90,16 +89,24 @@ function ExampleList({
   );
 }
 
-function ComparisonBar({ driver }: { driver: DiscoveryDriver }) {
+function ComparisonBar({
+  driver,
+  section,
+}: {
+  driver: DiscoveryDriver;
+  section: DiscoverySection;
+}) {
+  const units = unitLabel(section);
   return (
-    <div className="driver-bars" aria-label={`${formatPct(driver.subgroup_rate)} sessions like this versus ${formatPct(driver.baseline_rate)} all sessions`}>
+    <div className="driver-bars"
+         aria-label={`${formatPct(driver.subgroup_rate)} matching ${units} versus ${formatPct(driver.complement_rate)} other ${units}`}>
       <div className="driver-bar-row">
-        <span>All sessions</span>
-        <i><b style={{ width: formatBarWidth(driver.baseline_rate) }} /></i>
-        <em>{formatPct(driver.baseline_rate)}</em>
+        <span>Other {units}</span>
+        <i><b style={{ width: formatBarWidth(driver.complement_rate) }} /></i>
+        <em>{formatPct(driver.complement_rate)}</em>
       </div>
       <div className="driver-bar-row strong">
-        <span>Sessions like this</span>
+        <span>Matching {units}</span>
         <i><b style={{ width: formatBarWidth(driver.subgroup_rate) }} /></i>
         <em>{formatPct(driver.subgroup_rate)}</em>
       </div>
@@ -124,6 +131,7 @@ function DriverSpotlight({
 }) {
   const outcome = formatOutcome(section.target_label);
   const headline = OUTCOME_HEADLINES[section.key] || section.title;
+  const units = unitLabel(section);
 
   return (
     <article className="driver-spotlight">
@@ -132,34 +140,37 @@ function DriverSpotlight({
           <Target size={13} />
           {section.target_label}
         </span>
+        <span className="driver-unit-pill">
+          Unit: {section.observation_unit === "session" ? "session" : "tool call"}
+        </span>
         <h3>{headline}</h3>
         <strong className="driver-finding-title">{driver.title}</strong>
         <p>
-          Sessions like this hit {outcome} {formatPct(driver.subgroup_rate)} of the time,
-          compared with {formatPct(driver.baseline_rate)} across all sessions.
+          Matching {units} had {outcome} {formatPct(driver.subgroup_rate)} of the time,
+          compared with {formatPct(driver.complement_rate)} among other {units}.
         </p>
         <p className="driver-confidence">
-          Even on a conservative, Bonferroni-adjusted reading the rate stays at or above {formatPct(driver.subgroup_rate_low)},
-          still ahead of the {formatPct(driver.baseline_rate)} baseline.
+          Observed association, not a causal result. The Bonferroni-adjusted
+          lower bound is {formatPct(driver.subgroup_rate_low)}. Overall baseline {formatPct(driver.baseline_rate)}.
         </p>
         <SelectorChips selectors={driver.selectors} />
       </div>
 
       <div className="driver-spotlight-visual">
-        <div className="driver-lift-card">
-          <span>More likely</span>
-          <strong>{formatLift(driver.lift)}</strong>
-          <em>{formatDelta(driver.baseline_rate, driver.subgroup_rate)} vs all sessions</em>
+        <div className="driver-effect-card">
+          <span>Observed difference</span>
+          <strong>{formatEffect(driver.effect_size)}</strong>
+          <em>matching vs other {units}</em>
         </div>
-        <ComparisonBar driver={driver} />
+        <ComparisonBar driver={driver} section={section} />
         <div className="driver-evidence-grid">
           <div>
-            <h3>Sessions like this</h3>
-            <p>{driver.positive_support} of {driver.support} matching items hit {outcome}.</p>
+            <h3>Matching {units}</h3>
+            <p>{driver.positive_support} of {driver.support} matching {units} had this outcome.</p>
           </div>
           <div>
-            <h3>All sessions</h3>
-            <p>{formatCount(section.positive_count)} of {formatCount(section.baseline_count)} hit {outcome}.</p>
+            <h3>Other {units}</h3>
+            <p>{driver.complement_positive_count} of {driver.complement_count} other {units} had this outcome.</p>
           </div>
         </div>
       </div>
@@ -169,16 +180,18 @@ function DriverSpotlight({
 
 function DriverExamplesCard({
   driver,
+  section,
   onOpenSession,
 }: {
   driver: DiscoveryDriver;
-  onOpenSession: (sessionId: number) => void;
+  section: DiscoverySection;
+  onOpenSession: (sessionId: number, eventId?: number | null) => void;
 }) {
   return (
     <article className="driver-examples-card">
       <div className="driver-card-head">
-        <h3>Example sessions</h3>
-        <span>{formatCount(driver.support)} matching total</span>
+        <h3>Evidence receipts</h3>
+        <span>{formatCount(driver.support)} matching {unitLabel(section, driver.support)}</span>
       </div>
       <ExampleList examples={driver.examples} onOpenSession={onOpenSession} />
     </article>
@@ -206,12 +219,12 @@ function DriverCard({
       aria-pressed={selected}
     >
       <span className="driver-card-topline">
-        <span><TrendingUp size={13} /> {formatLift(driver.lift)} more likely</span>
+        <span><TrendingUp size={13} /> {formatEffect(driver.effect_size)} associated</span>
         <b>{driver.positive_support}/{driver.support}</b>
       </span>
       <strong>{driver.title}</strong>
       <span className="driver-card-note">
-        {formatPct(driver.subgroup_rate)} hit {outcome}
+        {formatPct(driver.subgroup_rate)} observed {outcome}
       </span>
       <span className="driver-card-bars" aria-hidden="true">
         <i><b style={{ width: formatBarWidth(driver.baseline_rate) }} /></i>
@@ -228,10 +241,12 @@ function SectionResults({
   section,
   isRefetching,
   onOpenSession,
+  unpricedModels,
 }: {
   section: DiscoverySection | undefined;
   isRefetching: boolean;
-  onOpenSession: (sessionId: number) => void;
+  onOpenSession: (sessionId: number, eventId?: number | null) => void;
+  unpricedModels: string[];
 }) {
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
 
@@ -260,11 +275,14 @@ function SectionResults({
       <div className="empty-state">
         <strong>{section.title} unavailable.</strong>
         <span>{section.unavailable_reason || "Required data is unavailable."}</span>
+        {unpricedModels.length > 0 && (
+          <span>Unpriced models: {unpricedModels.join(", ")}.</span>
+        )}
       </div>
     );
   }
   if (section.results.length === 0) {
-    return <div className="empty-state">No drivers meet the current support threshold.</div>;
+    return <div className="empty-state">No associations meet the current support threshold.</div>;
   }
 
   const selectedDriver = section.results.find((driver) => driver.id === selectedId) ?? section.results[0];
@@ -274,14 +292,15 @@ function SectionResults({
       <div className="driver-board">
         <div className="driver-main-column">
           <DriverSpotlight driver={selectedDriver} section={section} />
-          <DriverExamplesCard driver={selectedDriver} onOpenSession={onOpenSession} />
+          <DriverExamplesCard driver={selectedDriver} section={section}
+                              onOpenSession={onOpenSession} />
         </div>
         <aside className="driver-list-card">
           <div className="driver-card-head">
-            <h3>Subgroups</h3>
+            <h3>Associations</h3>
             <span>{section.results.length}</span>
           </div>
-          <div className="driver-card-grid" aria-label="Drivers">
+          <div className="driver-card-grid" aria-label="Associations">
             {section.results.map((driver) => (
               <DriverCard
                 key={driver.id}
@@ -301,7 +320,7 @@ function SectionResults({
 export default function SubgroupDiscovery({ projects, onOpenSession }: Props) {
   const [projectId, setProjectId] = React.useState<number | null>(null);
   const [minSupport, setMinSupport] = React.useState(5);
-  const [activeSection, setActiveSection] = React.useState("cost");
+  const [activeSection, setActiveSection] = React.useState("cost_associations");
   const query = useQuery({
     queryKey: ["discovery", projectId, minSupport],
     queryFn: () => getDiscoveryAnalytics({ projectId, minSupport }),
@@ -322,10 +341,16 @@ export default function SubgroupDiscovery({ projects, onOpenSession }: Props) {
     : 0;
   const errorMessage = query.error instanceof Error ? query.error.message : "Unable to load discovery results.";
 
-  const topLift =
+  const topEffect =
     section && section.results.length
-      ? Math.max(...section.results.map((result) => result.lift))
+      ? Math.max(...section.results.map((result) => result.effect_size))
       : null;
+  const scopeCount = payload
+    ? activeSection === "cost_associations"
+      ? payload.meta.total_sessions
+      : payload.meta.total_tool_calls
+    : null;
+  const scopeHint = activeSection === "cost_associations" ? "sessions" : "tool calls";
 
   // Match the other discovery views: on the initial load, show only a centred
   // loader — the toolbar and summary appear once results are ready. `placeholderData`
@@ -343,8 +368,15 @@ export default function SubgroupDiscovery({ projects, onOpenSession }: Props) {
   return (
     <main className={`discover-page discover-section-${activeSection}`}>
       <div className="discover-page-inner">
+        <header className="subgroup-page-head">
+          <h1>Experimental subgroup associations</h1>
+          <p role="note">
+            Observed associations, not causal conclusions. Each section declares
+            its observation unit and compares matching observations with their complement.
+          </p>
+        </header>
         <section className="discover-toolbar" aria-label="Discovery controls">
-          <div className="discover-tabs" role="tablist" aria-label="Outcome category">
+          <div className="discover-tabs" role="tablist" aria-label="Association category">
             {SECTION_TABS.map((tab) => (
               <button
                 type="button"
@@ -386,18 +418,18 @@ export default function SubgroupDiscovery({ projects, onOpenSession }: Props) {
         <section className="discover-overview" aria-label="Discovery summary">
           <InsightStat
             label="Scope"
-            value={payload ? formatCount(payload.meta.total_sessions) : "-"}
-            hint="sessions"
+            value={scopeCount !== null ? formatCount(scopeCount) : "-"}
+            hint={scopeHint}
           />
           <InsightStat
-            label="Drivers"
+            label="Associations"
             value={payload ? formatCount(totalResults) : "-"}
             hint="matching current support"
           />
           <InsightStat
-            label="Top lift"
-            value={topLift !== null ? `${topLift.toFixed(topLift >= 10 ? 1 : 2)}×` : "—"}
-            hint="vs baseline"
+            label="Largest difference"
+            value={topEffect !== null ? formatEffect(topEffect) : "—"}
+            hint="matching vs complement"
           />
         </section>
 
@@ -414,7 +446,9 @@ export default function SubgroupDiscovery({ projects, onOpenSession }: Props) {
                 <span>{errorMessage}</span>
               </div>
             ) : (
-              <SectionResults section={section} isRefetching={isRefetching} onOpenSession={onOpenSession} />
+              <SectionResults section={section} isRefetching={isRefetching}
+                              onOpenSession={onOpenSession}
+                              unpricedModels={payload?.meta.unpriced_models ?? []} />
             )}
           </div>
         </section>

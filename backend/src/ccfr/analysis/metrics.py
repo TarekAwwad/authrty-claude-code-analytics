@@ -1,75 +1,56 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
-from typing import TypedDict
+from collections import defaultdict
+from collections.abc import Iterable, Mapping
+from typing import Any, TypedDict
 
 
-class LoopContext(TypedDict):
-    run_index: int
+class SameToolStreak(TypedDict):
+    streak_id: str
+    tool_name: str
     position: int
     count: int
-    tool_name: str
-    start_index: int
-    end_index: int
+    start_event_id: int
+    end_event_id: int
 
 
-def _runs(names: list[str | None]) -> Iterator[tuple[int, int, str]]:
-    """Yield (start_index, length, name) for consecutive identical non-null names."""
-    start = 0
-    while start < len(names):
-        name = names[start]
-        if name is None:
-            start += 1
+def same_tool_streaks(
+    spans: Iterable[Mapping[str, Any]],
+    *,
+    min_run: int = 3,
+) -> dict[int, SameToolStreak]:
+    """Return neutral display metadata for consecutive same-tool calls per lane."""
+    calls_by_lane: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for span in spans:
+        if span.get("kind") != "tool_call":
             continue
-        end = start + 1
-        while end < len(names) and names[end] == name:
-            end += 1
-        yield start, end - start, name
-        start = end
+        calls_by_lane[str(span.get("lane") or "main")].append(span)
 
-
-def compute_loop_stats(names: Iterable[str | None], *, min_run: int = 3) -> tuple[int, int]:
-    """Return (loop_count, max_repeat) for a chronological list of tool names.
-
-    loop_count = number of runs whose length >= min_run.
-    max_repeat = length of the longest consecutive identical run (0 if no names).
-    """
-    names = list(names)
-    loop_count = 0
-    max_repeat = 0
-    for _start, length, _name in _runs(names):
-        max_repeat = max(max_repeat, length)
-        if length >= min_run:
-            loop_count += 1
-    return loop_count, max_repeat
-
-
-def loop_indices(names: Iterable[str | None], *, min_run: int = 3) -> set[int]:
-    """Return the set of indices belonging to runs of length >= min_run."""
-    names = list(names)
-    marked: set[int] = set()
-    for start, length, _name in _runs(names):
-        if length >= min_run:
-            marked.update(range(start, start + length))
-    return marked
-
-
-def loop_contexts(names: Iterable[str | None], *, min_run: int = 3) -> dict[int, LoopContext]:
-    """Return per-index context for qualifying repeated-name runs."""
-    names = list(names)
-    contexts: dict[int, LoopContext] = {}
-    run_index = 0
-    for start, length, name in _runs(names):
-        if length < min_run:
-            continue
-        run_index += 1
-        for offset in range(length):
-            contexts[start + offset] = {
-                "run_index": run_index,
-                "position": offset + 1,
-                "count": length,
-                "tool_name": name,
-                "start_index": start,
-                "end_index": start + length - 1,
-            }
+    contexts: dict[int, SameToolStreak] = {}
+    for lane, calls in calls_by_lane.items():
+        start = 0
+        streak_number = 0
+        while start < len(calls):
+            tool_name = calls[start].get("tool_name")
+            if not tool_name:
+                start += 1
+                continue
+            end = start + 1
+            while end < len(calls) and calls[end].get("tool_name") == tool_name:
+                end += 1
+            count = end - start
+            if count >= min_run:
+                streak_number += 1
+                event_ids = [int(call["event_id"]) for call in calls[start:end]]
+                streak_id = f"{lane}-tool-streak-{streak_number}"
+                for position, event_id in enumerate(event_ids, start=1):
+                    contexts[event_id] = {
+                        "streak_id": streak_id,
+                        "tool_name": str(tool_name),
+                        "position": position,
+                        "count": count,
+                        "start_event_id": event_ids[0],
+                        "end_event_id": event_ids[-1],
+                    }
+            start = end
     return contexts

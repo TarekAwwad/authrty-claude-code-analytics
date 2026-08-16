@@ -13,7 +13,7 @@
 //   context           Explore > Context economics        (P08 TaxMeterHero.tsx; also a REFERENCE screen)
 //   context-drilldown Context economics with a finding open (P08 SessionDrilldown.tsx)
 //   cost              Cost                               (P08 InsightStrip.tsx; also a REFERENCE screen)
-//   session           Overview > first session           (P08 InsightStrip via SessionInsightStrip)
+//   session           Sessions > first session           (P08 InsightStrip via SessionInsightStrip)
 //   import            Import                             (P03 demo card / P07 import root)
 //   team-export       Export                             (P05 removed privacy rungs)
 //   subgroups         Explore > Subgroups                (REFERENCE only — never edited)
@@ -30,6 +30,8 @@ const AUDIT_DIR = join(REPO_ROOT, "docs", "media", "audit");
 const DEMO_URL = process.env.DEMO_URL ?? "http://localhost:5174";
 const VIEWPORT = { width: 1440, height: 900 };
 const WAIT = { state: "visible", timeout: 60_000 };
+const DEMO_PROJECTS = ["demo-data-pipeline", "demo-mobile-app", "demo-web-shop"];
+const DEMO_SESSION_COUNT = 46;
 
 // Brief settle for transition/physics-driven views only; every screen is first
 // awaited on a visible element (condition-based), never on the sleep alone.
@@ -39,6 +41,35 @@ const settle = (ms) => new Promise((r) => setTimeout(r, ms));
 // accessible name ("Export PNG", "Import all new", …) never collide.
 const nav = (page, label) =>
   page.locator("nav.sb-nav").getByRole("button", { name: label, exact: true }).click();
+
+async function assertSyntheticSessions(page) {
+  const sessions = await page.evaluate(async () => {
+    const resource = performance
+      .getEntriesByType("resource")
+      .toReversed()
+      .find((entry) => new URL(entry.name).pathname.endsWith("/api/sessions"));
+    if (!resource) throw new Error("Could not locate the Sessions API request.");
+    const url = new URL(resource.name);
+    url.search = "";
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Sessions API returned ${response.status}.`);
+    return response.json();
+  });
+  if (!Array.isArray(sessions)) {
+    throw new Error("Refusing to capture: the Sessions API returned an unexpected payload.");
+  }
+  const seen = new Set();
+  for (const session of sessions) {
+    const project = session?.project_name;
+    if (typeof project !== "string" || !DEMO_PROJECTS.includes(project)) {
+      throw new Error("Refusing to capture: the Sessions table contains non-demo data.");
+    }
+    seen.add(project);
+  }
+  if (sessions.length !== DEMO_SESSION_COUNT || seen.size !== DEMO_PROJECTS.length) {
+    throw new Error("Refusing to capture: the complete bundled demo corpus is not loaded.");
+  }
+}
 
 // Each screen: navigate from a known state (go), wait for real content (ready),
 // optional extra settle for animations.
@@ -57,7 +88,7 @@ const SCREENS = [
       await nav(page, "Explore");
       await page.getByRole("button", { name: "Context economics" }).click();
     },
-    ready: ".tax-meter-hero",
+    ready: ".opportunity-meter-hero",
     pre: 500,
   },
   {
@@ -113,7 +144,7 @@ const SCREENS = [
   {
     name: "session",
     go: async (page) => {
-      await nav(page, "Overview");
+      await nav(page, "Sessions");
       await page.locator("tbody tr").first().waitFor(WAIT);
       await page.locator("tbody tr").first().click();
     },
@@ -152,12 +183,17 @@ const SCREENS = [
 
 async function ensureDemoLoaded(page) {
   const loadDemo = page.getByRole("button", { name: /load demo/i });
-  if (await loadDemo.isVisible().catch(() => false)) {
+  const demoAvailable = await loadDemo
+    .waitFor({ state: "visible", timeout: 10_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (demoAvailable) {
     await loadDemo.click();
-    await page.getByRole("button", { name: "Overview" }).click();
-    await page.getByPlaceholder("Search sessions").waitFor(WAIT);
-    await page.locator("tbody tr").first().waitFor(WAIT);
   }
+  await nav(page, "Sessions");
+  await page.getByPlaceholder("Search sessions").waitFor(WAIT);
+  await page.locator("tbody tr").first().waitFor(WAIT);
+  await assertSyntheticSessions(page);
 }
 
 async function captureTheme(browser, theme) {

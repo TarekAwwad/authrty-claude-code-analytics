@@ -9,10 +9,49 @@ function download(href: string, filename: string): void {
 }
 
 export function exportJson(payload: UsageMapResponse): void {
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const blob = new Blob(
+    [JSON.stringify(buildActivityMapExport(payload), null, 2)],
+    { type: "application/json" },
+  );
   const url = URL.createObjectURL(blob);
-  download(url, "usage-map.json");
+  download(url, "experimental-activity-map.json");
   setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/** Activity-only export contract; raw corpus cost is deliberately excluded. */
+export function buildActivityMapExport(payload: UsageMapResponse) {
+  return {
+    export_kind: "observed_activity_map" as const,
+    methodology: payload.meta.methodology,
+    activity_basis: payload.meta.activity_basis,
+    window: payload.meta.window,
+    sessions_analyzed: payload.meta.sessions_analyzed,
+    total_activity_count: payload.meta.total_activity_count,
+    tool_call_count: payload.meta.tool_call_count,
+    text_assistant_step_count: payload.meta.text_assistant_step_count,
+    phases: payload.phases.map((phase) => ({
+      key: phase.key,
+      label: phase.label,
+      activity_count: phase.activity_count,
+      activity_share: phase.activity_share,
+      main_activity_count: phase.main_activity_count,
+      subagent_activity_count: phase.subagent_activity_count,
+      text_assistant_step_count: phase.text_assistant_step_count,
+      session_count: phase.session_count,
+      patterns: phase.habits.map((pattern) => ({
+        key: pattern.key,
+        label: pattern.label,
+        activity_count: pattern.activity_count,
+        session_count: pattern.session_count,
+      })),
+      tools: phase.tools.map((tool) => ({
+        key: tool.key,
+        label: tool.label,
+        activity_count: tool.activity_count,
+        session_count: tool.session_count,
+      })),
+    })),
+  };
 }
 
 // Visual styling lives in the app stylesheet; a serialized SVG carries none of
@@ -55,7 +94,7 @@ export function exportPng(svg: SVGSVGElement, width: number, height: number): vo
     ctx.fillStyle = theme || "#0b0f17";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-    download(canvas.toDataURL("image/png"), "usage-map.png");
+    download(canvas.toDataURL("image/png"), "experimental-activity-map.png");
   };
   image.src = svgUrl;
 }

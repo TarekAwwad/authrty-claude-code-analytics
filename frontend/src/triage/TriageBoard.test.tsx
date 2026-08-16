@@ -9,10 +9,10 @@ function s(partial: Partial<SessionCard>): SessionCard {
     first_ts: null, last_ts: null, cwd: null, version: null, entrypoint: null,
     git_branch: null, event_count: 0, turn_count: 0, tool_call_count: 0,
     subagent_count: 0, error_count: 0, system_count: 0, persisted_output_count: 0,
-    input_tokens: 0, output_tokens: 0, loop_count: 0, max_repeat: 0,
+    input_tokens: 0, output_tokens: 0,
     duration_seconds: 0, max_agent_events: 0, finding_count: 0,
-    pattern_risk_score: 0, top_finding_category: null, top_finding_severity: null,
-    top_finding_title: null, cost_usd: 0, cost_available: true, ...partial,
+    top_finding_title: null, top_finding_basis: null,
+    cost_usd: 0, cost_available: true, ...partial,
   };
 }
 
@@ -38,14 +38,73 @@ describe("TriageBoard", () => {
     expect(screen.getByText(/dash0002/)).toBeInTheDocument();
   });
 
-  it("sorts the highest-risk session into the first row by default", () => {
+  it("preserves search and project filtering", () => {
+    const projectOptions: Project[] = [
+      { id: 1, export_name: "Hermes", display_name: "Hermes", inferred_cwd: null, session_count: 1, event_count: 0, subagent_count: 0 },
+      { id: 2, export_name: "Dashboard", display_name: "Dashboard", inferred_cwd: null, session_count: 1, event_count: 0, subagent_count: 0 },
+    ];
     const sessions = [
-      s({ id: 1, session_id: "calm0000", event_count: 50 }),
-      s({ id: 2, session_id: "risky111", event_count: 500, error_count: 30, loop_count: 4, max_repeat: 12 }),
+      s({ id: 1, project_id: 1, project_name: "Hermes", session_id: "herm0001", title: "Refactor parser" }),
+      s({ id: 2, project_id: 2, project_name: "Dashboard", session_id: "dash0002", title: "Build charts" }),
+    ];
+
+    render(<TriageBoard projects={projectOptions} sessions={sessions} loading={false} onOpenSession={() => {}} />);
+
+    fireEvent.change(screen.getByPlaceholderText("Search sessions"), { target: { value: "charts" } });
+    expect(screen.getByText("Build charts")).toBeInTheDocument();
+    expect(screen.queryByText("Refactor parser")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Search sessions"), { target: { value: "" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Project" }), { target: { value: "1" } });
+    expect(screen.getByText("Refactor parser")).toBeInTheDocument();
+    expect(screen.queryByText("Build charts")).not.toBeInTheDocument();
+  });
+
+  it("keeps Errors only based on observed errors, not system events", () => {
+    const sessions = [
+      s({ id: 1, session_id: "system11", system_count: 8 }),
+      s({ id: 2, session_id: "error222", error_count: 1 }),
+    ];
+    render(<TriageBoard projects={projects} sessions={sessions} loading={false} onOpenSession={() => {}} />);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Errors only" }));
+
+    expect(screen.getByText(/error222/)).toBeInTheDocument();
+    expect(screen.queryByText(/system11/)).not.toBeInTheDocument();
+  });
+
+  it("sorts the newest session into the first row by default", () => {
+    const sessions = [
+      s({ id: 1, session_id: "newer111", first_ts: "2026-06-03T10:00:00Z" }),
+      s({
+        id: 2,
+        session_id: "older222",
+        first_ts: "2026-06-01T10:00:00Z",
+        event_count: 500,
+        error_count: 30,
+      }),
     ];
     render(<TriageBoard projects={projects} sessions={sessions} loading={false} onOpenSession={() => {}} />);
     const rows = screen.getAllByRole("row").slice(1); // skip header
-    expect(within(rows[0]).getByText(/risky111/)).toBeInTheDocument();
+    expect(within(rows[0]).getByText(/newer111/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Sort sessions" })).toHaveValue("first_ts");
+  });
+
+  it("offers exactly the supported session sorts", () => {
+    render(<TriageBoard projects={projects} sessions={[s({})]} loading={false} onOpenSession={() => {}} />);
+
+    const options = within(screen.getByRole("combobox", { name: "Sort sessions" }))
+      .getAllByRole("option")
+      .map((option) => ({ value: (option as HTMLOptionElement).value, label: option.textContent }));
+
+    expect(options).toEqual([
+      { value: "first_ts", label: "Newest first" },
+      { value: "cost_usd", label: "Highest estimated API-equivalent cost" },
+      { value: "error_count", label: "Most observed errors" },
+      { value: "finding_count", label: "Supported finding" },
+      { value: "event_count", label: "Highest event volume" },
+      { value: "subagent_count", label: "Most subagents" },
+    ]);
   });
 
   it("calls onOpenSession when a row is clicked", () => {
@@ -56,9 +115,9 @@ describe("TriageBoard", () => {
     expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }));
   });
 
-  it("re-sorts by a signal using the explicit sort control", () => {
+  it("sorts by observed errors using the explicit sort control", () => {
     const sessions = [
-      s({ id: 1, session_id: "loop9999", loop_count: 8, max_repeat: 12 }),
+      s({ id: 1, session_id: "clean111", system_count: 20 }),
       s({ id: 2, session_id: "error222", error_count: 2 }),
     ];
     render(<TriageBoard projects={projects} sessions={sessions} loading={false} onOpenSession={() => {}} />);
@@ -69,7 +128,7 @@ describe("TriageBoard", () => {
     expect(within(rows[0]).getByText(/error222/)).toBeInTheDocument();
   });
 
-  it("sorts fanout by the displayed subagent count", () => {
+  it("sorts by the displayed subagent count", () => {
     const sessions = [
       s({ id: 1, session_id: "fan11111", subagent_count: 1, max_agent_events: 200 }),
       s({ id: 2, session_id: "fan99999", subagent_count: 9, max_agent_events: 5 }),
@@ -83,41 +142,26 @@ describe("TriageBoard", () => {
     expect(within(rows[0]).getByText(/fan99999/)).toBeInTheDocument();
   });
 
-  it("sorts loops by the displayed repeat count", () => {
-    const sessions = [
-      s({ id: 1, session_id: "loop4444", loop_count: 10, max_repeat: 4 }),
-      s({ id: 2, session_id: "loop9999", loop_count: 2, max_repeat: 9 }),
-    ];
-
-    render(<TriageBoard projects={projects} sessions={sessions} loading={false} onOpenSession={() => {}} />);
-
-    fireEvent.change(screen.getByRole("combobox", { name: "Sort sessions" }), { target: { value: "max_repeat" } });
-
-    const rows = screen.getAllByRole("row").slice(1);
-    expect(within(rows[0]).getByText(/loop9999/)).toBeInTheDocument();
-  });
-
-  it("renders and sorts by pattern findings", () => {
+  it("renders and sorts by supported finding count", () => {
     const sessions = [
       s({ id: 1, session_id: "plain111" }),
       s({
         id: 2,
         session_id: "find9999",
         finding_count: 2,
-        pattern_risk_score: 9,
-        top_finding_category: "failed_verification_repair_loop",
-        top_finding_severity: "high",
-        top_finding_title: "Failed verification",
+        top_finding_title: "Repeated identical failure",
+        top_finding_basis: "observed",
       }),
     ];
 
     render(<TriageBoard projects={projects} sessions={sessions} loading={false} onOpenSession={() => {}} />);
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Sort sessions" }), { target: { value: "patterns" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Sort sessions" }), { target: { value: "finding_count" } });
 
     const rows = screen.getAllByRole("row").slice(1);
     expect(within(rows[0]).getByText(/find9999/)).toBeInTheDocument();
-    expect(within(rows[0]).getByText("Failed verification")).toBeInTheDocument();
+    expect(within(rows[0]).getByText("Repeated identical failure")).toBeInTheDocument();
+    expect(within(rows[0]).getByText("Observed · 2 findings")).toBeInTheDocument();
   });
 
   it("shows each session's estimated cost", () => {
@@ -127,7 +171,7 @@ describe("TriageBoard", () => {
     expect(within(row).getByText("$12.34")).toBeInTheDocument();
   });
 
-  it("shows the session start timestamp in the overview table", () => {
+  it("shows the session start timestamp in the Sessions table", () => {
     const firstTs = "2026-06-03T10:00:00Z";
     render(
       <TriageBoard
@@ -189,23 +233,65 @@ describe("TriageBoard", () => {
     expect(within(summary).getByText("$1.75")).toBeInTheDocument();
   });
 
-  it("replaces noisy signal columns with self-explaining risk and impact cells", () => {
+  it("removes risk and loop concepts while keeping observed activity metadata", () => {
     const sessions = [
-      s({ id: 1, session_id: "noisy001", event_count: 500, error_count: 30, loop_count: 4, max_repeat: 12, subagent_count: 6 }),
+      s({
+        id: 1,
+        session_id: "noisy001",
+        event_count: 500,
+        error_count: 30,
+        system_count: 7,
+        subagent_count: 6,
+      }),
     ];
     const { container } = render(<TriageBoard projects={projects} sessions={sessions} loading={false} onOpenSession={() => {}} />);
 
-    expect(screen.queryByLabelText("Activity trace legend")).toBeNull();
-    expect(screen.queryByRole("columnheader", { name: "Activity" })).toBeNull();
-    expect(screen.queryByRole("columnheader", { name: "Errors" })).toBeNull();
-    expect(screen.queryByRole("columnheader", { name: "Loops" })).toBeNull();
-    expect(screen.queryByRole("columnheader", { name: "Fanout" })).toBeNull();
+    expect(screen.queryByRole("columnheader", { name: "Risk" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Highest risk")).not.toBeInTheDocument();
+    expect(screen.queryByText("Largest loop")).not.toBeInTheDocument();
+    expect(screen.queryByText("Loop activity")).not.toBeInTheDocument();
+    expect(screen.queryByText("x12 loop")).not.toBeInTheDocument();
+    expect(container.querySelector('[data-testid="risk-score"]')).toBeNull();
+    expect(container.querySelector('[data-testid="risk-bar"]')).toBeNull();
+    expect(container.querySelector('[data-testid="risk-seg"]')).toBeNull();
+
+    expect(screen.getByRole("columnheader", { name: "Supported finding" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Impact" })).toBeInTheDocument();
     expect(screen.getByText("30 errors")).toBeInTheDocument();
-    expect(screen.getByText("x12 loop")).toBeInTheDocument();
-    expect(screen.getByText("6 fanout")).toBeInTheDocument();
+    expect(screen.getByText("6 subagents")).toBeInTheDocument();
+    expect(screen.queryByText("6 fanout")).not.toBeInTheDocument();
+    expect(screen.getByText("500 events")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Investigate" })).toBeInTheDocument();
-    expect(container.querySelector('[data-testid="risk-bar"]')).not.toBeNull();
-    expect(container.querySelectorAll('[data-testid="risk-seg"]').length).toBeGreaterThan(0);
+  });
+
+  it("keeps system events separate from observed errors and never calls them alerts", () => {
+    render(
+      <TriageBoard
+        projects={projects}
+        sessions={[s({ error_count: 2, system_count: 7 })]}
+        loading={false}
+        onOpenSession={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("2 observed errors")).toBeInTheDocument();
+    expect(screen.queryByText(/alert events/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/9 observed errors/i)).not.toBeInTheDocument();
+  });
+
+  it("shows subagent activity as neutral metadata, never as a fallback issue", () => {
+    render(
+      <TriageBoard
+        projects={projects}
+        sessions={[s({ subagent_count: 4 })]}
+        loading={false}
+        onOpenSession={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("4 subagents")).toBeInTheDocument();
+    expect(screen.queryByText("Delegated work")).not.toBeInTheDocument();
+    expect(screen.getByText("No supported finding detected")).toBeInTheDocument();
+    expect(screen.queryByText("No immediate issue")).not.toBeInTheDocument();
   });
 });

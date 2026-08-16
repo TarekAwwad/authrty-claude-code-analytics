@@ -16,13 +16,24 @@ import CostAnalyticsPage from "./CostAnalyticsPage";
 
 const payload: CostAnalyticsResponse = {
   meta: {
-    available: true, unpriced_models: [], total_usd: 48, total_tokens: 5_000_000,
-    available_projects: [{ id: 1, name: "alpha" }], available_models: ["claude-opus-4-8"], bucket: "day",
+    available: true, unpriced_models: [], costs_partial: false, costs_are_lower_bound: false,
+    total_usd: 48, total_tokens: 5_000_000,
+    available_projects: [{ id: 1, name: "alpha" }],
+    available_models: ["claude-opus-4-8", "claude-sonnet-4-5-20250929"], bucket: "day",
   },
   treemap: [{ project_id: 1, project_name: "alpha", usd: 48, children: [{ model: "claude-opus-4-8", usd: 48 }] }],
   over_time: [
-    { bucket: "2026-05-01", per_model: { "claude-opus-4-8": 18 } },
-    { bucket: "2026-05-02", per_model: { "claude-opus-4-8": 48 } },
+    {
+      bucket: "2026-05-01", per_model: { "claude-opus-4-8": 18 }, total_usd: 18,
+      session_count: 1, priced_session_count: 1, unpriced_models: [], costs_are_lower_bound: false,
+      baseline_usd: null, delta_usd: null, delta_pct: null, is_spike: false, sessions: [],
+    },
+    {
+      bucket: "2026-05-02", per_model: { "claude-opus-4-8": 48 }, total_usd: 48,
+      session_count: 1, priced_session_count: 1, unpriced_models: [], costs_are_lower_bound: false,
+      baseline_usd: 18, delta_usd: 30, delta_pct: 166.67, is_spike: true,
+      sessions: [{ id: 7, session_id: "s1", title: "Session One", project_name: "alpha", usd: 48, tokens: 5_000_000 }],
+    },
   ],
   categories: {
     base_input: { tokens: 2_000_000, usd: 8 }, cache_write_5m: { tokens: 0, usd: 0 },
@@ -32,11 +43,15 @@ const payload: CostAnalyticsResponse = {
     model: "claude-opus-4-8", usd: 48, tokens: 5_000_000, input_tokens: 3_000_000,
     output_tokens: 2_000_000, cache_read_tokens: 1_000_000, cache_write_tokens: 0,
     effective_usd_per_million: 9.6,
+  }, {
+    model: "claude-sonnet-4-5-20250929", usd: 1, tokens: 100_000, input_tokens: 80_000,
+    output_tokens: 20_000, cache_read_tokens: 0, cache_write_tokens: 0,
+    effective_usd_per_million: 10,
   }],
   sessions: [{
     id: 7, session_id: "s1", title: "Session One", project_name: "alpha", usd: 48, tokens: 5_000_000,
     turn_count: 12, tool_call_count: 24, subagent_count: 1, error_count: 2,
-    loop_count: 3, max_repeat: 4, finding_count: 1, duration_seconds: 3600,
+    finding_count: 1, duration_seconds: 3600,
     turn_cost_stats: { turn_count: 12, median_usd: 1.5, p95_usd: 6.4, max_usd: 8.2, outlier_count: 2 },
   }],
   cache_economics: {
@@ -54,7 +69,9 @@ const payload: CostAnalyticsResponse = {
   spikes: [{
     bucket: "2026-05-02",
     total_usd: 48,
+    baseline_usd: 18,
     delta_usd: 30,
+    delta_pct: 166.67,
     sessions: [{ id: 7, session_id: "s1", title: "Session One", project_name: "alpha", usd: 48, tokens: 5_000_000 }],
   }],
 };
@@ -84,8 +101,6 @@ const turnBreakdown: TurnCostBreakdown = {
       tool_call_count: 1,
       error_count: 0,
       subagent_count: 0,
-      loop_count: 0,
-      max_repeat: 1,
       models: ["claude-opus-4-8"],
       is_outlier: false,
     },
@@ -105,8 +120,6 @@ const turnBreakdown: TurnCostBreakdown = {
       tool_call_count: 6,
       error_count: 1,
       subagent_count: 2,
-      loop_count: 1,
-      max_repeat: 3,
       models: ["claude-opus-4-8", "claude-sonnet-4-6"],
       is_outlier: true,
     },
@@ -126,8 +139,6 @@ const turnBreakdown: TurnCostBreakdown = {
       tool_call_count: 1,
       error_count: 0,
       subagent_count: 0,
-      loop_count: 0,
-      max_repeat: 1,
       models: ["claude-opus-4-8"],
       is_outlier: false,
     },
@@ -147,8 +158,6 @@ const turnBreakdown: TurnCostBreakdown = {
       tool_call_count: 0,
       error_count: 0,
       subagent_count: 0,
-      loop_count: 0,
-      max_repeat: 0,
       models: ["claude-opus-4-8"],
       is_outlier: false,
     },
@@ -164,11 +173,21 @@ beforeEach(() => {
   getSessionTurnCosts.mockResolvedValue(turnBreakdown);
 });
 
-function renderPage(onOpenSession = () => {}, historical?: boolean, scope: "local" | "team" = "local") {
+function renderPage(
+  onOpenSession = () => {},
+  historical?: boolean,
+  scope: "local" | "team" = "local",
+  onHistoricalChange = (_value: boolean) => {},
+) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <CostAnalyticsPage onOpenSession={onOpenSession} historical={historical} scope={scope} />
+      <CostAnalyticsPage
+        onOpenSession={onOpenSession}
+        historical={historical}
+        onHistoricalChange={onHistoricalChange}
+        scope={scope}
+      />
     </QueryClientProvider>,
   );
 }
@@ -179,12 +198,15 @@ describe("CostAnalyticsPage", () => {
     expect(await screen.findAllByText(/\$48\.00/)).not.toHaveLength(0);
     expect(await screen.findAllByText("alpha")).not.toHaveLength(0);
     expect(await screen.findAllByText("Session One")).not.toHaveLength(0);
-    expect(await screen.findAllByText("Cache saved")).not.toHaveLength(0);
+    expect(await screen.findAllByText("Estimated API-equivalent cache savings")).not.toHaveLength(0);
     // the cache-savings tile now carries a token equivalent for Max users
     expect(await screen.findByText(/1M reused vs uncached input/)).toBeInTheDocument();
     expect(await screen.findByText("Session insights")).toBeInTheDocument();
     expect(await screen.findAllByText("Turn distribution")).not.toHaveLength(0);
     expect(screen.queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
+    expect(screen.getByText("Estimated API-equivalent cost")).toBeInTheDocument();
+    expect(screen.getAllByText("Estimated API-equivalent cache savings")).not.toHaveLength(0);
+    expect(screen.getAllByText("sonnet-4-5-20250929")).not.toHaveLength(0);
   });
 
   it("in team scope uses the team cost endpoint and hides the session-level panels", async () => {
@@ -268,9 +290,9 @@ describe("CostAnalyticsPage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Show largest spike sessions for 2026-05-02" }));
 
-    const spikePanel = await screen.findByLabelText("Largest spike sessions for 2026-05-02");
-    expect(within(spikePanel).getByRole("heading", { name: "Largest spike sessions" })).toBeInTheDocument();
-    expect(within(spikePanel).getByText("2026-05-02 - +$30.00 jump - $48.00 total")).toBeInTheDocument();
+    const spikePanel = await screen.findByLabelText("Sessions for 2026-05-02");
+    expect(within(spikePanel).getByRole("heading", { name: "Sessions on 2026-05-02" })).toBeInTheDocument();
+    expect(within(spikePanel).getByText(/\$48\.00 total.*\+\$30\.00 above baseline/)).toBeInTheDocument();
     expect(within(spikePanel).getByText("Session One")).toBeInTheDocument();
 
     fireEvent.click(within(spikePanel).getByRole("button", { name: "Open session" }));
@@ -279,7 +301,42 @@ describe("CostAnalyticsPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Hide largest spike sessions for 2026-05-02" }));
 
-    expect(screen.queryByLabelText("Largest spike sessions for 2026-05-02")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Sessions for 2026-05-02")).not.toBeInTheDocument();
+  });
+
+  it("opens a bucket's contributor sessions directly from Spend over time", async () => {
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /2026-05-02.*1 session priced/i }));
+
+    const panel = await screen.findByLabelText("Sessions for 2026-05-02");
+    expect(within(panel).getByText("Session One")).toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Close sessions for 2026-05-02" }));
+
+    expect(screen.queryByLabelText("Sessions for 2026-05-02")).not.toBeInTheDocument();
+  });
+
+  it("labels partial prices as lower bounds and suppresses unsupported comparisons", async () => {
+    getCostAnalytics.mockResolvedValueOnce({
+      ...payload,
+      meta: {
+        ...payload.meta,
+        unpriced_models: ["claude-unknown-9"],
+        costs_partial: true,
+        costs_are_lower_bound: true,
+      },
+      spikes: [],
+    });
+    renderPage();
+
+    expect(await screen.findByText("≥$48.00")).toBeInTheDocument();
+    expect(screen.getByText(/lower bound.*excludes 1 unpriced model/i)).toBeInTheDocument();
+    expect(screen.getByText("Spike detection suppressed")).toBeInTheDocument();
+    expect(screen.getByText("Model share unavailable")).toBeInTheDocument();
+    expect(screen.getAllByText("Cache comparison unavailable")).toHaveLength(2);
+    expect(screen.getByText("Priced usage only; unpriced models are excluded.")).toBeInTheDocument();
+    expect(screen.queryByText("Estimated API-equivalent cache savings")).not.toBeInTheDocument();
   });
 
   it("passes the pricing mode to the request and refetches when it flips", async () => {
@@ -309,18 +366,24 @@ describe("CostAnalyticsPage", () => {
     expect(await screen.findAllByText(/Cost estimate unavailable/)).not.toHaveLength(0);
   });
 
-  it("explains where healthy sessions should land in turn distribution mode", async () => {
+  it("describes the observed turn distribution without an arbitrary target", async () => {
     const view = renderPage();
 
-    expect(await screen.findAllByText("Outside target")).not.toHaveLength(0);
-    expect(screen.getByText("target zone")).toBeInTheDocument();
-    expect(view.container.querySelector(".tb-target-zone")).not.toBeNull();
+    expect(await screen.findByText("Observed sample")).toBeInTheDocument();
+    expect(screen.getByText("1 session")).toBeInTheDocument();
+    expect(screen.queryByText(/Outside target/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/target zone/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/cheap and steady/i)).not.toBeInTheDocument();
+    expect(view.container.querySelector(".tb-target-zone")).toBeNull();
+    expect(view.container.querySelector(".tb-reference-x")).not.toBeNull();
+    expect(view.container.querySelector(".tb-reference-y")).not.toBeNull();
     expect(view.container.querySelector(".tb-outlier-ring")).not.toBeNull();
     expect(screen.getByText("outlier turns")).toBeInTheDocument();
-    expect(screen.getByText("1 of 1")).toBeInTheDocument();
-    expect(screen.getByText("sessions land outside the cheap-and-steady zone")).toBeInTheDocument();
+    expect(screen.getByText("observed medians")).toBeInTheDocument();
+    expect(screen.getByText("median $/turn")).toBeInTheDocument();
+    expect(screen.getByText("p95 $/turn")).toBeInTheDocument();
     expect(screen.getByText(/Ring:/)).toBeInTheDocument();
-    expect(screen.getByText(/Lower-left:/)).toBeInTheDocument();
+    expect(screen.getByText(/Right:/)).toBeInTheDocument();
   });
 
   it("opens an outlier investigation card before navigating to the session page", async () => {
@@ -332,7 +395,11 @@ describe("CostAnalyticsPage", () => {
     expect(onOpenSession).not.toHaveBeenCalled();
     expect(await screen.findByLabelText("Turn outlier investigation")).toBeInTheDocument();
     expect(await screen.findByRole("img", { name: "Turn cost drilldown" })).toBeInTheDocument();
-    expect(await screen.findByText(/Repeated tool activity appears in this turn/)).toBeInTheDocument();
+    expect(await screen.findByText(/It includes 6 tool calls/)).toBeInTheDocument();
+    expect(screen.getByText(/It records 2 subagent events/)).toBeInTheDocument();
+    expect(screen.getByText(/It records 1 tool error/)).toBeInTheDocument();
+    expect(screen.getByText("Observed context")).toBeInTheDocument();
+    expect(screen.queryByText(/orchestration overhead|extra model calls|retries or fallback work pushed spend/i)).not.toBeInTheDocument();
     expect(view.container.querySelector(".turn-insight-layout > .turn-detail-card")).not.toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Open session page" }));
@@ -352,6 +419,16 @@ describe("CostAnalyticsPage", () => {
     expect(
       await screen.findByText(/priced at current rates for every session/i),
     ).toBeInTheDocument();
+  });
+
+  it("offers the persisted historical-pricing mode as a labeled Cost control", async () => {
+    const onHistoricalChange = vi.fn();
+    renderPage(() => {}, true, "local", onHistoricalChange);
+
+    const control = await screen.findByRole("checkbox", { name: "Historical pricing" });
+    expect(control).toBeChecked();
+    fireEvent.click(control);
+    expect(onHistoricalChange).toHaveBeenCalledWith(false);
   });
 
   it("shows an error instead of loading forever when analytics fails", async () => {

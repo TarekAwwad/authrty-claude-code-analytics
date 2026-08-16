@@ -4,7 +4,7 @@ Subscription limit hits are already ingested: each one is an assistant event
 whose raw_json carries error == "rate_limit" (HTTP 429) and whose message row
 has model '<synthetic>' with the limit text in text_preview. This module
 detects those events, folds all assistant usage into 5-hour windows priced by
-the shared pricing timeline, and derives the measured cap zones.
+the shared pricing timeline, and derives observed session-hit levels.
 
 Corpus-wide by design: limits are account-level, so there is no project
 filter. Computation is on-demand from the rebuildable SQLite cache, like
@@ -34,7 +34,6 @@ WINDOW_SPAN = timedelta(hours=5)
 # A parsed reset stamp may sit slightly past start+5h (stamps are rounded and
 # the window start is inferred from the first logged call). Snap within this.
 SNAP_TOLERANCE = timedelta(minutes=30)
-NEAR_MISS_RATIO = 0.6
 RECENT_DAYS = 28
 _DEDUP_BUCKET_S = 300  # fallback dedup bucket for hits without a reset stamp
 
@@ -43,7 +42,9 @@ METHOD_NOTE = (
     "Claude surface, so this page always covers the whole corpus. Dollars are "
     "API-equivalent value, not an invoice. Hit counts are a lower bound (only "
     "hits recorded inside exported sessions are visible), and usage outside "
-    "Claude Code shares the same pool but is invisible here."
+    "Claude Code shares the same pool but is invisible here. Time until reset "
+    "is the parsed reset timestamp minus the recorded hit timestamp, not "
+    "observed downtime."
 )
 
 
@@ -70,9 +71,9 @@ def parse_reset_at(text: str, hit_at: datetime) -> datetime | None:
     """Absolute reset time from "resets 12:30pm (Europe/Paris)"-style text.
 
     The wall-clock time is anchored in the named timezone; without one the
-    stamp is ambiguous and we return None (the hit still counts, its blocked
-    time is just unknown). Rolls to the next day when the parsed time is not
-    after the hit.
+    stamp is ambiguous and we return None (the hit still counts, but remaining
+    time until reset is unknown). Rolls to the next day when the parsed time is
+    not after the hit.
     """
     match = _RESET_RE.search(text or "")
     if not match or not match.group("tz"):
@@ -123,10 +124,11 @@ class LimitHit:
     window_index: int | None = None  # filled by fold_windows
 
     @property
-    def blocked_minutes(self) -> float | None:
+    def minutes_until_reset(self) -> float | None:
         if self.reset_at is None:
             return None
-        return max(0.0, (self.reset_at - self.ts).total_seconds() / 60)
+        minutes = (self.reset_at - self.ts).total_seconds() / 60
+        return minutes if minutes >= 0 else None
 
 
 def _hit_text(preview: str, raw: dict) -> str:
@@ -306,12 +308,14 @@ def _era_for(ts: datetime, history: list[dict[str, str]]) -> str:
 
 
 def _hit_payload(hit: LimitHit) -> dict[str, Any]:
-    blocked = hit.blocked_minutes
+    minutes_until_reset = hit.minutes_until_reset
     return {
         "ts": hit.ts.isoformat(),
         "kind": hit.kind,
         "reset_at": hit.reset_at.isoformat() if hit.reset_at else None,
-        "blocked_minutes": round(blocked, 1) if blocked is not None else None,
+        "minutes_until_reset": (
+            round(minutes_until_reset, 1) if minutes_until_reset is not None else None
+        ),
         "usage_at_hit": round(hit.usage_at_hit, 4) if hit.usage_at_hit is not None else None,
         "usage_at_hit_tokens": hit.usage_at_hit_tokens,
         "occurrence_count": hit.occurrence_count,
@@ -322,38 +326,28 @@ def _hit_payload(hit: LimitHit) -> dict[str, Any]:
 
 
 @dataclass(frozen=True)
-class _CapStats:
-    cap_median: float | None
-    near_miss: int
+class _HitLevelStats:
+    median: float | None
     percentile: float | None
 
 
-def _cap_stats(
-    zone: Sequence[float],
-    windows: list[UsageWindow],
-    era_indices: list[int],
-    hit_window_indices: set[int | None],
+def _hit_level_stats(
+    observed_levels: Sequence[float],
+    windows: Sequence[UsageWindow],
     value_of: Callable[[UsageWindow], float],
-) -> _CapStats:
-    """Cap zone, near-miss count, and percentile for one measurement basis.
+) -> _HitLevelStats:
+    """Observed median hit level and its window percentile for one basis.
 
-    A zero median cap means the measured hits carried no visible usage (the
-    shared pool filled elsewhere); near-miss and percentile would be
-    meaningless against a zero threshold, so they stay unset for that basis.
+    A zero median means the recorded hits carried no visible usage (the shared
+    pool may have filled elsewhere), so its percentile is not informative.
     """
-    if not zone:
-        return _CapStats(None, 0, None)
-    cap_median = median(zone)
-    if cap_median <= 0:
-        return _CapStats(cap_median, 0, None)
-    near_miss = sum(
-        1 for i in era_indices
-        if i not in hit_window_indices
-        and value_of(windows[i]) >= NEAR_MISS_RATIO * cap_median
-    )
-    era_windows = [windows[i] for i in era_indices]
-    below = sum(1 for w in era_windows if value_of(w) <= cap_median)
-    return _CapStats(cap_median, near_miss, round(below / len(era_windows), 4))
+    if not observed_levels:
+        return _HitLevelStats(None, None)
+    observed_median = median(observed_levels)
+    if observed_median <= 0 or not windows:
+        return _HitLevelStats(observed_median, None)
+    below = sum(1 for window in windows if value_of(window) <= observed_median)
+    return _HitLevelStats(observed_median, round(below / len(windows), 4))
 
 
 def limits_analytics(
@@ -364,7 +358,7 @@ def limits_analytics(
     date_to: str | None = None,
     plan_history: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    """Limit hits, priced 5-hour windows, and per-era cap zones."""
+    """Limit receipts, priced five-hour windows, and observed hit levels."""
     history = sorted(
         (
             row for row in (plan_history or [])
@@ -381,13 +375,16 @@ def limits_analytics(
         ts = _parse_ts(event.ts)
         if ts is None:
             continue
-        if event.model != SYNTHETIC_MODEL and not event.priced:
+        if event.model == SYNTHETIC_MODEL:
+            continue
+        if not event.priced:
             costs_partial = True
         usage.append(UsageEvent(ts=ts, cost=event.cost, tokens=event.tokens))
     usage.sort(key=lambda u: u.ts)
 
     hits = detect_limit_hits(conn, date_from=date_from, date_to=date_to)
-    windows = fold_windows(usage, hits)
+    session_hits = [hit for hit in hits if hit.kind == "session"]
+    windows = fold_windows(usage, session_hits)
     for window in windows:
         window.era = _era_for(window.start, history)
 
@@ -402,42 +399,61 @@ def limits_analytics(
     for era in era_order:
         era_indices = [i for i, w in enumerate(windows) if w.era == era]
         era_windows = [windows[i] for i in era_indices]
-        era_hits = [h for h in hits
-                    if h.window_index is not None and windows[h.window_index].era == era]
-        session_hits = [h for h in era_hits if h.kind == "session"]
-        zone = sorted(h.usage_at_hit for h in session_hits if h.usage_at_hit is not None)
-        token_zone = sorted(
-            h.usage_at_hit_tokens
-            for h in session_hits
-            if h.usage_at_hit_tokens is not None
+        era_session_hits = [
+            hit for hit in session_hits
+            if hit.window_index is not None and windows[hit.window_index].era == era
+        ]
+        observed_hit_levels_usd = sorted(
+            hit.usage_at_hit
+            for hit in era_session_hits
+            if hit.usage_at_hit is not None
         )
-        hit_window_indices = {h.window_index for h in session_hits}
-        usd = _cap_stats(zone, windows, era_indices, hit_window_indices,
-                         lambda w: w.value_usd)
-        tokens = _cap_stats(token_zone, windows, era_indices, hit_window_indices,
-                            lambda w: w.tokens)
-        blocked = sum(h.blocked_minutes or 0.0 for h in era_hits)
+        observed_hit_levels_tokens = sorted(
+            hit.usage_at_hit_tokens
+            for hit in era_session_hits
+            if hit.usage_at_hit_tokens is not None
+        )
+        usd = _hit_level_stats(
+            observed_hit_levels_usd, era_windows, lambda window: window.value_usd,
+        )
+        tokens = _hit_level_stats(
+            observed_hit_levels_tokens, era_windows, lambda window: window.tokens,
+        )
+        minutes_until_reset = sum(
+            hit.minutes_until_reset or 0.0 for hit in era_session_hits
+        )
         eras_payload.append({
             "era": era,
             "window_count": len(era_windows),
-            "session_hit_count": len(session_hits),
-            "blocked_minutes": round(blocked, 1),
-            "cap_median_usd": round(usd.cap_median, 4) if usd.cap_median is not None else None,
-            "cap_min_usd": round(zone[0], 4) if zone else None,
-            "cap_max_usd": round(zone[-1], 4) if zone else None,
-            "cap_median_tokens": tokens.cap_median,
-            "cap_min_tokens": token_zone[0] if token_zone else None,
-            "cap_max_tokens": token_zone[-1] if token_zone else None,
-            "near_miss_count": usd.near_miss,
-            "near_miss_count_tokens": tokens.near_miss,
-            "cap_percentile": usd.percentile,
-            "cap_percentile_tokens": tokens.percentile,
-            "usage_at_hit_usd": [round(v, 4) for v in zone],
-            "usage_at_hit_tokens": token_zone,
+            "session_hit_count": len(era_session_hits),
+            "minutes_until_reset": round(minutes_until_reset, 1),
+            "hit_level_median_usd": (
+                round(usd.median, 4) if usd.median is not None else None
+            ),
+            "hit_level_min_usd": (
+                round(observed_hit_levels_usd[0], 4) if observed_hit_levels_usd else None
+            ),
+            "hit_level_max_usd": (
+                round(observed_hit_levels_usd[-1], 4) if observed_hit_levels_usd else None
+            ),
+            "hit_level_median_tokens": tokens.median,
+            "hit_level_min_tokens": (
+                observed_hit_levels_tokens[0] if observed_hit_levels_tokens else None
+            ),
+            "hit_level_max_tokens": (
+                observed_hit_levels_tokens[-1] if observed_hit_levels_tokens else None
+            ),
+            "hit_level_percentile": usd.percentile,
+            "hit_level_percentile_tokens": tokens.percentile,
+            "usage_at_hit_usd": [round(value, 4) for value in observed_hit_levels_usd],
+            "usage_at_hit_tokens": observed_hit_levels_tokens,
         })
 
-    blocked_total = sum(h.blocked_minutes or 0.0 for h in hits)
-    last_ts = usage[-1].ts if usage else None
+    minutes_until_reset_total = sum(hit.minutes_until_reset or 0.0 for hit in hits)
+    last_ts = max(
+        (sequence[-1].ts for sequence in (usage, hits) if sequence),
+        default=None,
+    )
     recent = [h for h in hits
               if last_ts is not None and h.ts >= last_ts - timedelta(days=RECENT_DAYS)]
     return {
@@ -447,7 +463,7 @@ def limits_analytics(
             "costs_partial": costs_partial,
             "total_hits": len(hits),
             "total_windows": len(windows),
-            "blocked_minutes": round(blocked_total, 1),
+            "minutes_until_reset": round(minutes_until_reset_total, 1),
             "hits_per_week_recent": round(len(recent) / (RECENT_DAYS / 7), 2),
             "hit_counts": dict(Counter(h.kind for h in hits)),
             "plan_history": history,

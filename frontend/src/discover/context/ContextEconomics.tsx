@@ -13,8 +13,6 @@ interface Props {
   onOpenSession: (sessionId: number, eventId?: number | null) => void;
 }
 
-const SUPPORT_OPTIONS = [1, 3, 5, 10];
-
 export { formatUsd, formatTokens } from "../formatting";
 
 export function findingKey(finding: ContextFinding): string {
@@ -23,15 +21,14 @@ export function findingKey(finding: ContextFinding): string {
 
 export default function ContextEconomics({ projects, onOpenSession }: Props) {
   const [projectId, setProjectId] = React.useState<number | null>(null);
-  const [minSupport, setMinSupport] = React.useState(3);
-  // Hierarchy: archetype (kind of waste, tabs) → finding (which session/event,
+  // Hierarchy: archetype (kind of opportunity, tabs) → finding (which session/event,
   // list) → investigator (the evidence). Both selections fall back to the
   // first available entry so the board always shows evidence.
   const [archetypeKey, setArchetypeKey] = React.useState<string | null>(null);
   const [selectedFindingKey, setSelectedFindingKey] = React.useState<string | null>(null);
   const query = useQuery({
-    queryKey: ["context-economics", projectId, minSupport],
-    queryFn: () => getContextEconomics({ projectId, minSupport }),
+    queryKey: ["context-economics", projectId],
+    queryFn: () => getContextEconomics({ projectId }),
     placeholderData: (previous) => previous,
     refetchOnWindowFocus: false,
     staleTime: 60_000,
@@ -96,21 +93,19 @@ export default function ContextEconomics({ projects, onOpenSession }: Props) {
                 <option key={p.id} value={p.id}>{p.display_name}</option>
               ))}
             </select>
-            <select
-              aria-label="Minimum support"
-              value={minSupport}
-              onChange={(e) => setMinSupport(Number(e.target.value))}
-            >
-              {SUPPORT_OPTIONS.map((o) => (
-                <option key={o} value={o}>Min {o} finding{o === 1 ? "" : "s"}</option>
-              ))}
-            </select>
           </div>
         </div>
 
-        {!meta.cost_available && (
-          <p className="tile-note">Price table unavailable — showing token counts only.</p>
-        )}
+        {meta.costs_partial ? (
+          <p className="tile-note">
+            Pricing is partial — dollar estimates exclude unpriced models: {meta.unpriced_models.join(", ")}.
+            Percentage breakdowns are hidden.
+          </p>
+        ) : !meta.cost_available ? (
+          <p className="tile-note">
+            Price table unavailable — estimated context opportunity is shown in tokens only.
+          </p>
+        ) : null}
 
         <TaxMeterHero
           meta={meta}
@@ -122,10 +117,15 @@ export default function ContextEconomics({ projects, onOpenSession }: Props) {
         {activeArchetype ? (
           <div className="context-board">
             <div className="context-side">
-              <ArchetypeBrief archetype={activeArchetype} costAvailable={meta.cost_available} />
+              <ArchetypeBrief
+                archetype={activeArchetype}
+                costAvailable={meta.cost_available}
+                costsPartial={meta.costs_partial}
+              />
               <FindingsPanel
                 archetype={activeArchetype}
                 costAvailable={meta.cost_available}
+                costsPartial={meta.costs_partial}
                 activeFindingKey={activeFinding ? findingKey(activeFinding) : null}
                 onSelectFinding={(finding) => setSelectedFindingKey(findingKey(finding))}
               />
@@ -143,7 +143,7 @@ export default function ContextEconomics({ projects, onOpenSession }: Props) {
           </div>
         ) : (
           <div className="empty-state">
-            No archetype meets the current support threshold — lower “Min findings” to explore.
+            No supported context opportunities were detected for this selection.
           </div>
         )}
       </div>

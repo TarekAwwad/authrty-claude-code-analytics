@@ -25,8 +25,8 @@ function dayLabel(iso: string): string {
 }
 
 // One bar per reconstructed 5-hour window, uniform spacing. Hits are marked by
-// color; era changes get a background band with the plan label. Bars widen (to
-// a cap) to fill the panel; past that the chart scrolls horizontally inside
+// color; era changes get a background band with the plan label. Bars widen (up
+// to a limit) to fill the panel; past that the chart scrolls horizontally inside
 // its container so the page never scrolls sideways, and the metric axis stays
 // fixed outside the scroller.
 export default function WindowsTimeline({ windows, hits, basis, selected, onSelectWindow }: {
@@ -165,7 +165,7 @@ export default function WindowsTimeline({ windows, hits, basis, selected, onSele
                         onKeyDown={(e) => e.key === "Enter" && onSelectWindow(i)}
                         onMouseMove={(e) => show(e, dayLabel(w.start), [
                           `${formattedValue} in this window`,
-                          ...(hit ? [`${w.hit_kinds.join(", ")} limit hit`] : []),
+                          ...(hit ? [`recorded ${w.hit_kinds.join(", ")} limit hit`] : []),
                           ...(w.era ? [`plan: ${w.era}`] : []),
                         ])}
                         onMouseLeave={hide} />
@@ -178,7 +178,7 @@ export default function WindowsTimeline({ windows, hits, basis, selected, onSele
       </div>
       <div className="chip-legend card-bottom-legend limit-legend">
         <span><i className="is-window" />window usage</span>
-        <span><i className="is-hit" />limit hit</span>
+        <span><i className="is-hit" />recorded session-limit hit</span>
         {hasEras && <span><i className="is-era" />plan era</span>}
         <em>{`y-axis: ${basisLabel(basis)} · x-axis: window start date`}</em>
       </div>

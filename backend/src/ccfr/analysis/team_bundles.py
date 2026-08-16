@@ -1,7 +1,7 @@
 """Team-strict privacy bundle export/import and dashboard aggregation.
 
-The bundle is built from an explicit structural allowlist and reuses the
-contribution sanitizers for model/tool/subagent buckets. Imports are
+The bundle is built from an explicit structural allowlist and uses shared
+bundle sanitizers for model/tool/subagent buckets. Imports are
 canonicalized before persistence so the team tables never need raw Claude
 export content, previews, paths, commands, prompts, model aliases, or MCP names.
 """
@@ -17,16 +17,23 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ccfr.analysis.contribution import (
+from ccfr.analysis.bundle_sanitization import (
     KNOWN_STOP_REASONS,
     bucket_agent_type,
     bucket_model,
+    date_only,
+    duration_s,
     sanitize_symbol,
+    session_models,
+    session_stats,
+    session_stop_reasons,
+    session_subagents,
+    session_tokens,
 )
-from ccfr.analysis import contribution as contribution_helpers
 from ccfr.naming import project_display_name
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+PREVIOUS_SCHEMA_VERSION = 2
 LEGACY_SCHEMA_VERSION = 1
 PROFILE = "team_strict"  # legacy v1 wire profile == the structural level
 DEFAULT_PROVIDER = "claude"
@@ -40,6 +47,9 @@ RESERVED_LEVELS = ("sessions", "raw")
 _EXT_RE = re.compile(r"^[a-z0-9_+-]{1,12}\Z")
 _MAX_TOOLS_PER_SESSION = 300
 _MAX_FILE_TYPES_PER_SESSION = 100
+MAX_SESSIONS_PER_BUNDLE = 50_000
+MAX_GENERATED_SEQ = (1 << 63) - 1
+MAX_COUNTER_VALUE = (1 << 63) - 1
 
 
 def privacy_level_of(profile: str | None) -> str:
@@ -54,10 +64,10 @@ STAT_KEYS = (
     "subagents",
     "errors",
     "system",
-    "loops",
-    "max_repeat",
     "persisted_outputs",
 )
+LEGACY_STAT_KEYS = (*STAT_KEYS, "loops", "max_repeat")
+DASHBOARD_STAT_KEYS = STAT_KEYS
 SESSION_KEYS = {
     "pid",
     "sid",
@@ -70,10 +80,9 @@ SESSION_KEYS = {
     "tokens_by_model",
     "stats",
     "stop_reasons",
-    "risk_categories",
     "subagents",
-    "sequence",
 }
+LEGACY_SESSION_KEYS = SESSION_KEYS | {"risk_categories", "sequence"}
 TOP_LEVEL_KEYS = {
     "schema_version",
     "profile",
@@ -85,7 +94,12 @@ TOP_LEVEL_KEYS = {
     "sessions",
 }
 SESSION_KEYS_TEAM = (SESSION_KEYS - {"pid"}) | {"project_name", "tools", "file_types"}
-TOP_LEVEL_KEYS_V2 = {
+LEGACY_SESSION_KEYS_TEAM = (LEGACY_SESSION_KEYS - {"pid"}) | {
+    "project_name",
+    "tools",
+    "file_types",
+}
+TOP_LEVEL_KEYS_MODERN = {
     "schema_version",
     "privacy_level",
     "bundle_id",
@@ -140,7 +154,7 @@ class TeamBundle:
 
     def to_dict(self) -> dict[str, Any]:
         data = self.base_dict()
-        data["bundle_id"] = self.bundle_id or bundle_content_id_v2(data)
+        data["bundle_id"] = self.bundle_id or bundle_content_id_v3(data)
         return data
 
 
@@ -174,6 +188,11 @@ def bundle_content_id_v2(bundle: dict[str, Any]) -> str:
         base["member_name"] = bundle.get("member_name")
     encoded = json.dumps(base, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def bundle_content_id_v3(bundle: dict[str, Any]) -> str:
+    """Hash a v3 bundle; the modern envelope matches v2 but the session allowlist does not."""
+    return bundle_content_id_v2(bundle)
 
 
 def normalize_project_key(name: str) -> str:
@@ -315,19 +334,18 @@ def build_team_bundle(
     for row in session_rows:
         session_pk = int(row["id"])
         export_name = str(row["export_name"])
+        observed_stats = session_stats(conn, session_pk)
         session: dict[str, Any] = {
             "sid": _hash_id(salt, "session", export_name, row["session_id"]),
             "provider": DEFAULT_PROVIDER,
-            "models": contribution_helpers._session_models(conn, session_pk),
-            "first_date": contribution_helpers._date_only(row["first_ts"]),
-            "last_date": contribution_helpers._date_only(row["last_ts"]),
-            "duration_s": contribution_helpers._duration_s(row["first_ts"], row["last_ts"]),
-            "tokens": contribution_helpers._session_tokens(conn, session_pk),
+            "models": session_models(conn, session_pk),
+            "first_date": date_only(row["first_ts"]),
+            "last_date": date_only(row["last_ts"]),
+            "duration_s": duration_s(row["first_ts"], row["last_ts"]),
+            "tokens": session_tokens(conn, session_pk),
             "tokens_by_model": _session_tokens_by_model(conn, session_pk),
-            "stats": contribution_helpers._session_stats(conn, session_pk),
-            "stop_reasons": contribution_helpers._session_stop_reasons(conn, session_pk),
-            "risk_categories": contribution_helpers._session_risk_categories(conn, session_pk),
-            "sequence": contribution_helpers._session_sequence(conn, session_pk),
+            "stats": {key: observed_stats.get(key, 0) for key in STAT_KEYS},
+            "stop_reasons": session_stop_reasons(conn, session_pk),
         }
         if privacy_level == LEVEL_TEAM:
             default_label = project_display_name(export_name, row["inferred_cwd"])
@@ -337,7 +355,7 @@ def build_team_bundle(
             session["file_types"] = _session_file_types(conn, session_pk)
         else:
             session["pid"] = _hash_id(salt, "project", export_name)
-            session["subagents"] = contribution_helpers._session_subagents(conn, session_pk)
+            session["subagents"] = session_subagents(conn, session_pk)
         sessions.append(session)
 
     raw_bundle = TeamBundle(
@@ -367,7 +385,6 @@ def team_bundle_manifest(bundle: TeamBundle) -> dict[str, Any]:
     manifest: dict[str, Any] = {
         "privacy_level": bundle.privacy_level,
         "session_count": len(sessions),
-        "sequence_step_count": sum(len(session["sequence"]) for session in sessions),
     }
     if bundle.privacy_level == LEVEL_TEAM:
         manifest["included_fields"] = [
@@ -375,13 +392,14 @@ def team_bundle_manifest(bundle: TeamBundle) -> dict[str, Any]:
             "Real tool, MCP server, and subagent names with call counts",
             "File-type mix (extensions only — never paths or file names)",
             "Provider and bucketed model families",
-            "Date-only session timing and structural per-step deltas",
+            "Date-only session timing and duration",
             "Token counts with cache breakdowns, split per model family",
-            "Session stats, stop reasons, risk categories",
+            "Observed session counts and stop reasons",
         ]
         manifest["excluded"] = [
             "Prompts, assistant text, reasoning, titles, and free text",
             "Paths, cwd, branches, file names, shell commands, and tool IO",
+            "Risk categories, inferred patterns, loop/max-repeat scores, and event sequences",
             "Raw JSON and previews",
         ]
         manifest["fingerprint_caveat"] = (
@@ -392,19 +410,20 @@ def team_bundle_manifest(bundle: TeamBundle) -> dict[str, Any]:
         manifest["included_fields"] = [
             "Pseudonymous member, project, and session IDs",
             "Provider and bucketed model families",
-            "Date-only session timing and structural per-step deltas",
+            "Date-only session timing and duration",
             "Token counts with cache breakdowns, split per model family",
-            "Session stats, stop reasons, risk categories",
-            "Bucketed subagent types and structural event sequence",
+            "Observed session counts and stop reasons",
+            "Bucketed subagent types and event counts",
         ]
         manifest["excluded"] = [
             "Raw JSON and previews",
             "Prompts, assistant text, reasoning, titles, and free text",
             "Paths, cwd, branches, file names, shell commands, and tool IO",
             "Raw model aliases, MCP server names, and custom subagent names",
+            "Risk categories, inferred patterns, loop/max-repeat scores, and event sequences",
         ]
         manifest["fingerprint_caveat"] = (
-            "This bundle contains no content, but token counts and structural sequences "
+            "This bundle contains no content, but exact token counts and date-only timing "
             "can still be distinctive."
         )
     return manifest
@@ -416,8 +435,10 @@ def validate_team_bundle(payload: Any) -> dict[str, Any]:
     version = payload.get("schema_version")
     if version == LEGACY_SCHEMA_VERSION:
         return _validate_v1(payload)
-    if version == SCHEMA_VERSION:
+    if version == PREVIOUS_SCHEMA_VERSION:
         return _validate_v2(payload)
+    if version == SCHEMA_VERSION:
+        return _validate_v3(payload)
     raise ValueError("unsupported team bundle schema_version")
 
 
@@ -437,6 +458,10 @@ def _validate_v1(payload: dict[str, Any]) -> dict[str, Any]:
     raw_sessions = payload.get("sessions")
     if not isinstance(raw_sessions, list):
         raise ValueError("sessions must be a list")
+    if len(raw_sessions) > MAX_SESSIONS_PER_BUNDLE:
+        raise ValueError(
+            f"sessions list is too long (max {MAX_SESSIONS_PER_BUNDLE})"
+        )
 
     raw_base = {
         "schema_version": LEGACY_SCHEMA_VERSION,
@@ -451,14 +476,14 @@ def _validate_v1(payload: dict[str, Any]) -> dict[str, Any]:
     sessions: list[dict[str, Any]] = []
     seen_sids: set[str] = set()
     for index, raw_session in enumerate(raw_sessions):
-        session = _validate_session(raw_session, index, LEVEL_STRUCTURAL)
+        session = _validate_session(raw_session, index, LEVEL_STRUCTURAL, legacy=True)
         sid = session["sid"]
         if sid in seen_sids:
             raise ValueError("duplicate session id in team bundle")
         seen_sids.add(sid)
         sessions.append(session)
 
-    canonical: dict[str, Any] = {
+    legacy_canonical: dict[str, Any] = {
         "schema_version": LEGACY_SCHEMA_VERSION,
         "profile": PROFILE,
         "privacy_level": LEVEL_STRUCTURAL,
@@ -469,18 +494,32 @@ def _validate_v1(payload: dict[str, Any]) -> dict[str, Any]:
         "app_version": app_version,
         "sessions": sessions,
     }
-    computed_id = bundle_content_id(canonical)
+    computed_id = bundle_content_id(legacy_canonical)
     supplied_id = payload.get("bundle_id")
     if supplied_id is not None and str(supplied_id) not in {computed_id, legacy_export_id}:
         raise ValueError("bundle_id does not match bundle content")
+    canonical = dict(legacy_canonical)
+    canonical["sessions"] = [_strip_deprecated_session(session) for session in sessions]
     canonical["bundle_id"] = computed_id
     return canonical
 
 
 def _validate_v2(payload: dict[str, Any]) -> dict[str, Any]:
-    unknown = set(payload) - TOP_LEVEL_KEYS_V2
+    return _validate_modern(payload, PREVIOUS_SCHEMA_VERSION, legacy=True)
+
+
+def _validate_v3(payload: dict[str, Any]) -> dict[str, Any]:
+    return _validate_modern(payload, SCHEMA_VERSION, legacy=False)
+
+
+def _validate_modern(
+    payload: dict[str, Any], version: int, *, legacy: bool
+) -> dict[str, Any]:
+    unknown = set(payload) - TOP_LEVEL_KEYS_MODERN
     if unknown:
         raise ValueError(f"unexpected team bundle field: {sorted(unknown)[0]}")
+    if payload.get("schema_version") != version:
+        raise ValueError("unsupported team bundle schema_version")
     level = payload.get("privacy_level")
     if level in RESERVED_LEVELS:
         raise ValueError(f"privacy_level not yet supported: {level}")
@@ -500,19 +539,23 @@ def _validate_v2(payload: dict[str, Any]) -> dict[str, Any]:
     raw_sessions = payload.get("sessions")
     if not isinstance(raw_sessions, list):
         raise ValueError("sessions must be a list")
+    if len(raw_sessions) > MAX_SESSIONS_PER_BUNDLE:
+        raise ValueError(
+            f"sessions list is too long (max {MAX_SESSIONS_PER_BUNDLE})"
+        )
 
     sessions: list[dict[str, Any]] = []
     seen_sids: set[str] = set()
     for index, raw_session in enumerate(raw_sessions):
-        session = _validate_session(raw_session, index, level)
+        session = _validate_session(raw_session, index, level, legacy=legacy)
         sid = session["sid"]
         if sid in seen_sids:
             raise ValueError("duplicate session id in team bundle")
         seen_sids.add(sid)
         sessions.append(session)
 
-    canonical: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
+    hash_canonical: dict[str, Any] = {
+        "schema_version": version,
         "privacy_level": level,
         "profile": level,  # stored in the team_bundles.profile column
         "member_id": member_id,
@@ -523,13 +566,20 @@ def _validate_v2(payload: dict[str, Any]) -> dict[str, Any]:
         "sessions": sessions,
     }
     if level == LEVEL_TEAM:
-        canonical_for_id = dict(canonical)
+        canonical_for_id = dict(hash_canonical)
     else:
-        canonical_for_id = {k: v for k, v in canonical.items() if k != "member_name"}
-    computed_id = bundle_content_id_v2(canonical_for_id)
+        canonical_for_id = {k: v for k, v in hash_canonical.items() if k != "member_name"}
+    computed_id = (
+        bundle_content_id_v2(canonical_for_id)
+        if legacy
+        else bundle_content_id_v3(canonical_for_id)
+    )
     supplied_id = payload.get("bundle_id")
     if supplied_id is not None and str(supplied_id) != computed_id:
         raise ValueError("bundle_id does not match bundle content")
+    canonical = dict(hash_canonical)
+    if legacy:
+        canonical["sessions"] = [_strip_deprecated_session(session) for session in sessions]
     canonical["bundle_id"] = computed_id
     return canonical
 
@@ -656,11 +706,9 @@ def import_team_bundle(
                     _json(session["tokens_by_model"]),
                     _json(session["stats"]),
                     _json(session["stop_reasons"]),
-                    _json(session["risk_categories"]),
                     _json(session["subagents"]),
                     _json(session.get("tools", [])),
                     _json(session.get("file_types", [])),
-                    _json(session["sequence"]),
                 )
             )
         conn.executemany(
@@ -669,9 +717,9 @@ def import_team_bundle(
                 team_bundle_id, member_id, project_id, project_name, session_id, provider,
                 first_date, last_date, duration_s, models_json, tokens_json,
                 tokens_by_model_json, stats_json, stop_reasons_json,
-                risk_categories_json, subagents_json, tools_json, file_types_json, sequence_json
+                subagents_json, tools_json, file_types_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             session_rows,
         )
@@ -721,10 +769,10 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
     sessions = conn.execute(
         """
         SELECT tb.bundle_id, tbs.member_id, tbs.project_id, tbs.project_name, tbs.provider,
-               tbs.first_date, tbs.last_date, tbs.duration_s, tbs.models_json,
-               tbs.tokens_json, tbs.stats_json, tbs.stop_reasons_json,
-               tbs.risk_categories_json, tbs.subagents_json, tbs.tools_json,
-               tbs.file_types_json, tbs.sequence_json
+               tbs.first_date, tbs.last_date, tbs.duration_s,
+               tbs.tokens_json, tbs.tokens_by_model_json, tbs.stats_json,
+               tbs.stop_reasons_json, tbs.subagents_json, tbs.tools_json,
+               tbs.file_types_json
         FROM team_bundle_sessions tbs
         JOIN team_bundles tb ON tb.id = tbs.team_bundle_id
         ORDER BY tbs.first_date, tbs.id
@@ -732,12 +780,10 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
     ).fetchall()
 
     token_totals = {key: 0 for key in TOKEN_KEYS}
-    stat_totals = {key: 0 for key in STAT_KEYS}
+    stat_totals = {key: 0 for key in DASHBOARD_STAT_KEYS}
     provider_counts: Counter[str] = Counter()
-    model_counts: Counter[str] = Counter()
+    model_token_totals: Counter[str] = Counter()
     stop_reason_counts: Counter[str] = Counter()
-    risk_counts: Counter[str] = Counter()
-    sequence_counts: Counter[str] = Counter()
     subagent_events: Counter[str] = Counter()
     subagent_sessions: Counter[str] = Counter()
     over_time: dict[str, dict[str, int]] = defaultdict(lambda: {"session_count": 0, "tokens": 0})
@@ -754,7 +800,7 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
 
     member_summary: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"label": "", "member_ids": set(), "bundle_ids": set(), "project_ids": set(),
-                 "session_count": 0, "tokens": 0}
+                 "session_count": 0, "tokens": 0, "error_count": 0}
     )
     project_summary: dict[str, dict[str, Any]] = {}
     tool_calls_total: Counter[str] = Counter()
@@ -775,29 +821,27 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
     for row in sessions:
         member_id = str(row["member_id"])
         tokens = _loads_dict(row["tokens_json"])
+        tokens_by_model = _loads_dict(row["tokens_by_model_json"])
         stats = _loads_dict(row["stats_json"])
-        models = _loads_list(row["models_json"])
         stop_reasons = _loads_dict(row["stop_reasons_json"])
-        risks = _loads_list(row["risk_categories_json"])
         subagents = _loads_list(row["subagents_json"])
-        sequence = _loads_list(row["sequence_json"])
 
         for key in TOKEN_KEYS:
             token_totals[key] += _nonnegative_int(tokens.get(key))
-        for key in STAT_KEYS:
-            value = _nonnegative_int(stats.get(key))
-            if key == "max_repeat":
-                stat_totals[key] = max(stat_totals[key], value)
-            else:
-                stat_totals[key] += value
+        for key in DASHBOARD_STAT_KEYS:
+            stat_totals[key] += _nonnegative_int(stats.get(key))
 
         provider_counts[str(row["provider"] or DEFAULT_PROVIDER)] += 1
-        for model in models:
-            model_counts[str(model)] += 1
+        for model, model_tokens in tokens_by_model.items():
+            if not isinstance(model_tokens, dict):
+                continue
+            observed_tokens = _nonnegative_int(model_tokens.get("input")) + _nonnegative_int(
+                model_tokens.get("output")
+            )
+            if observed_tokens > 0:
+                model_token_totals[str(model)] += observed_tokens
         for reason, count in stop_reasons.items():
             stop_reason_counts[str(reason)] += _nonnegative_int(count)
-        for category in risks:
-            risk_counts[str(category)] += 1
         seen_types: set[str] = set()
         for subagent in subagents:
             if not isinstance(subagent, dict):
@@ -807,10 +851,6 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
             seen_types.add(agent_type)
         for agent_type in seen_types:
             subagent_sessions[agent_type] += 1
-        for step in sequence:
-            if isinstance(step, dict) and step.get("sym"):
-                sequence_counts[str(step["sym"])] += 1
-
         session_tokens = _nonnegative_int(tokens.get("input")) + _nonnegative_int(tokens.get("output"))
 
         project_key = str(row["project_id"])
@@ -851,6 +891,9 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
         member_summary[_member_key(member_id)]["project_ids"].add(project_key)
         member_summary[_member_key(member_id)]["session_count"] += 1
         member_summary[_member_key(member_id)]["tokens"] += session_tokens
+        member_summary[_member_key(member_id)]["error_count"] += _nonnegative_int(
+            stats.get("errors")
+        )
         if row["first_date"]:
             bucket = str(row["first_date"])
             first_dates.append(bucket)
@@ -870,10 +913,19 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
         },
         "tokens": {**token_totals, "total": token_totals["input"] + token_totals["output"]},
         "stats": stat_totals,
+        "reliability": {
+            "error_count": stat_totals["errors"],
+            "session_count": len(sessions),
+            "errors_per_session": stat_totals["errors"] / len(sessions) if sessions else 0.0,
+        },
         "providers": _count_entries(provider_counts, "provider"),
-        "models": _count_entries(model_counts, "model"),
+        "models": [
+            {"model": model, "tokens": tokens}
+            for model, tokens in sorted(
+                model_token_totals.items(), key=lambda item: (-item[1], item[0])
+            )
+        ],
         "stop_reasons": _count_entries(stop_reason_counts, "reason", count_key="count"),
-        "risk_categories": _count_entries(risk_counts, "category", count_key="session_count"),
         "subagents": [
             {
                 "agent_type": agent_type,
@@ -881,10 +933,6 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
                 "session_count": subagent_sessions[agent_type],
             }
             for agent_type in sorted(subagent_events)
-        ],
-        "sequence": [
-            {"sym": sym, "count": count}
-            for sym, count in sequence_counts.most_common(20)
         ],
         "members": [
             {
@@ -894,6 +942,12 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
                 "project_count": len(summary["project_ids"]),
                 "session_count": int(summary["session_count"]),
                 "tokens": int(summary["tokens"]),
+                "error_count": int(summary["error_count"]),
+                "errors_per_session": (
+                    int(summary["error_count"]) / int(summary["session_count"])
+                    if summary["session_count"]
+                    else 0.0
+                ),
             }
             for _key, summary in sorted(member_summary.items(), key=lambda item: item[1]["label"])
         ],
@@ -924,10 +978,17 @@ def team_dashboard(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
-def _validate_session(raw_session: Any, index: int, level: str) -> dict[str, Any]:
+def _validate_session(
+    raw_session: Any, index: int, level: str, *, legacy: bool
+) -> dict[str, Any]:
     if not isinstance(raw_session, dict):
         raise ValueError(f"sessions[{index}] must be an object")
-    allowed = SESSION_KEYS_TEAM if level == LEVEL_TEAM else SESSION_KEYS
+    if legacy:
+        allowed = LEGACY_SESSION_KEYS_TEAM if level == LEVEL_TEAM else LEGACY_SESSION_KEYS
+        stat_keys = LEGACY_STAT_KEYS
+    else:
+        allowed = SESSION_KEYS_TEAM if level == LEVEL_TEAM else SESSION_KEYS
+        stat_keys = STAT_KEYS
     unknown = set(raw_session) - allowed
     if unknown:
         raise ValueError(f"unexpected session field: {sorted(unknown)[0]}")
@@ -940,12 +1001,13 @@ def _validate_session(raw_session: Any, index: int, level: str) -> dict[str, Any
         "duration_s": _nonnegative_int(raw_session.get("duration_s")),
         "tokens": _number_map(raw_session.get("tokens"), TOKEN_KEYS),
         "tokens_by_model": _tokens_by_model(raw_session.get("tokens_by_model")),
-        "stats": _number_map(raw_session.get("stats"), STAT_KEYS),
+        "stats": _number_map(raw_session.get("stats"), stat_keys),
         "stop_reasons": _stop_reasons(raw_session.get("stop_reasons")),
-        "risk_categories": _risk_categories(raw_session.get("risk_categories")),
         "subagents": _subagents(raw_session.get("subagents"), raw=(level == LEVEL_TEAM)),
-        "sequence": _sequence(raw_session.get("sequence")),
     }
+    if legacy:
+        session["risk_categories"] = _risk_categories(raw_session.get("risk_categories"))
+        session["sequence"] = _sequence(raw_session.get("sequence"))
     if level == LEVEL_TEAM:
         session["project_name"] = _project_label(
             raw_session.get("project_name"), f"sessions[{index}].project_name"
@@ -957,6 +1019,20 @@ def _validate_session(raw_session: Any, index: int, level: str) -> dict[str, Any
     return session
 
 
+def _strip_deprecated_session(session: dict[str, Any]) -> dict[str, Any]:
+    stripped = {
+        key: value
+        for key, value in session.items()
+        if key not in {"risk_categories", "sequence"}
+    }
+    stats = stripped.get("stats")
+    stripped["stats"] = {
+        key: _nonnegative_int(stats.get(key) if isinstance(stats, dict) else 0)
+        for key in STAT_KEYS
+    }
+    return stripped
+
+
 def _required_str(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
@@ -965,8 +1041,12 @@ def _required_str(value: Any, name: str) -> str:
 
 def _date_or_string(value: Any, name: str) -> str:
     text = _required_str(value, name)
-    if "T" in text:
-        raise ValueError(f"{name} must be date-only")
+    try:
+        parsed = date.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an ISO date (YYYY-MM-DD)") from exc
+    if parsed.isoformat() != text:
+        raise ValueError(f"{name} must be an ISO date (YYYY-MM-DD)")
     return text
 
 
@@ -982,8 +1062,10 @@ def _generated_seq(value: Any) -> int:
         return 0
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError("generated_seq must be a non-negative integer")
-    if value < 0:
-        raise ValueError("generated_seq must be a non-negative integer")
+    if value < 0 or value > MAX_GENERATED_SEQ:
+        raise ValueError(
+            f"generated_seq must be between 0 and {MAX_GENERATED_SEQ}"
+        )
     return value
 
 
@@ -1134,9 +1216,9 @@ def _sequence(value: Any) -> list[dict[str, Any]]:
 def _nonnegative_int(value: Any) -> int:
     try:
         parsed = int(value or 0)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return 0
-    return max(0, parsed)
+    return min(MAX_COUNTER_VALUE, max(0, parsed))
 
 
 def _json(value: Any) -> str:

@@ -5,7 +5,6 @@ export interface ImportSummary {
   session_count: number;
   event_count: number;
   subagent_count: number;
-  memory_count: number;
   persisted_output_count: number;
   file_count: number;
   error_count: number;
@@ -19,16 +18,22 @@ export interface RuntimeConfig {
   is_docker: boolean;
 }
 
-export interface CacheStats {
+export interface IngestCounts {
   project_count: number;
   session_count: number;
   event_count: number;
   subagent_count: number;
-  memory_count: number;
   persisted_output_count: number;
 }
 
-export interface ImportProgressSummary extends CacheStats {
+export interface CacheStats extends IngestCounts {
+  observed_date_from: string | null;
+  observed_date_to: string | null;
+  last_successful_sync_at: string | null;
+  latest_import_error_count: number;
+}
+
+export interface ImportProgressSummary extends IngestCounts {
   file_count: number;
   error_count: number;
 }
@@ -58,10 +63,27 @@ export interface Project {
 
 export interface DiscoveredProject {
   name: string;
+  display_name: string;
   imported: boolean;
   session_count: number;
   last_imported_at: string | null;
   stale?: boolean;
+}
+
+export interface ImportIssue {
+  path: string;
+  line_no: number | null;
+  message: string;
+}
+
+export interface ImportRecord {
+  id: number;
+  source_path: string;
+  imported_at: string;
+  file_count: number;
+  status: string;
+  error_count: number;
+  errors: ImportIssue[];
 }
 
 export interface SessionCard {
@@ -85,15 +107,11 @@ export interface SessionCard {
   persisted_output_count: number;
   input_tokens: number;
   output_tokens: number;
-  loop_count: number;
-  max_repeat: number;
   duration_seconds: number;
   max_agent_events: number;
   finding_count: number;
-  pattern_risk_score: number;
-  top_finding_category: string | null;
-  top_finding_severity: string | null;
   top_finding_title: string | null;
+  top_finding_basis: FindingBasis | null;
   cost_usd: number;
   cost_available: boolean;
 }
@@ -110,6 +128,7 @@ export interface TimelineItem {
   tool_name: string | null;
   agent_id: string | null;
   is_sidechain: boolean;
+  is_error: boolean;
   related_event_ids: number[];
 }
 
@@ -131,12 +150,14 @@ export interface TraceSpan {
   end_ts: string | null;
   tool_use_id: string | null;
   tool_name: string | null;
-  is_loop: boolean;
-  loop_run_id?: string | null;
-  loop_position?: number | null;
-  loop_count?: number | null;
-  loop_start_event_id?: number | null;
-  loop_end_event_id?: number | null;
+  same_tool_streak: {
+    streak_id: string;
+    tool_name: string;
+    position: number;
+    count: number;
+    start_event_id: number;
+    end_event_id: number;
+  } | null;
 }
 
 export interface SessionCost {
@@ -171,23 +192,36 @@ export interface Subagent {
   event_count: number;
   first_ts: string | null;
   last_ts: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  error_count: number;
+  api_equivalent_usd: number;
+  cost_available: boolean;
+  unpriced_models: string[];
 }
 
-export interface RiskFinding {
+export interface ToolActivity {
+  tool_name: string;
+  call_count: number;
+  error_count: number;
+  observed_result_bytes: number;
+  persisted_result_bytes: number;
+}
+
+export type FindingBasis = "observed" | "estimated" | "inferred" | "associated";
+
+export interface SessionFinding {
   id: number;
   session_id: number;
-  severity: "low" | "medium" | "high" | string;
+  detector_key: string;
+  basis: FindingBasis;
   category: string;
   title: string;
   explanation: string;
-  pattern: string[];
-  support: number;
-  positive_support: number;
-  negative_support: number;
-  lift: number;
-  score: number;
+  recommendation: string | null;
   start_event_id: number | null;
   end_event_id: number | null;
+  evidence_event_ids: number[];
   evidence: Record<string, unknown>;
 }
 
@@ -235,6 +269,16 @@ export interface TreemapProject {
 export interface OverTimeBucket {
   bucket: string;
   per_model: Record<string, number>;
+  total_usd: number;
+  session_count: number;
+  priced_session_count: number;
+  unpriced_models: string[];
+  costs_are_lower_bound: boolean;
+  baseline_usd: number | null;
+  delta_usd: number | null;
+  delta_pct: number | null;
+  is_spike: boolean;
+  sessions: SpendSpikeSession[];
 }
 
 export interface CategoryCost {
@@ -272,8 +316,6 @@ export interface SessionCostEntry {
   tool_call_count: number;
   subagent_count: number;
   error_count: number;
-  loop_count: number;
-  max_repeat: number;
   finding_count: number;
   duration_seconds: number;
   turn_cost_stats: {
@@ -301,8 +343,6 @@ export interface TurnCostDetail {
   tool_call_count: number;
   error_count: number;
   subagent_count: number;
-  loop_count: number;
-  max_repeat: number;
   models: string[];
   is_outlier: boolean;
 }
@@ -349,13 +389,16 @@ export interface SpendSpikeSession {
 export interface SpendSpike {
   bucket: string;
   total_usd: number;
+  baseline_usd: number;
   delta_usd: number;
+  delta_pct: number | null;
   sessions: SpendSpikeSession[];
 }
 
 export interface DiscoveryExample {
   id: number | null;
   kind: string;
+  event_id: number | null;
   session_id: string | null;
   title: string | null;
   project_name: string | null;
@@ -371,11 +414,13 @@ export interface DiscoveryDriver {
   selectors: string[];
   support: number;
   positive_support: number;
+  complement_count: number;
+  complement_positive_count: number;
   baseline_rate: number;
   subgroup_rate: number;
+  complement_rate: number;
+  effect_size: number;
   subgroup_rate_low: number;
-  lift: number;
-  score: number;
   examples: DiscoveryExample[];
 }
 
@@ -384,6 +429,7 @@ export interface DiscoverySection {
   title: string;
   target_label: string;
   description: string;
+  observation_unit: "session" | "tool_call";
   available: boolean;
   unavailable_reason: string | null;
   baseline_count: number;
@@ -396,7 +442,9 @@ export interface DiscoveryResponse {
     project_id: number | null;
     min_support: number;
     total_sessions: number;
+    total_tool_calls: number;
     cost_available: boolean;
+    unpriced_models: string[];
   };
   sections: Record<string, DiscoverySection>;
 }
@@ -409,6 +457,8 @@ export interface DiscoveryFilters {
 export interface CostAnalyticsMeta {
   available: boolean;
   unpriced_models: string[];
+  costs_partial: boolean;
+  costs_are_lower_bound: boolean;
   total_usd: number;
   total_tokens: number;
   available_projects: { id: number; name: string }[];
@@ -459,6 +509,7 @@ export interface ContextFinding {
   savings_usd: number;
   counterfactual: ContextCounterfactual;
   event_id: number | null;
+  evidence_event_ids: number[];
 }
 
 export interface ContextThumbnailPoint {
@@ -495,14 +546,13 @@ export interface ContextTrendBucket {
 export interface ContextEconomicsMeta {
   project_id: number | null;
   min_support: number;
-  total_usd: number;
-  necessary_usd: number;
-  avoidable_usd: number;
-  unattributed_tokens: number;
-  total_tokens: number;
-  avoidable_tokens: number;
-  avoidable_token_share: number;
+  recorded_api_equivalent_usd: number;
+  opportunity_usd: number;
+  unattributed_usd: number;
+  opportunity_tokens: number;
   cost_available: boolean;
+  costs_partial: boolean;
+  unpriced_models: string[];
   sessions_analyzed: number;
   sessions_skipped: number;
   trend: ContextTrendBucket[];
@@ -556,32 +606,25 @@ export interface UsageHabit {
   key: string;
   phase: string;
   label: string;
-  polarity: "good" | "anti";
-  status: string;
-  cost_usd: number;
-  count: number;
+  activity_count: number;
   session_count: number;
 }
 
 export interface UsageTool {
   key: string;
   label: string;
-  cost_usd: number;
-  tokens: number;
-  count: number;
+  activity_count: number;
   session_count: number;
 }
 
 export interface UsagePhase {
   key: string;
   label: string;
-  cost_usd: number;
-  tokens: number;
-  main_cost_usd: number;
-  subagent_cost_usd: number;
-  main_tokens: number;
-  subagent_tokens: number;
-  share: number;
+  activity_count: number;
+  main_activity_count: number;
+  subagent_activity_count: number;
+  text_assistant_step_count: number;
+  activity_share: number;
   tool_count: number;
   session_count: number;
   habits: UsageHabit[];
@@ -597,7 +640,11 @@ export interface UsageMapMeta {
   costs_partial: boolean;
   sessions_analyzed: number;
   events_classified: number;
-  share_basis: "cost" | "tokens";
+  total_activity_count: number;
+  tool_call_count: number;
+  text_assistant_step_count: number;
+  activity_basis: "tool_calls_and_assistant_steps";
+  methodology: string;
 }
 
 export interface UsageMapResponse {
@@ -609,8 +656,8 @@ export interface UsageEvidenceSession {
   session_id: number;
   title: string;
   project_name: string;
-  cost_usd: number;
-  count: number;
+  activity_count: number;
+  session_cost_usd: number;
   exemplar_event_ids: number[];
   detail: string | null;
 }
@@ -619,7 +666,7 @@ export interface UsageMapEvidenceResponse {
   node: string;
   label: string;
   rule: string;
-  cost_usd: number;
+  activity_count: number;
   sessions: UsageEvidenceSession[];
 }
 
@@ -665,7 +712,7 @@ export interface LimitHitEntry {
   ts: string;
   kind: string;
   reset_at: string | null;
-  blocked_minutes: number | null;
+  minutes_until_reset: number | null;
   usage_at_hit: number | null;
   usage_at_hit_tokens: number | null;
   occurrence_count: number;
@@ -687,17 +734,15 @@ export interface LimitEraEntry {
   era: string;
   window_count: number;
   session_hit_count: number;
-  blocked_minutes: number;
-  cap_median_usd: number | null;
-  cap_min_usd: number | null;
-  cap_max_usd: number | null;
-  cap_median_tokens: number | null;
-  cap_min_tokens: number | null;
-  cap_max_tokens: number | null;
-  near_miss_count: number;
-  near_miss_count_tokens: number;
-  cap_percentile: number | null;
-  cap_percentile_tokens: number | null;
+  minutes_until_reset: number;
+  hit_level_median_usd: number | null;
+  hit_level_min_usd: number | null;
+  hit_level_max_usd: number | null;
+  hit_level_median_tokens: number | null;
+  hit_level_min_tokens: number | null;
+  hit_level_max_tokens: number | null;
+  hit_level_percentile: number | null;
+  hit_level_percentile_tokens: number | null;
   usage_at_hit_usd: number[];
   usage_at_hit_tokens: number[];
 }
@@ -708,7 +753,7 @@ export interface LimitsMeta {
   costs_partial: boolean;
   total_hits: number;
   total_windows: number;
-  blocked_minutes: number;
+  minutes_until_reset: number;
   hits_per_week_recent: number;
   hit_counts: Record<string, number>;
   plan_history: PlanEra[];
@@ -720,25 +765,6 @@ export interface LimitsResponse {
   hits: LimitHitEntry[];
   windows: LimitWindowEntry[];
   eras: LimitEraEntry[];
-}
-
-export interface ContributionManifest {
-  session_count: number;
-  sequence_step_count: number;
-  included_fields: string[];
-  excluded: string[];
-  fingerprint_caveat: string;
-  privacy_level?: string;
-}
-
-export interface ContributionPreview {
-  manifest: ContributionManifest;
-  bundle: { sessions?: unknown[] } & Record<string, unknown>;
-}
-
-export interface ContributionExportResult {
-  path: string;
-  session_count: number;
 }
 
 export type TeamPrivacyLevel = "structural" | "team";
@@ -770,9 +796,17 @@ export interface TeamExportRequestBody {
   projects: { export_name: string; label?: string | null }[];
 }
 
+export interface TeamManifest {
+  privacy_level: TeamPrivacyLevel;
+  session_count: number;
+  included_fields: string[];
+  excluded: string[];
+  fingerprint_caveat: string;
+}
+
 // GET /api/team/export-preview -> TeamExportPreviewResponse { manifest, bundle }.
 export interface TeamPreview {
-  manifest: ContributionManifest;
+  manifest: TeamManifest;
   bundle: { sessions?: unknown[] } & Record<string, unknown>;
 }
 
@@ -838,15 +872,17 @@ export interface TeamDashboard {
     tool_calls?: number;
     subagents?: number;
     errors?: number;
-    loops?: number;
     [key: string]: number | undefined;
   };
+  reliability?: {
+    error_count: number;
+    session_count: number;
+    errors_per_session: number;
+  };
   providers?: Array<{ provider: string; session_count: number }>;
-  models?: Array<{ model: string; session_count: number }>;
+  models?: Array<{ model: string; tokens: number }>;
   stop_reasons?: Array<{ reason: string; count: number }>;
-  risk_categories?: Array<{ category: string; session_count: number }>;
   subagents?: Array<{ agent_type: string; event_count: number; session_count: number }>;
-  sequence?: Array<{ sym: string; count: number }>;
   members?: {
     member_name: string;
     member_ids: string[];
@@ -854,6 +890,8 @@ export interface TeamDashboard {
     project_count: number;
     session_count: number;
     tokens: number;
+    error_count: number;
+    errors_per_session: number;
   }[];
   projects?: {
     project_key: string;

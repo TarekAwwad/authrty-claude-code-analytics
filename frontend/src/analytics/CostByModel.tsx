@@ -17,8 +17,6 @@ interface Props {
   available: boolean;
 }
 
-const shortLabel = (name: string): string => (name.length > 12 ? `${name.slice(0, 12)}...` : name);
-
 export default function CostByModel({ payload, colors, available }: Props) {
   if (!available) return <div className="empty-state">Cost estimate unavailable - no price table loaded.</div>;
   const rows = chartModels(payload.by_model);
@@ -28,13 +26,13 @@ export default function CostByModel({ payload, colors, available }: Props) {
   return (
     <div className="cbm">
       {rows.map((m) => {
-        const spendPct = modelSpendSharePct(m, payload);
+        const spendPct = payload.meta.costs_partial ? null : modelSpendSharePct(m, payload);
         const tokenPct = modelTokenSharePct(m, payload);
         return (
           <div className="cbm-row" key={m.model}>
-            <div className="cbm-label" title={m.model}>{shortLabel(displayModelName(m.model))}</div>
+            <div className="cbm-label" title={m.model}>{displayModelName(m.model)}</div>
             <div className="cbm-bars">
-              <div className="cbm-track" title={`${spendPct}% spend share`}>
+              <div className="cbm-track" title={spendPct === null ? `${formatUsd(m.usd)} priced spend` : `${spendPct}% spend share`}>
                 <i style={{ width: max > 0 ? `${(m.usd / max) * 100}%` : "0%", background: colors[m.model] ?? FALLBACK_COLOR }} />
               </div>
               <div className="cbm-token-track" title={`${tokenPct}% token share`}>
@@ -49,6 +47,9 @@ export default function CostByModel({ payload, colors, available }: Props) {
           </div>
         );
       })}
+      {payload.meta.costs_partial && (
+        <p className="tile-note">Spend shares are hidden because some model usage is unpriced.</p>
+      )}
     </div>
   );
 }

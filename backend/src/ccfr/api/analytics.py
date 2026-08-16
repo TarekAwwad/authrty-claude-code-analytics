@@ -12,6 +12,7 @@ from bisect import bisect_right
 from datetime import datetime
 from typing import Any
 
+from ccfr.analysis.cost_trends import build_cost_trend
 from ccfr.analysis.pricing import (
     ModelPrice,
     PriceTimeline,
@@ -21,7 +22,6 @@ from ccfr.analysis.pricing import (
     match_price,
     normalize_model_key,
 )
-from ccfr.analysis.metrics import compute_loop_stats
 from ccfr.naming import project_display_name
 from ccfr.config import pricing_dir, pricing_path
 
@@ -204,22 +204,17 @@ def session_turn_cost_breakdown(conn: sqlite3.Connection, session_id: int, *, hi
             "error_count": 0,
             "subagent_count": 0,
             "_models": set(),
-            "_tool_names": [],
         }
         turns.append(turn)
         turns_by_start[turn["start_event_id"]] = turn
 
     tool_call_count_by_event: dict[int, int] = {}
-    tool_names_by_event: dict[int, list[str]] = {}
     for row in conn.execute(
-        "SELECT event_id, tool_name FROM tool_calls WHERE session_id = ? ORDER BY id",
+        "SELECT event_id FROM tool_calls WHERE session_id = ? ORDER BY id",
         (session_id,),
     ).fetchall():
         event_id = int(row["event_id"])
         tool_call_count_by_event[event_id] = tool_call_count_by_event.get(event_id, 0) + 1
-        tool_name = row["tool_name"]
-        if tool_name:
-            tool_names_by_event.setdefault(event_id, []).append(str(tool_name))
 
     error_events = {
         int(row["event_id"])
@@ -260,7 +255,6 @@ def session_turn_cost_breakdown(conn: sqlite3.Connection, session_id: int, *, hi
             turn["error_count"] += 1
         if row["is_sidechain"]:
             turn["subagent_count"] += 1
-        turn["_tool_names"].extend(tool_names_by_event.get(event_id, []))
 
         model = row["model"]
         if not model:
@@ -282,14 +276,11 @@ def session_turn_cost_breakdown(conn: sqlite3.Connection, session_id: int, *, hi
     threshold = _outlier_threshold(values)
     detail_rows = []
     for turn in turns:
-        loop_count, max_repeat = compute_loop_stats(turn.pop("_tool_names"))
         detail_rows.append(
             {
                 **turn,
                 "usd": round(turn["usd"], 6),
                 "models": sorted(turn.pop("_models")),
-                "loop_count": loop_count,
-                "max_repeat": max_repeat,
                 "is_outlier": turn["usd"] > threshold,
             }
         )
@@ -433,8 +424,8 @@ def cost_analytics(
         price = _price(row["price_period"], row["model"])
         usd = cost_usd(price, breakdown) if price else 0.0
         label = row["model"] or "unknown"
-        if price is None and used and row["model"]:
-            unpriced.add(row["model"])
+        if price is None and used:
+            unpriced.add(label)
         for cat in _CATEGORIES:
             tok = getattr(breakdown, cat)
             categories[cat]["tokens"] += tok
@@ -496,30 +487,6 @@ def cost_analytics(
         bm["cache_read_tokens"] += breakdown.cache_read
         bm["cache_write_tokens"] += _cache_write_tokens_total(breakdown)
 
-    over_time: dict[str, dict[str, Any]] = {}
-    for row in conn.execute(
-        f"""
-        SELECT {bucket_expr} AS bucket, m.model AS model, ({period_expr}) AS price_period, {cols}
-        FROM messages m
-        JOIN events e ON e.id = m.event_id
-        JOIN sessions s ON s.id = e.session_id
-        {where}
-        GROUP BY bucket, m.model, price_period
-        """,
-        params,
-    ).fetchall():
-        if row["bucket"] is None or not matches(row["model"]):
-            continue
-        price = _price(row["price_period"], row["model"])
-        if price is None:
-            continue
-        usd = cost_usd(price, _breakdown(row))
-        if usd == 0:
-            continue
-        b = over_time.setdefault(row["bucket"], {"bucket": row["bucket"], "per_model": {}})
-        label = row["model"] or "unknown"
-        b["per_model"][label] = round(b["per_model"].get(label, 0.0) + usd, 6)
-
     sessions: dict[int, dict[str, Any]] = {}
     for row in conn.execute(
         f"""
@@ -529,8 +496,6 @@ def cost_analytics(
                COALESCE(ss.turn_count, 0) AS turn_count,
                COALESCE(ss.tool_call_count, 0) AS tool_call_count,
                COALESCE(ss.subagent_count, 0) AS subagent_count,
-               COALESCE(ss.loop_count, 0) AS loop_count,
-               COALESCE(ss.max_repeat, 0) AS max_repeat,
                COALESCE(
                    (SELECT COUNT(*) FROM tool_results tr WHERE tr.session_id = s.id AND tr.is_error = 1),
                    0
@@ -538,7 +503,7 @@ def cost_analytics(
                CAST(
                    ROUND(COALESCE((julianday(s.last_ts) - julianday(s.first_ts)) * 86400, 0)) AS INTEGER
                ) AS duration_seconds,
-               COALESCE((SELECT COUNT(*) FROM risk_findings rf WHERE rf.session_id = s.id), 0) AS finding_count,
+               COALESCE((SELECT COUNT(*) FROM session_findings sf WHERE sf.session_id = s.id), 0) AS finding_count,
                {cols}
         FROM messages m
         JOIN events e ON e.id = m.event_id
@@ -563,15 +528,13 @@ def cost_analytics(
              "tool_call_count": int(row["tool_call_count"] or 0),
              "subagent_count": int(row["subagent_count"] or 0),
              "error_count": int(row["error_count"] or 0),
-             "loop_count": int(row["loop_count"] or 0),
-             "max_repeat": int(row["max_repeat"] or 0),
              "finding_count": int(row["finding_count"] or 0),
              "duration_seconds": int(row["duration_seconds"] or 0)},
         )
         s["usd"] += usd
         s["tokens"] += _tokens_total(row)
 
-    bucket_sessions: dict[str, dict[int, dict[str, Any]]] = {}
+    trend_buckets: dict[str, dict[str, Any]] = {}
     for row in conn.execute(
         f"""
         SELECT {bucket_expr} AS bucket, s.id AS id, s.session_id AS session_id, s.title AS title,
@@ -588,13 +551,34 @@ def cost_analytics(
     ).fetchall():
         if row["bucket"] is None or not matches(row["model"]):
             continue
-        price = _price(row["price_period"], row["model"])
-        usd = cost_usd(price, _breakdown(row)) if price else 0.0
-        if usd == 0:
+        breakdown = _breakdown(row)
+        if not any(getattr(breakdown, category) for category in _CATEGORIES):
             continue
+        price = _price(row["price_period"], row["model"])
+        usd = cost_usd(price, breakdown) if price else 0.0
         bucket_key = row["bucket"]
-        sessions_by_id = bucket_sessions.setdefault(bucket_key, {})
-        item = sessions_by_id.setdefault(
+        trend = trend_buckets.setdefault(
+            bucket_key,
+            {
+                "per_model": {},
+                "session_ids": set(),
+                "priced_session_ids": set(),
+                "unpriced_session_ids": set(),
+                "unpriced_models": set(),
+                "contributors": {},
+            },
+        )
+        trend["session_ids"].add(row["id"])
+        label = row["model"] or "unknown"
+        if price is None:
+            trend["unpriced_session_ids"].add(row["id"])
+            if price_available:
+                trend["unpriced_models"].add(label)
+            continue
+        trend["priced_session_ids"].add(row["id"])
+        if usd != 0:
+            trend["per_model"][label] = trend["per_model"].get(label, 0.0) + usd
+        item = trend["contributors"].setdefault(
             row["id"],
             {
                 "id": row["id"],
@@ -659,7 +643,21 @@ def cost_analytics(
         cat: {"tokens": categories[cat]["tokens"], "usd": round(categories[cat]["usd"], 6)}
         for cat in _CATEGORIES
     }
-    over_time_out = [over_time[k] for k in sorted(over_time)]
+    trend_input = {
+        key: {
+            **value,
+            "sessions": list(value["contributors"].values()),
+        }
+        for key, value in trend_buckets.items()
+    }
+    costs_partial = price_available and bool(unpriced)
+    over_time_out, spikes_out = build_cost_trend(
+        trend_input,
+        bucket_size=bucket,
+        range_start=date_from or span["lo"],
+        range_end=date_to or span["hi"],
+        suppress_spikes=not price_available or bool(unpriced),
+    )
     sessions_out = sorted(
         ({**s, "usd": round(s["usd"], 6)} for s in sessions.values()),
         key=lambda x: x["usd"],
@@ -702,41 +700,12 @@ def cost_analytics(
         ],
     }
 
-    bucket_totals = {
-        item["bucket"]: round(sum(item["per_model"].values()), 6)
-        for item in over_time_out
-    }
-    spikes = []
-    bucket_keys = sorted(bucket_totals)
-    for index, key in enumerate(bucket_keys):
-        if index == 0:
-            continue
-        previous = bucket_totals[bucket_keys[index - 1]]
-        delta = round(bucket_totals[key] - previous, 6)
-        if delta <= 0:
-            continue
-        contributors = sorted(
-            (
-                {**session, "usd": round(session["usd"], 6)}
-                for session in bucket_sessions.get(key, {}).values()
-            ),
-            key=lambda item: item["usd"],
-            reverse=True,
-        )[:3]
-        spikes.append(
-            {
-                "bucket": key,
-                "total_usd": bucket_totals[key],
-                "delta_usd": delta,
-                "sessions": contributors,
-            }
-        )
-    spikes_out = sorted(spikes, key=lambda item: item["delta_usd"], reverse=True)[:5]
-
     return {
         "meta": {
             "available": price_available,
             "unpriced_models": sorted(unpriced),
+            "costs_partial": costs_partial,
+            "costs_are_lower_bound": costs_partial,
             "total_usd": round(total_usd, 6),
             "total_tokens": total_tokens,
             "available_projects": [

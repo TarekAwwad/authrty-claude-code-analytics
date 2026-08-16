@@ -11,7 +11,7 @@ import {
 import type { TeamImportRecord } from "../api/types";
 import { Blurred } from "../shell/Blurred";
 import LoadingBar from "../components/LoadingBar";
-import { compactInt } from "../contribute/specimen";
+import { compactInt } from "./bundlePresentation";
 
 function importRecordId(record: TeamImportRecord, index: number): string {
   return record.bundle_id ?? record.member_id ?? record.source_path ?? `team-import-${index}`;
@@ -58,9 +58,8 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown import error";
 }
 
-// Team-scope "Import": bring in content-free bundles other members shared. Local
-// JSON files only — pick one or more from this browser or point at a server-visible
-// path. The app never uploads, and bundles carry no prompts/paths/commands/content.
+// Browser-selected JSON is posted to the app's local backend; a server-visible
+// path is read there directly. Neither route sends the bundle to a remote service.
 export default function TeamBundleImport() {
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["config"], queryFn: getRuntimeConfig });
@@ -132,12 +131,13 @@ export default function TeamBundleImport() {
 
   return (
     <main className="page team-flow-page team-import-page">
-      <section className="contribute-header team-flow-header" aria-labelledby="team-import-title">
-        <div className="contribute-titleblock team-titleblock">
+      <section className="team-flow-header" aria-labelledby="team-import-title">
+        <div className="team-titleblock">
           <h1 id="team-import-title">Import a team bundle</h1>
           <p>
-            Bring in content-free bundles your teammates shared. You can import one or more local
-            JSON files in the browser or a server-visible path without uploading conversation data.
+            Browser-selected bundle JSON is sent to this app&apos;s local backend for validation and
+            storage. Server-path imports are read there directly. This workflow does not send
+            bundles to a remote service.
           </p>
           <div className="team-root-row">
             <span>team_bundle_root</span>
@@ -147,7 +147,7 @@ export default function TeamBundleImport() {
           </div>
         </div>
 
-        <div className="contribute-metrics team-metrics team-flow-metrics" aria-label="Team import summary">
+        <div className="team-metrics team-flow-metrics" aria-label="Team import summary">
           <Metric value={importedRecords.length} label="Bundles" />
           <Metric value={importedMemberCount} label="Members" />
           <Metric value={importedSessionCount} label="Sessions" />
@@ -206,7 +206,7 @@ export default function TeamBundleImport() {
                 </label>
                 <button
                   type="button"
-                  className="contribute-primary-button"
+                  className="team-primary-button"
                   onClick={() => importer.mutate()}
                   disabled={importer.isPending || !canImport}
                 >
@@ -331,7 +331,7 @@ function Metric({
   mono?: boolean;
 }) {
   return (
-    <div className="contribute-metric">
+    <div className="team-metric">
       <strong className={mono ? undefined : "team-metric-text"}>
         {typeof value === "number" ? compactInt(value) : value}
       </strong>

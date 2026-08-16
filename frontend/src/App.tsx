@@ -24,10 +24,45 @@ import { useTheme } from "./theme/useTheme";
 type SessionOrigin = Extract<View, "map" | "cost" | "discover">;
 
 const SESSION_ORIGIN_LABELS: Record<SessionOrigin, string> = {
-  map: "Overview",
+  map: "Sessions",
   cost: "Cost",
   discover: "Explore",
 };
+
+type SessionHistoryRoute =
+  | { view: SessionOrigin }
+  | {
+      view: "session";
+      sessionId: number;
+      origin: SessionOrigin;
+      eventId: number | null;
+    };
+
+interface AppHistoryState {
+  cya?: SessionHistoryRoute;
+}
+
+function historyUrl(route: SessionHistoryRoute): string {
+  if (route.view === "session") return `#session/${route.sessionId}`;
+  if (route.view === "map") return "#sessions";
+  if (route.view === "discover") return "#explore";
+  return "#cost";
+}
+
+function replaceOriginHistory(origin: SessionOrigin) {
+  const route: SessionHistoryRoute = { view: origin };
+  window.history.replaceState({ cya: route }, "", historyUrl(route));
+}
+
+function pushSessionHistory(
+  sessionId: number,
+  origin: SessionOrigin,
+  eventId: number | null,
+) {
+  replaceOriginHistory(origin);
+  const route: SessionHistoryRoute = { view: "session", sessionId, origin, eventId };
+  window.history.pushState({ cya: route }, "", historyUrl(route));
+}
 
 function App() {
   const imports = useQuery({ queryKey: ["imports"], queryFn: listImports });
@@ -48,7 +83,7 @@ function App() {
   const autoRouted = React.useRef(false);
 
   // On first load only, if imports already exist, jump past the empty import
-  // screen to Triage. After that the user is free to navigate back to Import.
+  // screen to Sessions. After that the user is free to navigate back to Import.
   React.useEffect(() => {
     if (!autoRouted.current && (imports.data?.length ?? 0) > 0) {
       autoRouted.current = true;
@@ -65,7 +100,46 @@ function App() {
     }
   }, [scope, view]);
 
+  React.useEffect(() => {
+    const restoreHistoryRoute = (event: PopStateEvent) => {
+      const route = (event.state as AppHistoryState | null)?.cya;
+      if (!route) return;
+      if (route.view === "session") {
+        const card = sessions.data?.find((session) => session.id === route.sessionId);
+        if (!card) return;
+        setFocusEventId(route.eventId);
+        setSessionOrigin(route.origin);
+        setSelectedSession(card);
+        setView("session");
+        return;
+      }
+      setFocusEventId(null);
+      setSessionOrigin(null);
+      setSelectedSession(null);
+      setView(route.view);
+    };
+    window.addEventListener("popstate", restoreHistoryRoute);
+    return () => window.removeEventListener("popstate", restoreHistoryRoute);
+  }, [sessions.data]);
+
+  React.useEffect(() => {
+    if (view !== "session") return;
+    const navigateBackOnBackspace = (event: KeyboardEvent) => {
+      if (event.key !== "Backspace" || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+      const target = event.target;
+      if (target instanceof HTMLElement) {
+        const editable = target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+        if (editable) return;
+      }
+      event.preventDefault();
+      window.history.back();
+    };
+    window.addEventListener("keydown", navigateBackOnBackspace);
+    return () => window.removeEventListener("keydown", navigateBackOnBackspace);
+  }, [view]);
+
   const openSession = (session: SessionCard, origin: SessionOrigin) => {
+    pushSessionHistory(session.id, origin, null);
     setFocusEventId(null);
     setSessionOrigin(origin);
     setSelectedSession(session);
@@ -75,6 +149,7 @@ function App() {
   const openSessionById = (sessionId: number, eventId: number | null, origin: SessionOrigin) => {
     const card = sessions.data?.find((s) => s.id === sessionId);
     if (!card) return;
+    pushSessionHistory(sessionId, origin, eventId);
     setFocusEventId(eventId ?? null);
     setSessionOrigin(origin);
     setSelectedSession(card);
@@ -83,6 +158,13 @@ function App() {
 
   const backToSessionOrigin = () => {
     if (sessionOrigin) {
+      const route = (window.history.state as AppHistoryState | null)?.cya;
+      if (route?.view === "session") {
+        window.history.back();
+        return;
+      }
+      setFocusEventId(null);
+      setSelectedSession(null);
       setView(sessionOrigin);
     }
   };
@@ -114,8 +196,6 @@ function App() {
         onToggleCollapsed={toggleCollapsed}
         onToggleTheme={toggle}
         onOpenGlossary={openGlossary}
-        historicalPricing={historicalPricing}
-        onToggleHistoricalPricing={() => setHistoricalPricing(!historicalPricing)}
         privacyMode={privacyMode}
         onTogglePrivacyMode={() => setPrivacyMode(!privacyMode)}
         glossaryHint={!glossaryHintSeen}
@@ -142,6 +222,7 @@ function App() {
             scope={scope}
             onOpenSession={scope === "team" ? () => {} : (sessionId) => openSessionById(sessionId, null, "cost")}
             historical={historicalPricing}
+            onHistoricalChange={setHistoricalPricing}
           />
         )}
         {view === "discover" && scope === "local" && (
@@ -157,6 +238,7 @@ function App() {
             initialEventId={focusEventId}
             backLabel={sessionOrigin ? `Back to ${SESSION_ORIGIN_LABELS[sessionOrigin]}` : undefined}
             onBack={sessionOrigin ? backToSessionOrigin : undefined}
+            historical={historicalPricing}
           />
         )}
       </main>

@@ -29,45 +29,85 @@ CCFR_DB_PATH=<repo>/.ccfr-data/ccfr.sqlite3
 CCFR_TEAM_BUNDLE_ROOT=<repo>/.ccfr-data/team-bundles
 ```
 
+Those are source-checkout defaults. Installed `uvx`/`pipx` runs store the
+database, settings, and team-bundle directory under `~/.checkyouragent/` unless
+`CCFR_DATA_DIR` is set. The installed server uses `~/.claude/projects` as its
+import root when that directory exists, otherwise `./Data`; `--import-root` and
+`CCFR_IMPORT_ROOT` override it.
+
 Additional local files may be created under:
 
 ```text
 .ccfr-data/settings.json
-.ccfr-data/contributions/
-.ccfr-data/team-bundles/
+.ccfr-data/team-bundles/exports/
 TeamBundles/
 ```
 
 The app reads raw exports from `CCFR_IMPORT_ROOT` and stores a rebuildable index
 in SQLite. The index includes compacted raw JSON and previews for local
-inspection, so it is not content-free.
+inspection. Derived findings and evidence receipts may also repeat normalized
+tool arguments or failure details. The SQLite cache is therefore not
+content-free.
 
-`settings.json` stores UI settings, historical-pricing mode, privacy mode,
-contributor identity, and team export preferences.
+`settings.json` stores historical-pricing and privacy-mode settings, plan
+history, team export preferences and sequence state, a random pseudonymous
+member ID, and the private salt used to hash project and session IDs. The salt
+is not included in team bundles.
 
-Deleting the SQLite file removes the derived cache, but it does not delete the
-original Claude Code export, contribution JSON files, or exported team bundle
-JSON files. The current `Reset cache` endpoint drops SQLite tables, including
-imported team bundle records, but it does not delete team bundle JSON files on
-disk.
+**Reset local data** clears and recreates the local import and analysis tables.
+It preserves `settings.json` and imported team bundle records. Team data has a
+separate per-member removal control in Team Import, and the Team reset API can
+clear all imported team bundle records while preserving the local session
+cache. Neither operation deletes the original Claude Code export or any
+exported team bundle JSON files on disk.
+
+Deleting the SQLite file removes both the local derived cache and imported team
+bundle records. It still does not delete the original exports, `settings.json`,
+or exported team bundle JSON files.
 
 ## Team Bundles
 
-Team bundles are designed for sharing aggregate usage without conversation
+Current exports use bundle schema v3. The exporter is designed to emit one
+allowlisted metadata record per selected session rather than conversation
 content.
 
-Structural bundles include pseudonymous member/project/session identifiers,
-date-only timing, token counts, bucketed models, counts, stop reasons, risk
-categories, bucketed subagents, and structural tool/result sequences.
+Structural bundles include:
 
-Team-level bundles additionally include the member name, editable project
-labels, real tool names, real subagent type names, and extension-only file type
-mix. They still omit prompts, assistant text, raw JSON, paths, file names,
-commands, and tool input/output.
+- A random pseudonymous member ID and salted, pseudonymous project and session
+  IDs.
+- Provider and bucketed model families.
+- Intended date-only first/last timing and session duration.
+- Exact token counts and cache breakdowns, including counts by bucketed model
+  family.
+- Observed turn, tool-call, subagent, error, system-event, persisted-output, and
+  stop-reason counts.
+- Bucketed subagent types and their event counts.
 
-Even structural bundles can be distinctive because token counts, timing deltas,
-and tool sequences are fingerprints. Share them only through channels where
-that level of disclosure is acceptable.
+Team-level bundles include the same quantitative session metadata, but replace
+pseudonymous project IDs with editable project labels and add the member name,
+real tool and MCP server names with call counts, real subagent type names, and
+file extensions with counts.
+
+The schema-v3 allowlist is designed to omit prompts, assistant text, reasoning,
+titles, raw JSON, previews, paths, working directories, branches, file names,
+shell commands, and tool input/output. Models remain bucketed at both levels.
+Schema v3 also omits the retired risk categories, inferred patterns,
+loop/max-repeat fields, and tool/result event sequences. Legacy schema v1 and
+v2 bundles can still be imported, but those retired fields are stripped before
+current persistence.
+
+Pseudonymous IDs are stable across exports from the same installation, and
+exact token counts, date-only timing, and session durations can still be
+distinctive. Team-level names, project labels, tools, subagent types, and file
+extensions are intentionally visible to recipients. Share either level only
+through channels where its disclosure is acceptable.
+
+Date fields must use canonical ISO calendar dates (`YYYY-MM-DD`). Team bundle
+imports reject more than 50,000 sessions, sequence and counter values are
+bounded to signed 64-bit integers, and the API rejects request bodies larger
+than 50 MiB. These limits reduce accidental or malicious resource exhaustion;
+they do not make bundle contents trustworthy. Preview bundles before sharing
+and import them only from sources you trust.
 
 ## Network Behavior
 
@@ -75,9 +115,16 @@ The backend is an unauthenticated local FastAPI service for the frontend. Keep
 it bound to `127.0.0.1` for normal use. Do not expose it to a LAN or the public
 internet unless you add separate authentication and access controls.
 
-The project is intended to avoid telemetry and external API calls. The
-unmounted contribution page contains a GitHub upload link, but the app does not
-upload contribution bundles itself.
+Browser-origin controls are not authentication. State-changing requests from
+browsers must be same-origin or use a configured allowed origin, and cross-site
+Fetch Metadata is rejected. Non-browser clients that omit browser origin
+headers remain supported, so any process with local access should still be
+treated as trusted. Keep the service on loopback and stop it when it is not in
+use.
+
+The project is intended to avoid telemetry and external API calls. The retired
+standalone contribution workflow and its API routes have been removed. Team
+bundle export writes JSON locally; the app does not upload bundles for you.
 
 ## Do Not Commit
 

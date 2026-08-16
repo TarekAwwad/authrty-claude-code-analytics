@@ -10,20 +10,26 @@ import { getTeamDashboard } from "../api/client";
 const dashboard = {
   meta: { bundle_count: 2, member_count: 3, project_count: 4, session_count: 9, date_from: "2026-06-01", date_to: "2026-06-05" },
   tokens: { input: 12_000, output: 5_000, base: 0, cache_5m: 0, cache_1h: 0, cache_read: 0, total: 27_000 },
-  stats: { errors: 7, loops: 2 },
+  stats: { errors: 7, turns: 18, tool_calls: 24, loops: 2, max_repeat: 5 },
+  reliability: { error_count: 7, session_count: 9, errors_per_session: 7 / 9 },
   providers: [{ provider: "claude", session_count: 9 }],
   models: [
-    { model: "opus", session_count: 6 },
-    { model: "sonnet", session_count: 3 },
+    { model: "opus", tokens: 18_000 },
+    { model: "sonnet", tokens: 9_000 },
   ],
   stop_reasons: [],
+  // Legacy fields deliberately remain in this fixture: the Overview must not
+  // render them even while v1/v2 bundle readers still accept them.
   risk_categories: [
     { category: "cost_context_blowup", session_count: 5 },
     { category: "permission_friction", session_count: 3 },
   ],
   subagents: [],
   sequence: [{ sym: "CALL:inspect:Read", count: 4 }],
-  members: [],
+  members: [
+    { member_name: "Avery", member_ids: ["1111"], bundle_count: 1, project_count: 1, session_count: 3, tokens: 900, error_count: 6, errors_per_session: 2 },
+    { member_name: "Morgan", member_ids: ["2222"], bundle_count: 1, project_count: 2, session_count: 6, tokens: 100, error_count: 1, errors_per_session: 1 / 6 },
+  ],
   projects: [],
   tools: [],
   file_types: [],
@@ -66,39 +72,46 @@ describe("TeamOverview", () => {
     const onGoToImport = renderOverview();
 
     expect(await screen.findByText(/No team bundles imported yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/aggregated activity and reliability/i)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/risk patterns/i);
     fireEvent.click(screen.getByRole("button", { name: /Go to Import/i }));
     expect(onGoToImport).toHaveBeenCalled();
   });
 
-  it("renders totals, activity, risk, model mix, and symbols", async () => {
+  it("renders normalized reliability and token-weighted model activity without deprecated inventory", async () => {
     vi.mocked(getTeamDashboard).mockResolvedValue(dashboard as never);
     renderOverview();
 
     const totals = await screen.findByLabelText("Team totals");
-    expect(within(totals).getByText("Members").closest(".contribute-metric")).toHaveTextContent("3");
-    expect(within(totals).getByText("Projects").closest(".contribute-metric")).toHaveTextContent("4");
-    expect(within(totals).getByText("Sessions").closest(".contribute-metric")).toHaveTextContent("9");
-    expect(within(totals).getByText("Tokens").closest(".contribute-metric")).toHaveTextContent("27k");
+    expect(within(totals).getByText("Members").closest(".team-metric")).toHaveTextContent("3");
+    expect(within(totals).getByText("Projects").closest(".team-metric")).toHaveTextContent("4");
+    expect(within(totals).getByText("Sessions").closest(".team-metric")).toHaveTextContent("9");
+    expect(within(totals).getByText("Tokens").closest(".team-metric")).toHaveTextContent("27k");
 
-    expect(screen.getByRole("img", { name: "Activity over time" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Token activity over time" })).toBeInTheDocument();
 
-    const risk = screen.getByLabelText("Team risk patterns");
-    expect(within(risk).getByText(/cost context blowup/i)).toBeInTheDocument();
-    expect(within(risk).getByText(/permission friction/i)).toBeInTheDocument();
+    const reliability = screen.getByLabelText("Recorded errors per session by member");
+    expect(within(reliability).getByText("Avery")).toBeInTheDocument();
+    expect(within(reliability).getByText("6 errors / 3 sessions")).toBeInTheDocument();
+    expect(screen.getByText("7 errors / 9 sessions")).toBeInTheDocument();
 
-    const modelMix = screen.getByLabelText("Team model mix");
+    const modelMix = screen.getByLabelText("Team model token mix");
     expect(within(modelMix).getByText("opus")).toBeInTheDocument();
     expect(within(modelMix).getByText("sonnet")).toBeInTheDocument();
+    expect(within(modelMix).getByText("18k")).toBeInTheDocument();
 
-    expect(screen.getByText(/Read/)).toHaveTextContent("x4");
+    expect(screen.queryByText("Risk patterns")).not.toBeInTheDocument();
+    expect(screen.queryByText("Loops")).not.toBeInTheDocument();
+    expect(screen.queryByText("Top sequence symbols")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/quality|poor performance/i);
   });
 
   it("renders member, project, toolchain, and file-type breakdowns", async () => {
     vi.mocked(getTeamDashboard).mockResolvedValue({
       ...dashboard,
       members: [
-        { member_name: "Avery", member_ids: ["1111"], bundle_count: 1, project_count: 1, session_count: 3, tokens: 900 },
-        { member_name: "member-2222abcd", member_ids: ["2222abcd"], bundle_count: 1, project_count: 1, session_count: 1, tokens: 100 },
+        { member_name: "Avery", member_ids: ["1111"], bundle_count: 1, project_count: 1, session_count: 3, tokens: 900, error_count: 2, errors_per_session: 2 / 3 },
+        { member_name: "member-2222abcd", member_ids: ["2222abcd"], bundle_count: 1, project_count: 1, session_count: 1, tokens: 100, error_count: 0, errors_per_session: 0 },
       ],
       projects: [
         { project_key: "alpha", project_name: "alpha", member_count: 2, session_count: 4, tokens: 1000 },
@@ -108,9 +121,9 @@ describe("TeamOverview", () => {
     } as never);
     renderOverview();
 
-    expect(await screen.findByText("Tokens by member")).toBeInTheDocument();
-    expect(screen.getByText("Avery")).toBeInTheDocument();
-    expect(screen.getByText("Tokens by project")).toBeInTheDocument();
+    expect(await screen.findByText("Token volume by member")).toBeInTheDocument();
+    expect(within(screen.getByLabelText("Token volume by member")).getByText("Avery")).toBeInTheDocument();
+    expect(screen.getByText("Token volume by project")).toBeInTheDocument();
     expect(screen.getByText("Toolchain")).toBeInTheDocument();
     expect(screen.getByText(".py")).toBeInTheDocument();
   });
@@ -119,7 +132,7 @@ describe("TeamOverview", () => {
     vi.mocked(getTeamDashboard).mockResolvedValue({
       ...dashboard,
       members: [
-        { member_name: "member-1111abcd", member_ids: ["1111abcd"], bundle_count: 1, project_count: 1, session_count: 3, tokens: 900 },
+        { member_name: "member-1111abcd", member_ids: ["1111abcd"], bundle_count: 1, project_count: 1, session_count: 3, tokens: 900, error_count: 0, errors_per_session: 0 },
       ],
       projects: [{ project_key: "a1b2c3d4", project_name: "a1b2c3d4", member_count: 1, session_count: 3, tokens: 900 }],
       tools: [],
@@ -127,7 +140,7 @@ describe("TeamOverview", () => {
     } as never);
     renderOverview();
 
-    expect(await screen.findByText("Tokens by member")).toBeInTheDocument();
+    expect(await screen.findByText("Token volume by member")).toBeInTheDocument();
     expect(screen.queryByText("Toolchain")).not.toBeInTheDocument();
   });
 });

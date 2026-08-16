@@ -11,12 +11,10 @@ import LoadingBar from "../../components/LoadingBar";
 
 interface Props {
   projects: Project[];
-  /** Part of the shared TechniqueProps contract; unused since the evidence
-      card no longer links into sessions. */
-  onOpenSession?: (sessionId: number, eventId?: number | null) => void;
+  onOpenSession: (sessionId: number, eventId?: number | null) => void;
 }
 
-export default function UsageMindmap({ projects }: Props) {
+export default function UsageMindmap({ projects, onOpenSession }: Props) {
   const [projectId, setProjectId] = React.useState<number | null>(null);
   const [dateFrom, setDateFrom] = React.useState("");
   const [dateTo, setDateTo] = React.useState("");
@@ -27,7 +25,7 @@ export default function UsageMindmap({ projects }: Props) {
   const boardRef = React.useRef<HTMLDivElement>(null);
 
   // A selection from the previous filter window may not exist in the new data;
-  // fall back to the costliest phase instead of highlighting a phantom node.
+  // fall back to the most active phase instead of highlighting a phantom node.
   React.useEffect(() => {
     setSelectedNode(null);
   }, [projectId, dateFrom, dateTo]);
@@ -70,13 +68,15 @@ export default function UsageMindmap({ projects }: Props) {
   });
   const previousShares: Record<string, number> | undefined =
     compareEnabled && previousQuery.data
-      ? Object.fromEntries(previousQuery.data.phases.map((p) => [p.key, p.share]))
+      ? Object.fromEntries(
+          previousQuery.data.phases.map((p) => [p.key, p.activity_share]),
+        )
       : undefined;
 
   if (query.isPending) {
     return (
       <main className="discover-page"><div className="discover-page-inner">
-        <div className="loading-view"><LoadingBar caption="Building your usage map…" /></div>
+        <div className="loading-view"><LoadingBar caption="Building the activity map…" /></div>
       </div></main>
     );
   }
@@ -85,7 +85,7 @@ export default function UsageMindmap({ projects }: Props) {
       <main className="discover-page"><div className="discover-page-inner">
         <div className="empty-state panel-error">
           <strong>Failed to load</strong>
-          <span>The usage map could not be loaded.</span>
+          <span>The activity map could not be loaded.</span>
         </div>
       </div></main>
     );
@@ -99,15 +99,15 @@ export default function UsageMindmap({ projects }: Props) {
     );
   }
 
-  const basis = meta.share_basis;
   const { phases: displayedPhases, total: displayedTotal } =
-    deriveOriginPhases(phases, origin, basis);
+    deriveOriginPhases(phases, origin);
   const splitEmpty = origin !== "all" && displayedTotal === 0;
 
-  // Default selection: the costliest phase, so the evidence card is never empty.
+  // Default selection: the most active phase, so the evidence card is never empty.
   const fallbackNode = ((): MapNode | null => {
-    const top = [...displayedPhases].sort((a, b) => b.share - a.share)[0];
-    if (!top || top.share === 0) return null;
+    const top = [...displayedPhases]
+      .sort((a, b) => b.activity_share - a.activity_share)[0];
+    if (!top || top.activity_share === 0) return null;
     return phaseNode(top);
   })();
   const activeNode = selectedNode ?? fallbackNode;
@@ -116,6 +116,10 @@ export default function UsageMindmap({ projects }: Props) {
     <main className="discover-page">
       <div className="discover-page-inner">
         <div className="discover-toolbar" aria-label="Usage map controls">
+          <div className="discover-toolbar-lead">
+            <h1>Experimental activity map</h1>
+            <p className="discover-subtitle">{meta.methodology}</p>
+          </div>
           <div className="cost-filterbar discover-filterbar">
             <select aria-label="Project" value={projectId ?? ""}
                     onChange={(e) => setProjectId(e.target.value ? Number(e.target.value) : null)}>
@@ -142,10 +146,10 @@ export default function UsageMindmap({ projects }: Props) {
                         onClick={() => {
                           setLeafMode(mode);
                           // A habit node cannot stay selected in tool mode (and
-                          // vice versa); fall back to the costliest phase.
+                          // vice versa); fall back to the most active phase.
                           setSelectedNode(null);
                         }}>
-                  {mode === "habits" ? "Habits" : "Tools"}
+                  {mode === "habits" ? "Patterns" : "Tools"}
                 </button>
               ))}
             </div>
@@ -176,24 +180,16 @@ export default function UsageMindmap({ projects }: Props) {
           </div>
         </div>
 
-        {!meta.cost_available && (
-          <p className="tile-note">Price table unavailable — shares are token-based.</p>
-        )}
-        {meta.costs_partial && (
-          <p className="tile-note">Some models have no price row — costs are partial.</p>
-        )}
-
         <div className="mindmap-stage" ref={boardRef}>
           {splitEmpty ? (
             <div className="empty-state">
-              No {origin === "main" ? "main-thread" : "subagent"} spend in this window.
+              No {origin === "main" ? "main-thread" : "subagent"} activity in this window.
             </div>
           ) : (
             <>
               <MindmapCanvas
                 phases={displayedPhases}
-                totalUsd={displayedTotal}
-                costAvailable={basis === "cost"}
+                totalActivity={displayedTotal}
                 selectedNodeId={activeNode?.id ?? null}
                 onSelectNode={setSelectedNode}
                 previousShares={origin === "all" ? previousShares : undefined}
@@ -201,10 +197,12 @@ export default function UsageMindmap({ projects }: Props) {
               />
               {activeNode && (
                 <EvidencePanel
+                  key={activeNode.id}
                   node={activeNode}
                   phases={phases}
                   filters={filters}
                   costAvailable={meta.cost_available}
+                  onOpenSession={onOpenSession}
                   previousShares={origin === "all" ? previousShares : undefined}
                 />
               )}

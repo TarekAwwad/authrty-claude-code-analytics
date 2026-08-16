@@ -4,7 +4,7 @@
 // only — no shell built-ins — so it runs on Windows, macOS, and Linux.
 //
 // Prerequisites: see scripts/README.md (backend on :8000 with an empty cache,
-// frontend dev server on :5173). Override the target with DEMO_URL.
+// frontend dev server on :5174). Override the target with DEMO_URL.
 
 import { chromium } from "playwright";
 import { spawnSync } from "node:child_process";
@@ -19,13 +19,47 @@ const RAW_DIR = join(MEDIA_DIR, ".raw");
 const WEBM = join(MEDIA_DIR, "demo.webm");
 const GIF = join(MEDIA_DIR, "demo.gif");
 const PALETTE = join(MEDIA_DIR, "demo.palette.png");
-const DEMO_URL = process.env.DEMO_URL ?? "http://localhost:5173";
+const DEMO_URL = process.env.DEMO_URL ?? "http://localhost:5174";
 const VIEWPORT = { width: 1280, height: 800 };
+const DEMO_PROJECTS = ["demo-data-pipeline", "demo-mobile-app", "demo-web-shop"];
+const DEMO_SESSION_COUNT = 46;
 
 // Deliberate on-screen dwell so each state is legible in the recording. This is
 // pacing for the viewer, NOT synchronization — every state change below is first
 // awaited on a visible element.
 const dwell = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const nav = (page, label) =>
+  page.locator("nav.sb-nav").getByRole("button", { name: label, exact: true }).click();
+
+async function assertSyntheticSessions(page) {
+  const sessions = await page.evaluate(async () => {
+    const resource = performance
+      .getEntriesByType("resource")
+      .toReversed()
+      .find((entry) => new URL(entry.name).pathname.endsWith("/api/sessions"));
+    if (!resource) throw new Error("Could not locate the Sessions API request.");
+    const url = new URL(resource.name);
+    url.search = "";
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Sessions API returned ${response.status}.`);
+    return response.json();
+  });
+  if (!Array.isArray(sessions)) {
+    throw new Error("Refusing to record: the Sessions API returned an unexpected payload.");
+  }
+  const seen = new Set();
+  for (const session of sessions) {
+    const project = session?.project_name;
+    if (typeof project !== "string" || !DEMO_PROJECTS.includes(project)) {
+      throw new Error("Refusing to record: the Sessions table contains non-demo data.");
+    }
+    seen.add(project);
+  }
+  if (sessions.length !== DEMO_SESSION_COUNT || seen.size !== DEMO_PROJECTS.length) {
+    throw new Error("Refusing to record: the complete bundled demo corpus is not loaded.");
+  }
+}
 
 function hasFfmpeg() {
   const probe = spawnSync("ffmpeg", ["-version"], { stdio: "ignore", shell: false });
@@ -54,25 +88,30 @@ async function record() {
   await page.goto(DEMO_URL, { waitUntil: "domcontentloaded" });
   const loadDemo = page.getByRole("button", { name: /load demo/i });
   await loadDemo.waitFor({ state: "visible", timeout: 60_000 });
+  const sourcePath = page.getByPlaceholder("Path to the Claude Code export root");
+  await sourcePath.evaluate((input) => {
+    input.value = "<configured Claude export root>";
+  });
   await dwell(1200);
 
   // 2. Load the built-in synthetic demo dataset.
   await loadDemo.click();
 
-  // 3. Overview triage board — wait for real session rows to prove the import ran.
-  await page.getByRole("button", { name: "Overview" }).click();
+  // 3. Sessions board — wait for real session rows to prove the import ran.
+  await nav(page, "Sessions");
   await page.getByPlaceholder("Search sessions").waitFor({ state: "visible", timeout: 60_000 });
   await page.locator("tbody tr").first().waitFor({ state: "visible", timeout: 60_000 });
+  await assertSyntheticSessions(page);
   await dwell(2000);
 
   // 4. Open Context Economics via the Explore sub-nav.
-  await page.getByRole("button", { name: "Explore" }).click();
+  await nav(page, "Explore");
   await page.getByRole("button", { name: "Context economics" }).click();
-  const meter = page.locator(".tax-meter-bar").first();
+  const meter = page.locator(".opportunity-meter-bar").first();
   await meter.waitFor({ state: "visible", timeout: 60_000 });
   await dwell(1200);
 
-  // 5. Hover the avoidable-spend meter to reveal its segment tooltips.
+  // 5. Hover the estimated-opportunity meter to reveal its segment tooltips.
   await meter.hover();
   await dwell(2000);
 
@@ -85,6 +124,7 @@ async function record() {
 
 function toGif() {
   if (!hasFfmpeg()) {
+    if (existsSync(GIF)) rmSync(GIF);
     console.warn(
       "ffmpeg not found on PATH — kept the webm only. Install ffmpeg " +
         "(Windows: `winget install Gyan.FFmpeg`) and re-run to produce docs/media/demo.gif.",

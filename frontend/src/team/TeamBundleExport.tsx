@@ -1,13 +1,13 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Download, FileJson, Pencil } from "lucide-react";
 import { exportTeamBundle, getRuntimeConfig, getTeamPreview, getTeamProjects } from "../api/client";
 import type { TeamExportRequestBody, TeamPrivacyLevel } from "../api/types";
-import type { ContributionSession } from "../contribute/specimen";
-import { compactInt } from "../contribute/specimen";
+import type { TeamBundleSession } from "./bundlePresentation";
+import { compactInt } from "./bundlePresentation";
 import { Blurred } from "../shell/Blurred";
-import PrivacyLedger from "../contribute/PrivacyLedger";
-import SpecimenModal from "../contribute/SpecimenModal";
+import PrivacyLedger from "./PrivacyLedger";
+import SpecimenModal from "./SpecimenModal";
 import LoadingBar from "../components/LoadingBar";
 
 const LEVELS: { id: TeamPrivacyLevel; label: string; hint: string }[] = [
@@ -23,8 +23,8 @@ const LEVELS: { id: TeamPrivacyLevel; label: string; hint: string }[] = [
   },
 ];
 
-function sessionsFromBundle(value: unknown): ContributionSession[] {
-  return Array.isArray(value) ? (value as ContributionSession[]) : [];
+function sessionsFromBundle(value: unknown): TeamBundleSession[] {
+  return Array.isArray(value) ? (value as TeamBundleSession[]) : [];
 }
 
 function errorMessage(error: unknown): string {
@@ -34,7 +34,8 @@ function errorMessage(error: unknown): string {
 // Local-scope "Export": write a content-free team bundle from this machine's
 // sessions and share it through a team-approved channel. The exporter picks a
 // privacy level: structural (anonymous) or team (named, for per-user/per-project
-// dashboards). The privacy ledger spells out exactly what leaves the machine.
+// dashboards). The privacy ledger spells out exactly what enters the bundle;
+// the browser sends only export settings to the app's local backend.
 export default function TeamBundleExport() {
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["config"], queryFn: getRuntimeConfig });
@@ -72,6 +73,7 @@ export default function TeamBundleExport() {
     queryKey: ["team-preview", previewBody],
     queryFn: () => getTeamPreview(previewBody),
     enabled: selected.length > 0,
+    placeholderData: keepPreviousData,
   });
 
   const exporter = useMutation({
@@ -104,12 +106,13 @@ export default function TeamBundleExport() {
 
   return (
     <main className="page team-flow-page team-export-page">
-      <section className="contribute-header team-flow-header" aria-labelledby="team-export-title">
-        <div className="contribute-titleblock team-titleblock">
+      <section className="team-flow-header" aria-labelledby="team-export-title">
+        <div className="team-titleblock">
           <h1 id="team-export-title">Export a team bundle</h1>
           <p>
-            Package local session structure into a content-free JSON bundle for teammates. The app
-            writes locally only, and the privacy level controls whether names travel with it.
+            The browser sends selected projects and privacy settings to this app&apos;s local backend,
+            which writes a content-free JSON bundle under team_bundle_root. The bundle is not sent
+            to a remote service.
           </p>
           <div className="team-root-row">
             <span>team_bundle_root</span>
@@ -119,7 +122,7 @@ export default function TeamBundleExport() {
           </div>
         </div>
 
-        <div className="contribute-metrics team-metrics team-flow-metrics" aria-label="Team export summary">
+        <div className="team-metrics team-flow-metrics" aria-label="Team export summary">
           <Metric value={`${selected.length}/${entries.length || 0}`} label="Projects" />
           <Metric value={sessionCount} label="Sessions" />
           <Metric value={selectedTokens} label="Tokens" />
@@ -179,9 +182,15 @@ export default function TeamBundleExport() {
               </p>
               <button
                 type="button"
-                className="contribute-primary-button"
+                className="team-primary-button"
                 onClick={() => exporter.mutate()}
-                disabled={exporter.isPending || selected.length === 0 || sessionCount === 0 || needsName}
+                disabled={
+                  exporter.isPending
+                  || preview.isFetching
+                  || selected.length === 0
+                  || sessionCount === 0
+                  || needsName
+                }
               >
                 {exporter.isSuccess ? (
                   <Check size={15} strokeWidth={3} aria-hidden="true" />
@@ -193,7 +202,7 @@ export default function TeamBundleExport() {
               <div className="team-flow-errors" aria-live="polite">
                 {needsName && <span className="flow-error">Enter your name to export a team-level bundle.</span>}
                 {selected.length === 0 && <span className="flow-error">Select at least one project.</span>}
-                {selected.length > 0 && sessionCount === 0 && (
+                {selected.length > 0 && !preview.isFetching && sessionCount === 0 && (
                   <span className="flow-error">No sessions in the current selection.</span>
                 )}
                 {exporter.isError && (
@@ -337,7 +346,7 @@ function Metric({
   mono?: boolean;
 }) {
   return (
-    <div className="contribute-metric">
+    <div className="team-metric">
       <strong className={mono ? undefined : "team-metric-text"}>
         {typeof value === "number" ? compactInt(value) : value}
       </strong>

@@ -37,3 +37,4 @@ docker-compose-local.yml
 /tmp/
 WIP-plans/
 docs/media/audit/
+docs/ux-audit/

@@ -16,6 +16,17 @@ from ccfr.config import pricing_dir, pricing_path
 
 _COST_CATEGORIES = ("base_input", "cache_write_5m", "cache_write_1h", "cache_read", "output")
 
+_SESSION_FINDING_PRECEDENCE = """
+CASE sf.detector_key
+    WHEN 'repeated_identical_failure' THEN 0
+    WHEN 'timeout' THEN 1
+    WHEN 'missing_dependency_or_command' THEN 2
+    WHEN 'permission_rejected' THEN 3
+    WHEN 'large_tool_result' THEN 4
+    ELSE 5
+END
+"""
+
 
 def session_cost(conn: sqlite3.Connection, session_id: int, *, historical: bool = True) -> dict[str, Any]:
     """Estimate the session's dollar cost from per-model token breakdowns.
@@ -120,20 +131,74 @@ def rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
 
 
 def list_imports(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    return rows_to_dicts(conn.execute("SELECT * FROM imports ORDER BY imported_at DESC").fetchall())
+    imports = rows_to_dicts(
+        conn.execute("SELECT * FROM imports ORDER BY imported_at DESC, id DESC").fetchall()
+    )
+    errors_by_import: dict[int, list[dict[str, Any]]] = {}
+    for row in conn.execute(
+        "SELECT import_id, path, line_no, message FROM import_errors ORDER BY id"
+    ).fetchall():
+        errors_by_import.setdefault(int(row["import_id"]), []).append(
+            {
+                "path": row["path"],
+                "line_no": row["line_no"],
+                "message": row["message"],
+            }
+        )
+    for item in imports:
+        item["errors"] = errors_by_import.get(int(item["id"]), [])
+    return imports
 
 
-def cache_stats(conn: sqlite3.Connection) -> dict[str, int]:
+def cache_stats(conn: sqlite3.Connection) -> dict[str, Any]:
     """Current totals across the whole local cache (independent of any single import)."""
     counts = {
         "project_count": "SELECT COUNT(*) FROM projects",
         "session_count": "SELECT COUNT(*) FROM sessions",
         "event_count": "SELECT COUNT(*) FROM events",
         "subagent_count": "SELECT COUNT(*) FROM subagents",
-        "memory_count": "SELECT COUNT(*) FROM memory_nodes",
         "persisted_output_count": "SELECT COUNT(*) FROM persisted_outputs",
     }
-    return {key: conn.execute(sql).fetchone()[0] for key, sql in counts.items()}
+    result: dict[str, Any] = {
+        key: int(conn.execute(sql).fetchone()[0]) for key, sql in counts.items()
+    }
+    coverage = conn.execute(
+        """
+        SELECT
+            MIN(substr(COALESCE(first_ts, last_ts), 1, 10)) AS observed_date_from,
+            MAX(substr(COALESCE(last_ts, first_ts), 1, 10)) AS observed_date_to
+        FROM sessions
+        """
+    ).fetchone()
+    last_success = conn.execute(
+        """
+        SELECT imported_at
+        FROM imports
+        WHERE status IN ('completed', 'completed_with_errors')
+        ORDER BY imported_at DESC, id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    latest_terminal = conn.execute(
+        """
+        SELECT error_count
+        FROM imports
+        WHERE status IN ('completed', 'completed_with_errors', 'failed')
+        ORDER BY imported_at DESC, id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    result.update(
+        {
+            "observed_date_from": coverage["observed_date_from"],
+            "observed_date_to": coverage["observed_date_to"],
+            "last_successful_sync_at": last_success["imported_at"] if last_success else None,
+            "latest_import_error_count": int(latest_terminal["error_count"])
+            if latest_terminal
+            else 0,
+        }
+    )
+    return result
 
 
 def import_summary_stats(conn: sqlite3.Connection, import_id: int) -> dict[str, int]:
@@ -158,12 +223,6 @@ def import_summary_stats(conn: sqlite3.Connection, import_id: int) -> dict[str, 
             FROM subagents sa
             JOIN sessions s ON s.id = sa.parent_session_id
             JOIN projects p ON p.id = s.project_id
-            WHERE p.import_id = ?
-        """,
-        "memory_count": """
-            SELECT COUNT(*)
-            FROM memory_nodes m
-            JOIN projects p ON p.id = m.project_id
             WHERE p.import_id = ?
         """,
         "persisted_output_count": """
@@ -275,8 +334,6 @@ def list_sessions(
             COALESCE(ss.persisted_output_count, 0) AS persisted_output_count,
             COALESCE(ss.input_tokens, 0) AS input_tokens,
             COALESCE(ss.output_tokens, 0) AS output_tokens,
-            COALESCE(ss.loop_count, 0) AS loop_count,
-            COALESCE(ss.max_repeat, 0) AS max_repeat,
             CAST(
                 ROUND(COALESCE((julianday(s.last_ts) - julianday(s.first_ts)) * 86400, 0)) AS INTEGER
             ) AS duration_seconds,
@@ -284,29 +341,20 @@ def list_sessions(
                 (SELECT MAX(event_count) FROM subagents WHERE parent_session_id = s.id), 0
             ) AS max_agent_events,
             COALESCE(
-                (SELECT COUNT(*) FROM risk_findings rf WHERE rf.session_id = s.id), 0
+                (SELECT COUNT(*) FROM session_findings sf WHERE sf.session_id = s.id), 0
             ) AS finding_count,
-            COALESCE(
-                (SELECT SUM(rf.score) FROM risk_findings rf WHERE rf.session_id = s.id), 0
-            ) AS pattern_risk_score,
             (
-                SELECT rf.category FROM risk_findings rf
-                WHERE rf.session_id = s.id
-                ORDER BY rf.score DESC, rf.id ASC
+                SELECT sf.title FROM session_findings sf
+                WHERE sf.session_id = s.id
+                ORDER BY {_SESSION_FINDING_PRECEDENCE}, sf.id ASC
                 LIMIT 1
-            ) AS top_finding_category,
+            ) AS top_finding_title,
             (
-                SELECT rf.severity FROM risk_findings rf
-                WHERE rf.session_id = s.id
-                ORDER BY rf.score DESC, rf.id ASC
+                SELECT sf.basis FROM session_findings sf
+                WHERE sf.session_id = s.id
+                ORDER BY {_SESSION_FINDING_PRECEDENCE}, sf.id ASC
                 LIMIT 1
-            ) AS top_finding_severity,
-            (
-                SELECT rf.title FROM risk_findings rf
-                WHERE rf.session_id = s.id
-                ORDER BY rf.score DESC, rf.id ASC
-                LIMIT 1
-            ) AS top_finding_title
+            ) AS top_finding_basis
         FROM sessions s
         JOIN projects p ON p.id = s.project_id
         LEFT JOIN session_stats ss ON ss.session_id = s.id
@@ -384,6 +432,7 @@ def get_timeline(conn: sqlite3.Connection, session_id: int) -> list[dict[str, An
                 "tool_name": row["tool_name"],
                 "agent_id": row["agent_id"],
                 "is_sidechain": bool(row["is_sidechain"]),
+                "is_error": bool(row["is_error"]),
                 "related_event_ids": related,
             }
         )
@@ -475,8 +524,13 @@ def get_trace(conn: sqlite3.Connection, session_id: int, *, historical: bool = T
     return trace
 
 
-def list_subagents(conn: sqlite3.Connection, session_id: int) -> list[dict[str, Any]]:
-    return rows_to_dicts(
+def list_subagents(
+    conn: sqlite3.Connection,
+    session_id: int,
+    *,
+    historical: bool = True,
+) -> list[dict[str, Any]]:
+    subagents = rows_to_dicts(
         conn.execute(
             """
             SELECT id, agent_id, agent_type, description, name, tool_use_id, event_count, first_ts, last_ts
@@ -487,47 +541,199 @@ def list_subagents(conn: sqlite3.Connection, session_id: int) -> list[dict[str, 
             (session_id,),
         ).fetchall()
     )
+    if not subagents:
+        return []
 
-
-def list_risk_findings(conn: sqlite3.Connection, session_id: int) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """
+    timeline = load_price_timeline(pricing_path(), pricing_dir())
+    period_expr = timeline.sql_period_expr("e.timestamp", historical=historical)
+    message_rows = conn.execute(
+        f"""
         SELECT
-            rf.id,
-            rf.session_id,
-            rf.severity,
-            rf.category,
-            rf.title,
-            rf.explanation,
-            rf.start_event_id,
-            rf.end_event_id,
-            rf.score,
-            rf.evidence_json,
-            sp.pattern_json,
-            COALESCE(sp.support, 0) AS support,
-            COALESCE(sp.positive_support, 0) AS positive_support,
-            COALESCE(sp.negative_support, 0) AS negative_support,
-            COALESCE(sp.lift, 0) AS lift
-        FROM risk_findings rf
-        LEFT JOIN sequence_patterns sp ON sp.id = rf.pattern_id
-        WHERE rf.session_id = ?
-        ORDER BY
-            CASE rf.severity
-                WHEN 'high' THEN 0
-                WHEN 'medium' THEN 1
-                ELSE 2
-            END,
-            rf.score DESC,
-            rf.id ASC
+            e.agent_id,
+            m.model,
+            ({period_expr}) AS price_period,
+            COALESCE(SUM(m.input_tokens), 0) AS input_tokens,
+            COALESCE(SUM(m.output_tokens), 0) AS output_tokens,
+            COALESCE(SUM(m.base_input_tokens), 0) AS base_input,
+            COALESCE(SUM(m.cache_5m_tokens), 0) AS cache_write_5m,
+            COALESCE(SUM(m.cache_1h_tokens), 0) AS cache_write_1h,
+            COALESCE(SUM(m.cache_read_tokens), 0) AS cache_read,
+            COALESCE(SUM(m.output_tokens), 0) AS output
+        FROM events e
+        JOIN messages m ON m.event_id = e.id
+        WHERE e.session_id = ? AND e.agent_id IS NOT NULL AND m.role = 'assistant'
+        GROUP BY e.agent_id, m.model, price_period
         """,
         (session_id,),
     ).fetchall()
+    error_counts = {
+        str(row["agent_id"]): int(row["error_count"])
+        for row in conn.execute(
+            """
+            SELECT e.agent_id, COUNT(*) AS error_count
+            FROM tool_results tr
+            JOIN events e ON e.id = tr.event_id
+            WHERE tr.session_id = ? AND tr.is_error = 1 AND e.agent_id IS NOT NULL
+            GROUP BY e.agent_id
+            """,
+            (session_id,),
+        ).fetchall()
+    }
+
+    activity: dict[str, dict[str, Any]] = {
+        str(agent["agent_id"]): {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "api_equivalent_usd": 0.0,
+            "unpriced_models": set(),
+        }
+        for agent in subagents
+    }
+    for row in message_rows:
+        agent = activity.get(str(row["agent_id"]))
+        if agent is None:
+            continue
+        agent["input_tokens"] += int(row["input_tokens"])
+        agent["output_tokens"] += int(row["output_tokens"])
+        breakdown = TokenBreakdown(**{category: int(row[category]) for category in _COST_CATEGORIES})
+        used = any(getattr(breakdown, category) for category in _COST_CATEGORIES)
+        table = timeline.table_for_period(row["price_period"], historical=historical)
+        price = match_price(table, row["model"])
+        if price is None:
+            if used:
+                agent["unpriced_models"].add(str(row["model"] or "Unknown model"))
+            continue
+        agent["api_equivalent_usd"] += cost_usd(price, breakdown)
+
+    for subagent in subagents:
+        agent_id = str(subagent["agent_id"])
+        values = activity[agent_id]
+        subagent.update(
+            input_tokens=values["input_tokens"],
+            output_tokens=values["output_tokens"],
+            error_count=error_counts.get(agent_id, 0),
+            api_equivalent_usd=round(values["api_equivalent_usd"], 6),
+            cost_available=timeline.has_prices,
+            unpriced_models=sorted(values["unpriced_models"]),
+        )
+    return subagents
+
+
+def list_tool_activity(conn: sqlite3.Connection, session_id: int) -> list[dict[str, Any]]:
+    activity: dict[str, dict[str, Any]] = {}
+    for row in conn.execute(
+        """
+        SELECT COALESCE(NULLIF(tool_name, ''), 'Unknown tool') AS tool_name, COUNT(*) AS call_count
+        FROM tool_calls
+        WHERE session_id = ?
+        GROUP BY COALESCE(NULLIF(tool_name, ''), 'Unknown tool')
+        """,
+        (session_id,),
+    ).fetchall():
+        tool_name = str(row["tool_name"])
+        activity[tool_name] = {
+            "tool_name": tool_name,
+            "call_count": int(row["call_count"]),
+            "error_count": 0,
+            "observed_result_bytes": 0,
+            "persisted_result_bytes": 0,
+        }
+
+    result_rows = conn.execute(
+        """
+        SELECT
+            calls.tool_name,
+            tr.is_error,
+            LENGTH(CAST(tr.raw_json AS BLOB)) AS observed_result_bytes,
+            COALESCE(po.size_bytes, 0) AS persisted_result_bytes
+        FROM tool_results tr
+        JOIN (
+            SELECT
+                session_id,
+                tool_use_id,
+                MIN(COALESCE(NULLIF(tool_name, ''), 'Unknown tool')) AS tool_name
+            FROM tool_calls
+            WHERE session_id = ? AND tool_use_id IS NOT NULL
+            GROUP BY session_id, tool_use_id
+        ) calls ON calls.session_id = tr.session_id AND calls.tool_use_id = tr.tool_use_id
+        LEFT JOIN persisted_outputs po ON po.id = tr.persisted_output_id
+        WHERE tr.session_id = ?
+        """,
+        (session_id, session_id),
+    ).fetchall()
+    for row in result_rows:
+        tool = activity.get(str(row["tool_name"]))
+        if tool is None:
+            continue
+        tool["error_count"] += int(row["is_error"] or 0)
+        tool["observed_result_bytes"] += int(row["observed_result_bytes"] or 0)
+        tool["persisted_result_bytes"] += int(row["persisted_result_bytes"] or 0)
+
+    return sorted(activity.values(), key=lambda row: (-row["call_count"], row["tool_name"].lower()))
+
+
+def list_session_findings(conn: sqlite3.Connection, session_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        f"""
+        SELECT
+            sf.id,
+            sf.session_id,
+            sf.detector_key,
+            sf.basis,
+            sf.category,
+            sf.title,
+            sf.explanation,
+            sf.recommendation,
+            sf.start_event_id,
+            sf.end_event_id,
+            sf.evidence_json
+        FROM session_findings sf
+        WHERE sf.session_id = ?
+        ORDER BY {_SESSION_FINDING_PRECEDENCE}, sf.id ASC
+        """,
+        (session_id,),
+    ).fetchall()
+
     findings: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
-        item["pattern"] = _loads_json_list(item.pop("pattern_json"))
         item["evidence"] = _loads_json_dict(item.pop("evidence_json"))
         findings.append(item)
+
+    def raw_evidence_event_ids(finding: dict[str, Any]) -> list[Any]:
+        value = finding["evidence"].get("event_ids", [])
+        return value if isinstance(value, list) else []
+
+    candidate_event_ids = {
+        event_id
+        for finding in findings
+        for event_id in raw_evidence_event_ids(finding)
+        if isinstance(event_id, int) and not isinstance(event_id, bool)
+    }
+    valid_event_ids: set[int] = set()
+    if candidate_event_ids:
+        placeholders = ",".join("?" for _ in candidate_event_ids)
+        valid_event_ids = {
+            int(row["id"])
+            for row in conn.execute(
+                f"SELECT id FROM events WHERE session_id = ? AND id IN ({placeholders})",
+                (session_id, *sorted(candidate_event_ids)),
+            ).fetchall()
+        }
+
+    for finding in findings:
+        evidence_event_ids: list[int] = []
+        seen: set[int] = set()
+        for event_id in raw_evidence_event_ids(finding):
+            if (
+                isinstance(event_id, int)
+                and not isinstance(event_id, bool)
+                and event_id in valid_event_ids
+                and event_id not in seen
+            ):
+                seen.add(event_id)
+                evidence_event_ids.append(event_id)
+        finding["evidence_event_ids"] = evidence_event_ids
     return findings
 
 

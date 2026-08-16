@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from ccfr.api import routes
 from ccfr.api.deps import get_db
+from ccfr.analysis.team_bundles import bundle_content_id
 from ccfr.main import create_app
 from ccfr.storage import init_db
 
@@ -23,7 +24,7 @@ def _write_project(root: Path, name: str, session_id: str) -> None:
     )
 
 
-def _write_risky_project(root: Path, name: str, session_id: str) -> None:
+def _write_finding_project(root: Path, name: str, session_id: str) -> None:
     project = root / name
     project.mkdir(parents=True, exist_ok=True)
     (project / f"{session_id}.jsonl").write_text(
@@ -35,7 +36,7 @@ def _write_risky_project(root: Path, name: str, session_id: str) -> None:
             '"id":"toolu_1","name":"Bash","input":{"command":"uv run pytest"}}]}}',
             '{"type":"user","uuid":"u2","parentUuid":"a1","timestamp":"2026-01-01T00:00:02Z",'
             '"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1",'
-            '"is_error":true,"content":"Exit code 1\\npytest failed"}]}}',
+            '"is_error":true,"content":"Command timed out after 20 seconds"}]}}',
         ]),
         encoding="utf-8",
     )
@@ -86,6 +87,64 @@ def test_import_all_new_then_reset(client) -> None:
     assert reset.status_code == 200
     assert reset.json() == {"ok": True}
     assert c.get("/api/projects").json() == []
+
+
+def test_local_reset_preserves_imported_team_bundles(client) -> None:
+    c, root = client
+    _write_project(root, "d--Alpha", "11111111-1111-1111-1111-111111111111")
+    assert c.post("/api/imports", json={}).status_code == 200
+
+    bundle = {
+        "schema_version": 1,
+        "profile": "team_strict",
+        "member_id": "22222222-2222-2222-2222-222222222222",
+        "generated_at": "2026-07-16",
+        "app_version": "0.1.0",
+        "sessions": [],
+    }
+    bundle["bundle_id"] = bundle_content_id(bundle)
+    assert c.post(
+        "/api/team/import-bundle",
+        json={"filename": "team.json", "bundle": bundle},
+    ).status_code == 200
+
+    assert c.post("/api/imports/reset").status_code == 200
+
+    assert c.get("/api/projects").json() == []
+    assert len(c.get("/api/team/imports").json()) == 1
+
+
+def test_import_status_persists_skipped_errors_and_human_project_identity(client) -> None:
+    c, root = client
+    project = root / "d--Encoded-Project"
+    project.mkdir(parents=True)
+    (project / "11111111-1111-1111-1111-111111111111.jsonl").write_text(
+        "\n".join([
+            '{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z",'
+            '"cwd":"/workspace/payments-api","message":{"role":"user","content":"hello"}}',
+            "not valid json",
+        ]),
+        encoding="utf-8",
+    )
+
+    imported = c.post("/api/imports", json={"project": "d--Encoded-Project"})
+    assert imported.status_code == 200
+    assert imported.json()["error_count"] == 1
+
+    projects = c.get("/api/source/projects").json()
+    assert projects[0]["name"] == "d--Encoded-Project"
+    assert projects[0]["display_name"] == "payments-api"
+
+    stats = c.get("/api/stats").json()
+    assert stats["observed_date_from"] == "2026-01-01"
+    assert stats["observed_date_to"] == "2026-01-01"
+    assert stats["last_successful_sync_at"] is not None
+    assert stats["latest_import_error_count"] == 1
+
+    history = c.get("/api/imports").json()
+    assert history[0]["error_count"] == 1
+    assert history[0]["errors"]
+    assert history[0]["errors"][0]["path"].endswith(".jsonl")
 
 
 def test_import_unknown_project_returns_400(client) -> None:
@@ -182,6 +241,8 @@ def test_import_progress_reports_running_project(client, monkeypatch: pytest.Mon
     assert progress["totals"]["event_count"] == 1
     assert progress["summary"]["project_count"] == 1
     assert progress["summary"]["event_count"] == 1
+    assert "memory_count" not in progress["totals"]
+    assert "memory_count" not in progress["summary"]
 
     release.set()
     thread.join(5)
@@ -189,21 +250,27 @@ def test_import_progress_reports_running_project(client, monkeypatch: pytest.Mon
     assert c.get("/api/imports/progress").json()["active"] is False
 
 
-def test_findings_endpoint_returns_pattern_evidence(client) -> None:
+def test_findings_endpoint_returns_score_free_evidence(client) -> None:
     c, root = client
-    _write_risky_project(root, "d--Risky", "33333333-3333-3333-3333-333333333333")
+    _write_finding_project(root, "d--Finding", "33333333-3333-3333-3333-333333333333")
 
-    assert c.post("/api/imports", json={"project": "d--Risky"}).status_code == 200
+    assert c.post("/api/imports", json={"project": "d--Finding"}).status_code == 200
     sessions = c.get("/api/sessions").json()
     assert sessions[0]["finding_count"] > 0
-    assert sessions[0]["pattern_risk_score"] > 0
+    assert sessions[0]["top_finding_title"] == "Tool call timed out"
+    assert sessions[0]["top_finding_basis"] == "observed"
+    assert "pattern_risk_score" not in sessions[0]
+    assert "top_finding_severity" not in sessions[0]
 
     resp = c.get(f"/api/sessions/{sessions[0]['id']}/findings")
     assert resp.status_code == 200
     findings = resp.json()
     assert findings
-    assert findings[0]["pattern"]
+    assert findings[0]["detector_key"] == "timeout"
+    assert findings[0]["basis"] == "observed"
+    assert findings[0]["evidence_event_ids"]
     assert findings[0]["start_event_id"] is not None
+    assert {"score", "lift", "support", "pattern", "severity"}.isdisjoint(findings[0])
 
 
 def test_stats_reflect_current_cache(client) -> None:
@@ -216,8 +283,11 @@ def test_stats_reflect_current_cache(client) -> None:
         "session_count": 0,
         "event_count": 0,
         "subagent_count": 0,
-        "memory_count": 0,
         "persisted_output_count": 0,
+        "observed_date_from": None,
+        "observed_date_to": None,
+        "last_successful_sync_at": None,
+        "latest_import_error_count": 0,
     }
 
     _write_project(root, "d--Alpha", "11111111-1111-1111-1111-111111111111")

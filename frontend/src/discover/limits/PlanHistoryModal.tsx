@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { getSettings, updateSettings } from "../../api/client";
 import type { PlanEra } from "../../api/types";
 
-// The subscription tiers a cap can belong to. A saved value outside this list
+// The subscription tiers a recorded limit hit can belong to. A saved value outside this list
 // (from an older cache or a hand-edited settings file) is kept as an extra
 // option so opening the editor never silently rewrites history.
 const PLAN_OPTIONS = ["Pro", "Max 5x", "Max 20x", "Team", "Enterprise"];
@@ -52,7 +52,7 @@ export default function PlanHistoryModal({ onClose }: { onClose: () => void }) {
         <div className="card-pad">
           <p className="plan-intro">
             Which subscription you were on, and since when. Eras split the
-            timeline and the measured cap zones. Leave empty for a single view.
+            timeline and the observed hit levels. Leave empty for a single view.
           </p>
           {rows !== null && rows.length === 0 && (
             <p className="plan-empty">No plans recorded yet.</p>

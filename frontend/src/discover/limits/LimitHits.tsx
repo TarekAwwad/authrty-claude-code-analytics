@@ -10,11 +10,8 @@ import { Blurred } from "../../shell/Blurred";
 import InsightStat from "../../components/InsightStat";
 import LoadingBar from "../../components/LoadingBar";
 import {
-  activeEra,
-  buildVerdict,
-  eraRates,
-  formatBlocked,
   formatLimitValue,
+  formatResetInterval,
   hitUsage,
   type LimitBasis,
 } from "./limitMath";
@@ -24,18 +21,13 @@ function hitCountsHint(counts: Record<string, number>): string {
   return parts.length > 0 ? parts.join(" · ") : "in your exported logs";
 }
 
-function cappedCount(windows: LimitsResponse["windows"]): number {
-  return windows.filter((w) => w.hit_kinds.length > 0).length;
-}
-
-function cappedPct(windows: LimitsResponse["windows"]): number {
-  if (windows.length === 0) return 0;
-  return Math.round((cappedCount(windows) / windows.length) * 100);
+function sessionHitWindowCount(windows: LimitsResponse["windows"]): number {
+  return windows.filter((w) => w.hit_kinds.includes("session")).length;
 }
 
 // Explore technique: measured subscription limits. Account-level by design,
-// so unlike the other techniques there is no project filter (the window that
-// capped may have been filled by several projects at once).
+// so unlike the other techniques there is no project filter (a limit window
+// may have been filled by several projects at once).
 export default function LimitHits({ onOpenSession }: TechniqueProps) {
   const query = useQuery<LimitsResponse>({ queryKey: ["limits"], queryFn: getLimits });
   const data = query.data;
@@ -52,17 +44,6 @@ export default function LimitHits({ onOpenSession }: TechniqueProps) {
     data != null && (!data.meta.cost_available || data.meta.costs_partial) ? "tokens" : "cost";
   const basis: LimitBasis = costUnusable ? "tokens" : chosenBasis ?? defaultBasis;
 
-  // The verdict reads the plan the user is on now (the newest window's era).
-  const verdict = React.useMemo(() => {
-    if (!data || data.windows.length === 0) return null;
-    const era = activeEra(data.windows);
-    return buildVerdict(
-      data.eras.find((e) => e.era === era),
-      eraRates(data.windows, data.hits).get(era ?? ""),
-      basis,
-    );
-  }, [basis, data]);
-
   return (
     <main className="discover-page">
       <div className="discover-page-inner">
@@ -70,8 +51,8 @@ export default function LimitHits({ onOpenSession }: TechniqueProps) {
           <div className="discover-toolbar-lead">
             <h1>Limit hits</h1>
             <p className="discover-subtitle">
-              Every cap hit recorded in your logs, and the 5-hour windows behind
-              them. Covers all projects: limits are account-level.
+              Every recorded limit hit in your logs, and the 5-hour windows behind
+              session-limit hits. Covers all projects: limits are account-level.
             </p>
           </div>
           <div className="limit-toolbar-actions">
@@ -113,20 +94,16 @@ export default function LimitHits({ onOpenSession }: TechniqueProps) {
             <div className="cost-insight-strip limit-insight-strip" aria-label="Limit stats">
               <InsightStat label="Limit hits" value={data.meta.total_hits}
                            hint={hitCountsHint(data.meta.hit_counts)} />
-              <InsightStat label="Time blocked" value={formatBlocked(data.meta.blocked_minutes)}
-                           hint="from parsed reset times" />
-              <InsightStat label="Capped windows" value={`${cappedPct(data.windows)}%`}
-                           hint={`${cappedCount(data.windows)} of ${data.windows.length} windows hit a cap`} />
+              <InsightStat label="Time remaining until recorded reset"
+                           value={formatResetInterval(data.meta.minutes_until_reset)}
+                           hint="sum of parsed reset-minus-hit intervals" />
+              <InsightStat label="Recorded session-hit windows"
+                           value={`${sessionHitWindowCount(data.windows)} of ${data.windows.length}`}
+                           hint="reconstructed five-hour windows" />
             </div>
-            {verdict && (
-              <p className="limit-verdict" data-tone={verdict.tone}>
-                <i aria-hidden={true} />
-                <span>{verdict.text}</span>
-              </p>
-            )}
             <section className="card" aria-label="Windows timeline">
               <div className="card-head">
-                <h2>5-hour windows, hits marked</h2>
+                <h2>5-hour windows, recorded hits marked</h2>
                 <span className="card-count"><b>{data.meta.total_windows}</b> windows</span>
               </div>
               <div className="card-pad">
@@ -135,9 +112,9 @@ export default function LimitHits({ onOpenSession }: TechniqueProps) {
               </div>
             </section>
 
-            <section className="card" aria-label="Measured cap zones">
+            <section className="card" aria-label="Visible usage at recorded hit">
               <div className="card-head">
-                <h2>Measured cap zones</h2>
+                <h2>Visible usage at recorded hit</h2>
               </div>
               <div className="card-pad">
                 <CapZones eras={data.eras} basis={basis} />
@@ -158,9 +135,9 @@ export default function LimitHits({ onOpenSession }: TechniqueProps) {
                       <span className={`limit-kind limit-kind-${h.kind}`}>{h.kind} limit</span>
                       <span>{new Date(h.ts).toLocaleString()}</span>
                       <span>
-                        {h.blocked_minutes != null
-                          ? `blocked ${formatBlocked(h.blocked_minutes)}`
-                          : "reset time unknown"}
+                        {h.minutes_until_reset != null
+                          ? `Time remaining until recorded reset: ${formatResetInterval(h.minutes_until_reset)}`
+                          : "Recorded reset time unavailable"}
                       </span>
                       {hitUsage(h, basis) != null && (
                         <span>

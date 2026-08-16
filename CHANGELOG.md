@@ -6,14 +6,69 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-16
+
 ### Added
-- Limit hits can now switch between raw token volume and API-equivalent cost;
-  the timeline, hit details, cap zones, near-misses, percentile, and plan-fit
-  verdict all use the selected measurement basis.
+- Limit-hit analysis can now switch between recorded token volume and estimated
+  API-equivalent cost; the window timeline and hit details use the selected
+  measurement basis.
+- Supported session findings now identify repeated identical failures, observed
+  timeouts, missing dependencies or commands, permission rejections, and large
+  persisted tool results, with links to the recorded evidence.
+
+### Changed
+- Reframed analytics around explicit evidence: observed records, estimated
+  API-equivalent values, inferred limit windows, and non-causal experimental
+  associations now state their basis and expose receipts where available.
+- Renamed the local Overview to Sessions and reorganized Explore into primary
+  techniques plus a clearly labelled Experimental section.
+- Reworked the Session workspace around supported findings, tool activity, a
+  selectable subagent heatmap, browser-native navigation, and an always-visible
+  trace.
+- Clarified Import synchronization, local versus Team reset scope, partial or
+  unavailable pricing, and read-only source handling. Source memory files are
+  no longer indexed.
+- Team exports now use schema v3 without deprecated risk, loop, or event-sequence
+  inventory; sanitized v1 and v2 imports remain supported.
+- Re-audited the public, package, privacy, security, and architecture docs and
+  refreshed synthetic screenshots and demo media against the current UI.
+
+### Fixed
+- Team Export keeps the current preview visible while project selections are
+  refreshed, preventing transient full-list and empty-selection flashes.
+- Team bundle imports now require canonical ISO dates, bound sequence and
+  counter values, and reject excessive session counts.
+- Cost trend endpoints now reject invalid dates and ranges that would generate
+  excessive response buckets.
+- Team model sanitization now includes every model in the shipped pricing table,
+  so locally priced models remain priceable after Team export.
+
+### Security
+- State-changing API requests now reject untrusted browser origins and
+  cross-site Fetch Metadata while preserving same-origin and non-browser use.
+- API request bodies are capped at 50 MiB before JSON parsing.
+- Raised the Starlette runtime floor to a version containing the 2026 request
+  URL and form-limit security fixes.
+- The API docs page now serves Swagger UI from files bundled into the package
+  instead of loading them from a third-party CDN, disables the unused ReDoc
+  page, and switches off the swagger.io spec validator badge. Opening /docs no
+  longer runs remotely hosted JavaScript inside the unauthenticated local API
+  origin or contacts external hosts, including on non-loopback deployments.
+- Docker builds now install the exact hash-pinned Python dependency set from
+  uv.lock instead of re-resolving version ranges, the frontend image pins its
+  Node and nginx base images by digest, and Dependabot now watches the
+  frontend Dockerfile. The backend image runs the app from source and no
+  longer installs the package itself, so no unpinned build toolchain is
+  downloaded during the image build.
+
+### Removed
+- Removed uninterpretable risk scores and tiers, loop/max-repeat metrics, the
+  passive event-density chart, stale pattern and sequence mining, unused memory
+  indexing, and the unmounted contribution workflow.
 
 ## [0.1.0] - 2026-07-11
 
-First public release. Local, privacy-strict forensic analytics for Claude Code
+First public release. Local forensic analytics for Claude Code
 `~/.claude/projects` exports.
 
 ### Added
@@ -29,9 +84,11 @@ First public release. Local, privacy-strict forensic analytics for Claude Code
   pricing.
 - Explore techniques: subgroup discovery, Context Economics (avoidable vs
   necessary spend), and a usage mindmap with JSON/PNG export.
-- Content-free team bundles at structural and team privacy levels, with team
-  aggregate Overview and Cost views.
-- Privacy mode that blurs sensitive UI text for safe screenshots.
+- Team bundles at structural and team privacy levels, designed to omit raw
+  conversation content while retaining allowlisted aggregate and structural
+  fields for team Overview and Cost views.
+- Privacy mode that blurs selected sensitive UI text; screenshots still require
+  manual review before sharing.
 - Synthetic demo dataset and a "Load demo data" action on the Import page, so the
   product's value is visible before importing real logs.
 - The CLI now tips its hat on startup (CYA -- cover your assets).

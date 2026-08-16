@@ -1,17 +1,17 @@
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ArrowLeftRight, Search } from "lucide-react";
-import { getEvent, getSession, getSessionFindings, getSubagents, getTimeline, getTrace, search } from "../api/client";
+import { getEvent, getSession, getSessionFindings, getSubagents, getTimeline, getToolActivity, getTrace, search } from "../api/client";
 import { Blurred } from "../shell/Blurred";
 import type { SessionCard } from "../api/types";
 import TimelinePanel from "../timeline/TimelinePanel";
 import InspectorPanel from "../inspector/InspectorPanel";
 import TraceView from "../trace/TraceView";
-import { buildLoopContextMap } from "../trace/loopContext";
+import { buildSameToolStreakContextMap } from "../trace/sameToolStreak";
 import SessionInsightStrip from "../session/SessionInsightStrip";
-import EventDensityTile from "../session/EventDensityTile";
 import ToolUsageTile from "../session/ToolUsageTile";
 import SubagentHeatTile from "../session/SubagentHeatTile";
+import { buildSubagentHeat } from "../session/sessionAnalytics";
 import LoadingBar from "../components/LoadingBar";
 
 interface Props {
@@ -21,18 +21,25 @@ interface Props {
   /** Label for the origin-aware navigation control, for example "Back to Cost". */
   backLabel?: string;
   onBack?: () => void;
+  historical?: boolean;
 }
 
-function SessionWorkspace({ session, initialEventId = null, backLabel, onBack }: Props) {
+function SessionWorkspace({ session, initialEventId = null, backLabel, onBack, historical = true }: Props) {
+  const workspaceRef = React.useRef<HTMLElement | null>(null);
   const [selectedEventId, setSelectedEventId] = React.useState<number | null>(initialEventId);
-  const [cursorIndex, setCursorIndex] = React.useState(0);
-  const [playing, setPlaying] = React.useState(false);
   const [query, setQuery] = React.useState("");
 
   const sessionQuery = useQuery({ queryKey: ["session", session.id], queryFn: () => getSession(session.id), initialData: session });
   const timeline = useQuery({ queryKey: ["timeline", session.id], queryFn: () => getTimeline(session.id) });
   const trace = useQuery({ queryKey: ["trace", session.id], queryFn: () => getTrace(session.id) });
-  const subagents = useQuery({ queryKey: ["subagents", session.id], queryFn: () => getSubagents(session.id) });
+  const subagents = useQuery({
+    queryKey: ["subagents", session.id, historical],
+    queryFn: () => getSubagents(session.id, historical),
+  });
+  const toolActivity = useQuery({
+    queryKey: ["tool-activity", session.id],
+    queryFn: () => getToolActivity(session.id),
+  });
   const findings = useQuery({ queryKey: ["findings", session.id], queryFn: () => getSessionFindings(session.id) });
   const selectedEvent = useQuery({
     queryKey: ["event", selectedEventId],
@@ -47,7 +54,17 @@ function SessionWorkspace({ session, initialEventId = null, backLabel, onBack }:
   const timelineItems = React.useMemo(() => timeline.data ?? [], [timeline.data]);
   const spans = React.useMemo(() => trace.data?.spans ?? [], [trace.data?.spans]);
   const subagentList = React.useMemo(() => subagents.data ?? [], [subagents.data]);
-  const loopContexts = React.useMemo(() => buildLoopContextMap(spans), [spans]);
+  const sameToolStreakContexts = React.useMemo(
+    () => buildSameToolStreakContextMap(spans),
+    [spans],
+  );
+  const subagentLabels = React.useMemo(() => {
+    const model = buildSubagentHeat(subagentList);
+    return new Map(model.cells.map((cell) => [
+      cell.agentId,
+      `${cell.label} · ${cell.agentType || cell.name || "Subagent"}`,
+    ]));
+  }, [subagentList]);
   const subagentFirstEventIds = React.useMemo(() => {
     const ids = new Map<string, number>();
     for (const item of timelineItems) {
@@ -71,26 +88,17 @@ function SessionWorkspace({ session, initialEventId = null, backLabel, onBack }:
     card.entrypoint,
   ].filter(Boolean);
 
-  const selectCursor = React.useCallback((nextIndex: number) => {
-    if (timelineItems.length === 0) return;
-    const boundedIndex = Math.max(0, Math.min(nextIndex, timelineItems.length - 1));
-    setCursorIndex(boundedIndex);
-    setSelectedEventId(timelineItems[boundedIndex].event_id);
-  }, [timelineItems]);
-
-  const selectSubagent = React.useCallback((agentId: string) => {
+  const inspectSubagent = React.useCallback((agentId: string) => {
     const eventId = subagentFirstEventIds.get(agentId);
     if (!eventId) return;
-    const index = timelineItems.findIndex((item) => item.event_id === eventId);
-    if (index >= 0) setCursorIndex(index);
     setSelectedEventId(eventId);
-    setPlaying(false);
-  }, [subagentFirstEventIds, timelineItems]);
+    window.requestAnimationFrame(() => {
+      workspaceRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [subagentFirstEventIds]);
 
   React.useEffect(() => {
     setSelectedEventId(initialEventId);
-    setCursorIndex(0);
-    setPlaying(false);
   }, [session.id, initialEventId]);
 
   React.useEffect(() => {
@@ -99,35 +107,10 @@ function SessionWorkspace({ session, initialEventId = null, backLabel, onBack }:
     }
   }, [selectedEventId, timelineItems]);
 
-  React.useEffect(() => {
-    if (selectedEventId === null) return;
-    const index = timelineItems.findIndex((item) => item.event_id === selectedEventId);
-    if (index >= 0 && index !== cursorIndex) {
-      setCursorIndex(index);
-    }
-  }, [cursorIndex, selectedEventId, timelineItems]);
-
-  React.useEffect(() => {
-    if (timelineItems.length === 0) return;
-    if (cursorIndex > timelineItems.length - 1) {
-      setCursorIndex(timelineItems.length - 1);
-    }
-  }, [cursorIndex, timelineItems]);
-
-  React.useEffect(() => {
-    if (!playing || timelineItems.length === 0) return;
-    const id = window.setInterval(() => {
-      setCursorIndex((value) => {
-        const next = Math.min(value + 1, timelineItems.length - 1);
-        setSelectedEventId(timelineItems[next].event_id);
-        if (next === timelineItems.length - 1) setPlaying(false);
-        return next;
-      });
-    }, 650);
-    return () => window.clearInterval(id);
-  }, [playing, timelineItems]);
-
-  const cursorTimestamp = timelineItems[cursorIndex]?.timestamp ?? null;
+  const selectedTimestamp = React.useMemo(
+    () => timelineItems.find((item) => item.event_id === selectedEventId)?.timestamp ?? null,
+    [selectedEventId, timelineItems],
+  );
 
   return (
     <main className="cost-page session-page">
@@ -156,21 +139,25 @@ function SessionWorkspace({ session, initialEventId = null, backLabel, onBack }:
             )}
           </div>
         </div>
-        <SessionInsightStrip session={card} />
+        <SessionInsightStrip
+          session={card}
+          costUsd={trace.data?.cost.usd}
+          costAvailable={trace.data?.cost.available}
+        />
 
         <section className="session-overview" aria-label="Session overview">
             <div className="cost-bento session-summary-grid">
-              <EventDensityTile items={timelineItems} loopContexts={loopContexts} loading={timeline.isLoading} />
               <SubagentHeatTile
                 subagents={subagentList}
                 firstEventIds={subagentFirstEventIds}
-                onSelectSubagent={selectSubagent}
+                onSelectSubagent={inspectSubagent}
+                loading={subagents.isLoading}
               />
-              <ToolUsageTile items={timelineItems} loading={timeline.isLoading} />
+              <ToolUsageTile activity={toolActivity.data ?? []} loading={toolActivity.isLoading} />
             </div>
         </section>
 
-        <section className="cost-bento session-workspace" aria-label="Session workspace">
+        <section ref={workspaceRef} className="cost-bento session-workspace" aria-label="Session workspace">
             <section className="tile tile-full session-trace-tile">
               <div className="session-tile-heading">
                 <div className="session-title">
@@ -180,7 +167,7 @@ function SessionWorkspace({ session, initialEventId = null, backLabel, onBack }:
                   <h2><Blurred>{card.title || card.session_id}</Blurred></h2>
                   <p className="session-meta"><Blurred>{metaParts.length ? metaParts.join(" · ") : card.session_id}</Blurred></p>
                 </div>
-                <span className="hint"><ArrowLeftRight size={13} /> spacing · lanes · loops</span>
+                <span className="hint"><ArrowLeftRight size={13} /> spacing · lanes · same-tool streaks</span>
               </div>
               <div className="session-trace-body event-graph">
                 {trace.isLoading ? (
@@ -188,24 +175,26 @@ function SessionWorkspace({ session, initialEventId = null, backLabel, onBack }:
                 ) : trace.isError || !trace.data ? (
                   <div className="empty-state">Could not load the session trace.</div>
                 ) : (
-                  <TraceView trace={trace.data} selectedEventId={selectedEventId} playheadTimestamp={cursorTimestamp} onSelect={setSelectedEventId} />
+                  <TraceView
+                    trace={trace.data}
+                    selectedEventId={selectedEventId}
+                    playheadTimestamp={selectedTimestamp}
+                    subagentLabels={subagentLabels}
+                    onSelect={setSelectedEventId}
+                  />
                 )}
               </div>
             </section>
             <TimelinePanel
               items={timelineItems}
               selectedEventId={selectedEventId}
-              cursorIndex={cursorIndex}
-              playing={playing}
-              loopContexts={loopContexts}
+              sameToolStreakContexts={sameToolStreakContexts}
               onSelect={setSelectedEventId}
-              onCursorChange={selectCursor}
-              onPlayingChange={setPlaying}
             />
             <InspectorPanel
               session={card}
               event={selectedEvent.data}
-              loopContext={selectedEventId !== null ? loopContexts.get(selectedEventId) : undefined}
+              sameToolStreakContext={selectedEventId !== null ? sameToolStreakContexts.get(selectedEventId) : undefined}
               subagents={subagentList}
               findings={findings.data ?? []}
               loading={selectedEvent.isLoading || subagents.isLoading || findings.isLoading}

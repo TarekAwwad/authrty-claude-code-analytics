@@ -7,8 +7,8 @@ interface Props {
 }
 
 /**
- * The app's one loading indicator: a rounded track that reuses the risk-bar's
- * colours (`--err → --loop → --fan → --accent → --info`). Motion adapts to size —
+ * The app's one loading indicator: a compact rounded gradient track using the
+ * error, warning, subagent, accent, and info colours. Motion adapts to size —
  * wide bars (panel/tile) sweep a gradient band across; the small inline bar fills
  * and resets. Pass `caption` to show muted text under the bar (panel loaders).
  */

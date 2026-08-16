@@ -27,7 +27,6 @@ def test_import_fixture_counts(tmp_path: Path) -> None:
     assert summary.session_count == SANITIZED_EXPORT_COUNTS["session_count"]
     assert summary.event_count == SANITIZED_EXPORT_COUNTS["event_count"]
     assert summary.subagent_count == SANITIZED_EXPORT_COUNTS["subagent_count"]
-    assert summary.memory_count == SANITIZED_EXPORT_COUNTS["memory_count"]
     assert summary.persisted_output_count == SANITIZED_EXPORT_COUNTS["persisted_output_count"]
     assert summary.error_count == 0
     assert conn.execute("SELECT COUNT(*) FROM tool_calls").fetchone()[0] == SANITIZED_EXPORT_COUNTS["tool_call_count"]
@@ -51,6 +50,31 @@ def test_import_fixture_links_tool_cycles_and_search(tmp_path: Path) -> None:
     assert tool_edges > 0
     assert parent_edges > 0
     assert search_hits > 0
+
+
+def test_memory_source_files_are_ignored_without_being_modified(tmp_path: Path) -> None:
+    from ccfr.ingest import discover_projects
+
+    _write_project(tmp_path, "d--Alpha", "11111111-1111-1111-1111-111111111111")
+    memory_dir = tmp_path / "d--Alpha" / "memory"
+    memory_dir.mkdir()
+    memory_file = memory_dir / "private-note.md"
+    memory_file.write_text("private memory content", encoding="utf-8")
+    original_bytes = memory_file.read_bytes()
+
+    conn = memory_conn()
+    summary = import_export(conn, tmp_path)
+
+    assert not hasattr(summary, "memory_count")
+    assert summary.file_count == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM search_index WHERE kind = 'memory'"
+    ).fetchone()[0] == 0
+    assert memory_file.read_bytes() == original_bytes
+
+    memory_file.write_text("changed private memory content", encoding="utf-8")
+    discovered = discover_projects(conn, tmp_path)
+    assert discovered[0].stale is False
 
 
 def test_malformed_jsonl_is_reported_without_aborting(tmp_path: Path) -> None:
@@ -92,6 +116,72 @@ def _write_project(root: Path, name: str, session_id: str, text: str = "hello") 
     )
 
 
+def _write_findings_project(root: Path, *, repeated_failure: bool) -> None:
+    project = root / "d--Findings"
+    project.mkdir(parents=True, exist_ok=True)
+    session_id = "44444444-4444-4444-4444-444444444444"
+    rows: list[dict] = []
+    for index in (1, 2):
+        tool_use_id = f"tool-{index}"
+        rows.append(
+            {
+                "type": "assistant",
+                "uuid": f"a{index}",
+                "timestamp": f"2026-01-01T00:00:0{index * 2 - 1}Z",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": tool_use_id,
+                            "name": "Bash",
+                            "input": {"command": "pytest -q"},
+                        }
+                    ],
+                },
+            }
+        )
+        rows.append(
+            {
+                "type": "user",
+                "uuid": f"u{index}",
+                "parentUuid": f"a{index}",
+                "timestamp": f"2026-01-01T00:00:0{index * 2}Z",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "is_error": repeated_failure,
+                            "content": "same test failure" if repeated_failure else "tests passed",
+                        }
+                    ],
+                },
+            }
+        )
+    (project / f"{session_id}.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows),
+        encoding="utf-8",
+    )
+
+
+def test_reimport_rebuilds_session_findings_for_replaced_sessions(tmp_path: Path) -> None:
+    conn = memory_conn()
+    _write_findings_project(tmp_path, repeated_failure=True)
+
+    import_export(conn, tmp_path)
+
+    assert [row[0] for row in conn.execute("SELECT detector_key FROM session_findings")] == [
+        "repeated_identical_failure"
+    ]
+
+    _write_findings_project(tmp_path, repeated_failure=False)
+    import_export(conn, tmp_path)
+
+    assert conn.execute("SELECT COUNT(*) FROM session_findings").fetchone()[0] == 0
+
+
 def test_import_all_new_is_additive(tmp_path: Path) -> None:
     from ccfr.ingest import import_all_new
 
@@ -123,10 +213,7 @@ def test_reimport_replaces_without_orphaning_derived_rows(tmp_path: Path) -> Non
             "events",
             "event_edges",
             "search_index",
-            "event_features",
-            "sequence_slices",
-            "sequence_patterns",
-            "risk_findings",
+            "session_findings",
             "projects",
         )
     }
@@ -141,10 +228,7 @@ def test_reimport_replaces_without_orphaning_derived_rows(tmp_path: Path) -> Non
             "events",
             "event_edges",
             "search_index",
-            "event_features",
-            "sequence_slices",
-            "sequence_patterns",
-            "risk_findings",
+            "session_findings",
             "projects",
         )
     }
@@ -229,37 +313,6 @@ def test_reimport_progress_does_not_double_count_replaced_project(tmp_path: Path
     assert snapshots
     assert max(snapshot["project_count"] for snapshot in snapshots) == 1
     assert repository.cache_stats(conn)["session_count"] == 2
-
-
-def test_import_project_keeps_unrelated_risk_analysis(tmp_path: Path) -> None:
-    from ccfr.ingest import import_all_new, import_project
-
-    _write_project(tmp_path, "d--Alpha", "11111111-1111-1111-1111-111111111111")
-    _write_project(tmp_path, "d--Beta", "22222222-2222-2222-2222-222222222222")
-    conn = memory_conn()
-    import_all_new(conn, tmp_path)
-
-    beta_session = conn.execute(
-        """
-        SELECT s.id
-        FROM sessions s
-        JOIN projects p ON p.id = s.project_id
-        WHERE p.export_name = 'd--Beta'
-        """
-    ).fetchone()[0]
-    beta_feature_count = conn.execute(
-        "SELECT COUNT(*) FROM event_features WHERE session_id = ?",
-        (beta_session,),
-    ).fetchone()[0]
-    assert beta_feature_count > 0
-
-    _write_project(tmp_path, "d--Alpha", "33333333-3333-3333-3333-333333333333")
-    import_project(conn, tmp_path, "d--Alpha")
-
-    assert conn.execute(
-        "SELECT COUNT(*) FROM event_features WHERE session_id = ?",
-        (beta_session,),
-    ).fetchone()[0] == beta_feature_count
 
 
 def test_import_project_unknown_name_raises(tmp_path: Path) -> None:
@@ -622,8 +675,8 @@ def test_rolled_back_recoverable_errors_do_not_linger_in_summary(tmp_path: Path,
     import ccfr.ingest.importer as importer_mod
     from ccfr.ingest import import_all_new
 
-    # Beta has a recoverable bad line (recorded mid-transaction) and a memory
-    # file whose insert we make fatal — the rollback must also purge the
+    # Beta has a recoverable bad line (recorded mid-transaction) followed by a
+    # subagent metadata insert we make fatal. The rollback must also purge the
     # recoverable entry from the in-memory summary.
     project = tmp_path / "d--Beta"
     project.mkdir()
@@ -636,14 +689,16 @@ def test_rolled_back_recoverable_errors_do_not_linger_in_summary(tmp_path: Path,
         ),
         encoding="utf-8",
     )
-    memory_dir = project / "memory"
-    memory_dir.mkdir()
-    (memory_dir / "note.md").write_text("note", encoding="utf-8")
+    subagents_dir = (
+        project / "33333333-3333-3333-3333-333333333333" / "subagents"
+    )
+    subagents_dir.mkdir(parents=True)
+    (subagents_dir / "agent-deadbeef.meta.json").write_text("{}", encoding="utf-8")
 
-    def boom(conn, summary, root, memory_file, project_id):
-        raise RuntimeError("memory insert failed")
+    def boom(conn, summary, root, meta_file, session_id):
+        raise RuntimeError("subagent metadata insert failed")
 
-    monkeypatch.setattr(importer_mod, "_insert_memory", boom)
+    monkeypatch.setattr(importer_mod, "_insert_subagent_meta", boom)
     conn = memory_conn()
     summary = import_all_new(conn, tmp_path, include_existing=True)
 

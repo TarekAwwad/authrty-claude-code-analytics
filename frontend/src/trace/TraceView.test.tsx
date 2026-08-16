@@ -10,6 +10,15 @@ const emptyCost: SessionCost = {
   tokens: { base_input: 0, cache_write_5m: 0, cache_write_1h: 0, cache_read: 0, output: 0 },
 };
 
+const readStreak = (position: number, startEventId: number, endEventId: number) => ({
+  streak_id: "main-tool-streak-1",
+  tool_name: "Read",
+  position,
+  count: 3,
+  start_event_id: startEventId,
+  end_event_id: endEventId,
+});
+
 const trace: TraceResponse = {
   session_id: 1,
   first_ts: "2026-01-01T00:00:00Z",
@@ -17,15 +26,16 @@ const trace: TraceResponse = {
   lanes: [
     { lane_id: "main", label: "main thread", kind: "main" },
     { lane_id: "a1", label: "a1", kind: "subagent" },
+    { lane_id: "unused", label: "unused-agent-id", kind: "subagent" },
   ],
   spans: [
-    { id: "span-1", event_id: 1, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:01:00Z", end_ts: "2026-01-01T00:02:00Z", tool_use_id: "u1", tool_name: "Read", is_loop: true },
-    { id: "span-2", event_id: 2, lane: "a1", kind: "subagent_event", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:05:00Z", end_ts: null, tool_use_id: null, tool_name: null, is_loop: false },
+    { id: "span-1", event_id: 1, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:01:00Z", end_ts: "2026-01-01T00:02:00Z", tool_use_id: "u1", tool_name: "Read", same_tool_streak: null },
+    { id: "span-2", event_id: 2, lane: "a1", kind: "subagent_event", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:05:00Z", end_ts: null, tool_use_id: null, tool_name: null, same_tool_streak: null },
   ],
   cost: emptyCost,
 };
 
-const loopTrace: TraceResponse = {
+const streakTrace: TraceResponse = {
   session_id: 2,
   first_ts: "2026-01-01T00:00:00Z",
   last_ts: "2026-01-01T00:10:00Z",
@@ -33,10 +43,10 @@ const loopTrace: TraceResponse = {
     { lane_id: "main", label: "main thread", kind: "main" },
   ],
   spans: [
-    { id: "span-1", event_id: 1, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:01:00Z", end_ts: "2026-01-01T00:01:30Z", tool_use_id: "u1", tool_name: "Read", is_loop: true, loop_run_id: "main-tool-loop-1", loop_position: 1, loop_count: 3, loop_start_event_id: 1, loop_end_event_id: 3 },
-    { id: "span-2", event_id: 2, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:02:00Z", end_ts: "2026-01-01T00:02:30Z", tool_use_id: "u2", tool_name: "Read", is_loop: true, loop_run_id: "main-tool-loop-1", loop_position: 2, loop_count: 3, loop_start_event_id: 1, loop_end_event_id: 3 },
-    { id: "span-3", event_id: 3, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:03:00Z", end_ts: "2026-01-01T00:03:30Z", tool_use_id: "u3", tool_name: "Read", is_loop: true, loop_run_id: "main-tool-loop-1", loop_position: 3, loop_count: 3, loop_start_event_id: 1, loop_end_event_id: 3 },
-    { id: "span-4", event_id: 4, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:08:00Z", end_ts: "2026-01-01T00:08:30Z", tool_use_id: "u4", tool_name: "Bash", is_loop: false },
+    { id: "span-1", event_id: 1, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:01:00Z", end_ts: "2026-01-01T00:01:30Z", tool_use_id: "u1", tool_name: "Read", same_tool_streak: readStreak(1, 1, 3) },
+    { id: "span-2", event_id: 2, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:02:00Z", end_ts: "2026-01-01T00:02:30Z", tool_use_id: "u2", tool_name: "Read", same_tool_streak: readStreak(2, 1, 3) },
+    { id: "span-3", event_id: 3, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:03:00Z", end_ts: "2026-01-01T00:03:30Z", tool_use_id: "u3", tool_name: "Read", same_tool_streak: readStreak(3, 1, 3) },
+    { id: "span-4", event_id: 4, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:08:00Z", end_ts: "2026-01-01T00:08:30Z", tool_use_id: "u4", tool_name: "Bash", same_tool_streak: null },
   ],
   cost: emptyCost,
 };
@@ -49,14 +59,14 @@ const gapTrace: TraceResponse = {
     { lane_id: "main", label: "main thread", kind: "main" },
   ],
   spans: [
-    { id: "gap-1", event_id: 1, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:01:00Z", end_ts: "2026-01-01T00:01:20Z", tool_use_id: "u1", tool_name: "Read", is_loop: false },
-    { id: "gap-2", event_id: 2, lane: "main", kind: "tool_result", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:02:00Z", end_ts: "2026-01-01T00:02:20Z", tool_use_id: "u2", tool_name: "Read", is_loop: false },
-    { id: "gap-3", event_id: 3, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:09:00Z", end_ts: "2026-01-01T00:09:20Z", tool_use_id: "u3", tool_name: "Write", is_loop: false },
+    { id: "gap-1", event_id: 1, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:01:00Z", end_ts: "2026-01-01T00:01:20Z", tool_use_id: "u1", tool_name: "Read", same_tool_streak: null },
+    { id: "gap-2", event_id: 2, lane: "main", kind: "tool_result", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:02:00Z", end_ts: "2026-01-01T00:02:20Z", tool_use_id: "u2", tool_name: "Read", same_tool_streak: null },
+    { id: "gap-3", event_id: 3, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:09:00Z", end_ts: "2026-01-01T00:09:20Z", tool_use_id: "u3", tool_name: "Write", same_tool_streak: null },
   ],
   cost: emptyCost,
 };
 
-const interleavedLoopTrace: TraceResponse = {
+const interleavedStreakTrace: TraceResponse = {
   session_id: 4,
   first_ts: "2026-01-01T00:00:00Z",
   last_ts: "2026-01-01T00:06:00Z",
@@ -64,11 +74,11 @@ const interleavedLoopTrace: TraceResponse = {
     { lane_id: "main", label: "main thread", kind: "main" },
   ],
   spans: [
-    { id: "call-1", event_id: 1, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:01:00Z", end_ts: "2026-01-01T00:01:10Z", tool_use_id: "u1", tool_name: "Read", is_loop: true, loop_run_id: "main-tool-loop-1", loop_position: 1, loop_count: 3, loop_start_event_id: 1, loop_end_event_id: 5 },
-    { id: "result-2", event_id: 2, lane: "main", kind: "tool_result", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:01:10Z", end_ts: null, tool_use_id: "u1", tool_name: null, is_loop: false },
-    { id: "call-3", event_id: 3, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:02:00Z", end_ts: "2026-01-01T00:02:10Z", tool_use_id: "u2", tool_name: "Read", is_loop: true, loop_run_id: "main-tool-loop-1", loop_position: 2, loop_count: 3, loop_start_event_id: 1, loop_end_event_id: 5 },
-    { id: "result-4", event_id: 4, lane: "main", kind: "tool_result", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:02:10Z", end_ts: null, tool_use_id: "u2", tool_name: null, is_loop: false },
-    { id: "call-5", event_id: 5, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:03:00Z", end_ts: "2026-01-01T00:03:10Z", tool_use_id: "u3", tool_name: "Read", is_loop: true, loop_run_id: "main-tool-loop-1", loop_position: 3, loop_count: 3, loop_start_event_id: 1, loop_end_event_id: 5 },
+    { id: "call-1", event_id: 1, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:01:00Z", end_ts: "2026-01-01T00:01:10Z", tool_use_id: "u1", tool_name: "Read", same_tool_streak: readStreak(1, 1, 5) },
+    { id: "result-2", event_id: 2, lane: "main", kind: "tool_result", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:01:10Z", end_ts: null, tool_use_id: "u1", tool_name: null, same_tool_streak: null },
+    { id: "call-3", event_id: 3, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:02:00Z", end_ts: "2026-01-01T00:02:10Z", tool_use_id: "u2", tool_name: "Read", same_tool_streak: readStreak(2, 1, 5) },
+    { id: "result-4", event_id: 4, lane: "main", kind: "tool_result", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:02:10Z", end_ts: null, tool_use_id: "u2", tool_name: null, same_tool_streak: null },
+    { id: "call-5", event_id: 5, lane: "main", kind: "tool_call", input_tokens: 0, output_tokens: 0, model: null, start_ts: "2026-01-01T00:03:00Z", end_ts: "2026-01-01T00:03:10Z", tool_use_id: "u3", tool_name: "Read", same_tool_streak: readStreak(3, 1, 5) },
   ],
   cost: emptyCost,
 };
@@ -81,8 +91,8 @@ const chartTrace: TraceResponse = {
     { lane_id: "main", label: "main thread", kind: "main" },
   ],
   spans: [
-    { id: "c-1", event_id: 1, lane: "main", kind: "assistant", input_tokens: 1000, output_tokens: 100, model: "claude-opus-4-7", start_ts: "2026-01-01T00:01:00Z", end_ts: null, tool_use_id: null, tool_name: null, is_loop: false },
-    { id: "c-2", event_id: 2, lane: "main", kind: "assistant", input_tokens: 100, output_tokens: 1000, model: "claude-sonnet-4-6", start_ts: "2026-01-01T00:08:00Z", end_ts: null, tool_use_id: null, tool_name: null, is_loop: false },
+    { id: "c-1", event_id: 1, lane: "main", kind: "assistant", input_tokens: 1000, output_tokens: 100, model: "claude-opus-4-7", start_ts: "2026-01-01T00:01:00Z", end_ts: null, tool_use_id: null, tool_name: null, same_tool_streak: null },
+    { id: "c-2", event_id: 2, lane: "main", kind: "assistant", input_tokens: 100, output_tokens: 1000, model: "claude-sonnet-4-6", start_ts: "2026-01-01T00:08:00Z", end_ts: null, tool_use_id: null, tool_name: null, same_tool_streak: null },
   ],
   cost: {
     usd: 1.23,
@@ -112,7 +122,7 @@ const denseTrace: TraceResponse = {
     end_ts: null,
     tool_use_id: null,
     tool_name: null,
-    is_loop: false,
+    same_tool_streak: null,
   })),
   cost: emptyCost,
 };
@@ -124,10 +134,20 @@ function eventX(container: HTMLElement, eventId: number): number {
 }
 
 describe("TraceView", () => {
-  it("renders one labeled row per lane", () => {
-    render(<TraceView trace={trace} selectedEventId={null} playheadTimestamp={null} onSelect={() => {}} />);
+  it("omits empty lanes and replaces known subagent IDs with readable labels", () => {
+    render(
+      <TraceView
+        trace={trace}
+        selectedEventId={null}
+        playheadTimestamp={null}
+        subagentLabels={new Map([["a1", "A1 · Explore"]])}
+        onSelect={() => {}}
+      />,
+    );
     expect(screen.getByText("main thread")).toBeInTheDocument();
-    expect(screen.getByText("a1")).toBeInTheDocument();
+    expect(screen.getByText("A1 · Explore")).toBeInTheDocument();
+    expect(screen.queryByText("a1")).not.toBeInTheDocument();
+    expect(screen.queryByText("unused-agent-id")).not.toBeInTheDocument();
   });
 
   it("selects an event when a span is clicked", () => {
@@ -148,7 +168,8 @@ describe("TraceView", () => {
     expect(legend).toHaveTextContent("Tool call/result");
     expect(legend).toHaveTextContent("Subagent");
     expect(legend).toHaveTextContent("System / tool error");
-    expect(legend).toHaveTextContent("Loop span");
+    expect(legend).toHaveTextContent("Same-tool streak");
+    expect(legend).not.toHaveTextContent("Loop span");
     expect(legend).toHaveTextContent("Selected event");
   });
 
@@ -178,8 +199,8 @@ describe("TraceView", () => {
     expect(container.querySelector('[data-event-id="2"]')).not.toBeNull();
   });
 
-  it("renders every repeated loop event as its own uniform span", () => {
-    const { container } = render(<TraceView trace={loopTrace} selectedEventId={null} playheadTimestamp={null} onSelect={() => {}} />);
+  it("renders every same-tool streak event as its own uniform span", () => {
+    const { container } = render(<TraceView trace={streakTrace} selectedEventId={null} playheadTimestamp={null} onSelect={() => {}} />);
 
     expect(container.querySelector('[data-event-id="1"]')).not.toBeNull();
     expect(container.querySelector('[data-event-id="2"]')).not.toBeNull();
@@ -189,8 +210,8 @@ describe("TraceView", () => {
     expect(container.querySelector(".trace-lanes text")).toBeNull();
   });
 
-  it("keeps interleaved loop calls and results as individual spans", () => {
-    const { container } = render(<TraceView trace={interleavedLoopTrace} selectedEventId={null} playheadTimestamp={null} onSelect={() => {}} />);
+  it("keeps interleaved streak calls and results as individual spans", () => {
+    const { container } = render(<TraceView trace={interleavedStreakTrace} selectedEventId={null} playheadTimestamp={null} onSelect={() => {}} />);
 
     [1, 2, 3, 4, 5].forEach((id) =>
       expect(container.querySelector(`[data-event-id="${id}"]`)).not.toBeNull(),
@@ -198,11 +219,11 @@ describe("TraceView", () => {
     expect(screen.queryByText("Read \u00d73")).toBeNull();
   });
 
-  it("marks a loop run with a clickable region band that selects the run", () => {
+  it("marks a neutral streak with a clickable region band that selects its first event", () => {
     const onSelect = vi.fn();
-    const { container } = render(<TraceView trace={loopTrace} selectedEventId={null} playheadTimestamp={null} onSelect={onSelect} />);
+    const { container } = render(<TraceView trace={streakTrace} selectedEventId={null} playheadTimestamp={null} onSelect={onSelect} />);
 
-    const region = container.querySelector("[data-loop-region]");
+    const region = container.querySelector("[data-streak-region]");
     expect(region).not.toBeNull();
     fireEvent.click(region as Element);
     expect(onSelect).toHaveBeenCalledWith(1);
@@ -221,8 +242,8 @@ describe("TraceView", () => {
     expect(container.querySelector('[data-event-id="2"]')).toBeNull();
   });
 
-  it("draws a replay playhead on the minimap, lanes, and token chart", () => {
-    const { container } = render(<TraceView trace={trace} selectedEventId={null} playheadTimestamp="2026-01-01T00:05:00Z" onSelect={() => {}} />);
+  it("draws selected-event focus on the minimap, lanes, and token chart", () => {
+    const { container } = render(<TraceView trace={trace} selectedEventId={2} playheadTimestamp={null} onSelect={() => {}} />);
 
     expect(container.querySelector('[data-playhead="minimap"]')).not.toBeNull();
     expect(container.querySelector('[data-playhead="lane-main"]')).not.toBeNull();
@@ -238,16 +259,18 @@ describe("TraceView", () => {
     expect(screen.getByRole("checkbox", { name: "Group dense" })).toBeChecked();
   });
 
-  it("batches dense lane events and drills into the batch on click", () => {
+  it("keeps dense event batches keyboard-accessible and drills into them", () => {
     const { container } = render(<TraceView trace={denseTrace} selectedEventId={null} playheadTimestamp={null} onSelect={() => {}} />);
 
     const batch = container.querySelector("[data-trace-batch]");
     expect(batch).not.toBeNull();
     expect(batch).toHaveAttribute("data-batch-size", "6");
     expect(batch).toHaveAttribute("data-batch-event-ids", "10,11,12,13,14,15");
+    expect(batch).toHaveAttribute("role", "button");
+    expect(batch).toHaveAttribute("tabindex", "0");
     expect(container.querySelector('[data-event-id="10"]')).toBeNull();
 
-    fireEvent.click(batch as Element);
+    fireEvent.keyDown(batch as Element, { key: "Enter" });
 
     expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
     expect(container.querySelector(".trace-brush")).not.toBeNull();

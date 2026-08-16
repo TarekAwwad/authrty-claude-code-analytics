@@ -2,8 +2,8 @@
 
 Reconstructs per-call context sizes from stored usage, attributes per-turn
 growth to the events between calls (calibrated so estimates sum exactly to the
-observed growth), prices the carry cost of each contributor, and runs four
-corpus-adaptive waste detectors with disjoint counterfactual savings claims.
+observed growth), prices the carry cost of each contributor, and runs two
+corpus-adaptive opportunity detectors with disjoint counterfactual estimates.
 
 Computation is on-demand from the rebuildable SQLite cache, like discovery.py.
 Design doc: docs/superpowers/specs/2026-06-10-context-economics-design.md
@@ -11,8 +11,11 @@ Design doc: docs/superpowers/specs/2026-06-10-context-economics-design.md
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import posixpath
+import re
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -33,16 +36,6 @@ COMPACTION_DROP_RATIO = 0.6      # context below 60% of previous call = epoch bo
 OVERSIZED_PERCENTILE = 0.95      # corpus-relative threshold for "oversized"
 OVERSIZED_FLOOR_TOKENS = 5_000   # never flag results smaller than this
 CAP_FLOOR_TOKENS = 500           # counterfactual cap is corpus median, at least this
-
-CONTEXT_WINDOW_TOKENS = 200_000  # assumed model context window (documented assumption)
-COMPACTION_PRESSURE_RATIO = 0.5  # eligible to compact above 50% of the window
-COMPACTION_RETAINED_RATIO = 0.3  # assumed fraction retained by a compaction
-COMPACTION_MIN_TAIL = 5          # calls that must follow eligibility to flag
-
-STALE_GAP_PERCENTILE = 0.90      # corpus-relative wall-clock gap threshold
-STALE_GAP_FLOOR_SECONDS = 1_800
-STALE_CONTEXT_PERCENTILE = 0.75  # context must be corpus-large at the gap
-STALE_MAX_TAIL_FRACTION = 0.25   # follow-up burst must be short
 
 MIN_FINDING_USD = 0.01           # findings cheaper than this are noise
 FINDINGS_LIMIT = 20              # per archetype in the corpus payload
@@ -75,6 +68,8 @@ class RawItem:
     event_id: int | None = None
     tool_name: str | None = None
     detail: str | None = None    # e.g. file path for Read results
+    tool_input: dict[str, Any] | None = None
+    result_signature: str | None = None
 
 
 @dataclass
@@ -90,6 +85,9 @@ class ContributorRec:
     event_id: int | None = None
     tool_name: str | None = None
     detail: str | None = None
+    tool_input: dict[str, Any] | None = None
+    result_signature: str | None = None
+    source_size: int = 0
 
 
 @dataclass
@@ -120,6 +118,7 @@ class FindingRec:
     savings_usd: float
     counterfactual: dict[str, Any]
     event_id: int | None
+    evidence_event_ids: list[int] = field(default_factory=list)
     ts: str | None = None  # entry-call timestamp, used for the weekly trend
 
 
@@ -234,6 +233,9 @@ def calibrate_contributors(
                 event_id=item.event_id,
                 tool_name=item.tool_name,
                 detail=item.detail,
+                tool_input=item.tool_input,
+                result_signature=item.result_signature,
+                source_size=item.raw_chars,
             ))
     return contributors
 
@@ -358,6 +360,7 @@ def load_threads(
                    length(e.raw_json) AS raw_len,
                    length(tr.raw_json) AS result_raw_len,
                    tr.id AS tool_result_id, po.size_bytes,
+                   tr.raw_json AS result_json,
                    tc.tool_name, tc.raw_json AS call_json
             FROM events e
             LEFT JOIN tool_results tr ON tr.event_id = e.id
@@ -405,13 +408,50 @@ def load_threads(
     return threads, skipped
 
 
+def _contains_truncated_value(value: Any) -> bool:
+    if isinstance(value, dict):
+        if value.get("_truncated") is True:
+            return True
+        return any(_contains_truncated_value(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_truncated_value(item) for item in value)
+    return False
+
+
+def tool_result_signature(raw_json: str | None) -> str | None:
+    """Stable signature of stored result content, excluding per-call receipt IDs."""
+    if not raw_json:
+        return None
+    try:
+        parsed = json.loads(raw_json)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if isinstance(parsed, dict):
+        if "content" not in parsed:
+            return None
+        content = parsed["content"]
+    else:
+        content = parsed
+    if _contains_truncated_value(content):
+        return None
+    canonical = json.dumps(
+        content, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _raw_item(row: sqlite3.Row) -> RawItem:
     if row["tool_result_id"] is not None:
         tool_name = row["tool_name"] or "Tool"
+        tool_input = None
         detail = None
         if row["call_json"]:
             try:
-                detail = json.loads(row["call_json"]).get("input", {}).get("file_path")
+                parsed_call = json.loads(row["call_json"])
+                parsed_input = parsed_call.get("input") if isinstance(parsed_call, dict) else None
+                if isinstance(parsed_input, dict):
+                    tool_input = parsed_input
+                    detail = parsed_input.get("file_path")
             except (json.JSONDecodeError, AttributeError):
                 detail = None
         label = f"{tool_name} result" + (f": {detail}" if detail else "")
@@ -419,8 +459,11 @@ def _raw_item(row: sqlite3.Row) -> RawItem:
         # must not fall back to the result length. Size by THIS result's own JSON,
         # not the whole event's — parallel sibling results must not share one size.
         chars = row["size_bytes"] if row["size_bytes"] is not None else row["result_raw_len"]
+        result_json = row["result_json"] if "result_json" in row.keys() else None
         return RawItem(kind="tool_result", label=label, raw_chars=chars or 0,
-                       event_id=row["event_id"], tool_name=tool_name, detail=detail)
+                       event_id=row["event_id"], tool_name=tool_name, detail=detail,
+                       tool_input=tool_input,
+                       result_signature=tool_result_signature(result_json))
     kind = "attachment" if row["type"] == "attachment" else "user"
     label = "Attachment" if kind == "attachment" else "User message"
     return RawItem(kind=kind, label=label, raw_chars=row["raw_len"] or 0,
@@ -472,65 +515,172 @@ class Claims:
 # Detector 1: redundant re-reads
 # ---------------------------------------------------------------------------
 
+
+@dataclass(frozen=True)
+class ReadSignature:
+    path: str
+    offset: int
+    limit: int | None
+    result_signature: str | None
+
+
+def normalize_tool_path(value: Any) -> str | None:
+    """Canonicalize a tool path without resolving it against the local machine."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized = posixpath.normpath(value.strip().replace("\\", "/"))
+    if normalized in ("", "."):
+        return None
+    if re.match(r"^[A-Za-z]:/", normalized) or normalized.startswith("//"):
+        normalized = normalized.casefold()
+    return normalized
+
+
+def _normalized_read_bound(
+    tool_input: dict[str, Any], key: str, *, default: int | None,
+) -> tuple[bool, int | None]:
+    value = tool_input.get(key)
+    if value is None:
+        return True, default
+    if isinstance(value, bool):
+        return False, None
+    if isinstance(value, float) and not value.is_integer():
+        return False, None
+    if isinstance(value, str) and not re.fullmatch(r"[+-]?\d+", value.strip()):
+        return False, None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return False, None
+    if normalized < 0 or (key == "limit" and normalized == 0):
+        return False, None
+    return True, normalized
+
+
+def normalize_read_signature(
+    tool_input: dict[str, Any] | None,
+    *,
+    fallback_path: str | None = None,
+    result_signature: str | None = None,
+) -> ReadSignature | None:
+    """Pure normalized identity for one Read request and its stored result."""
+    inputs = tool_input if isinstance(tool_input, dict) else {}
+    path = normalize_tool_path(inputs.get("file_path") or fallback_path)
+    if path is None:
+        return None
+    offset_ok, offset = _normalized_read_bound(inputs, "offset", default=0)
+    limit_ok, limit = _normalized_read_bound(inputs, "limit", default=None)
+    if not offset_ok or not limit_ok or offset is None:
+        return None
+    return ReadSignature(
+        path=path,
+        offset=offset,
+        limit=limit,
+        result_signature=result_signature or None,
+    )
+
+
+def split_read_runs(
+    indexes: list[int],
+    contributors: list[ContributorRec],
+    mutation_calls: list[int],
+) -> list[list[int]]:
+    """Pure partition of equal-signature reads at intervening mutations."""
+    ordered = sorted(indexes, key=lambda i: contributors[i].entry_call)
+    runs: list[list[int]] = []
+    current: list[int] = []
+    for index in ordered:
+        entry = contributors[index].entry_call
+        if current:
+            previous_entry = contributors[current[-1]].entry_call
+            if any(previous_entry < mutation <= entry for mutation in mutation_calls):
+                runs.append(current)
+                current = []
+        current.append(index)
+    if current:
+        runs.append(current)
+    return runs
+
+
 def detect_rereads(threads: list[ThreadRec], claims: Claims) -> list[FindingRec]:
-    """Same file Read repeatedly in one epoch without an intervening edit: every
-    copy after the first (since the last edit) is waste. A Read that follows a
-    Write/Edit of the same path is a legitimate verify-read and is not flagged."""
+    """Repeated identical Read requests/results in one epoch, without an edit."""
     findings: list[FindingRec] = []
     for thread_index, thread in enumerate(threads):
-        reads: dict[tuple[int, str], list[int]] = defaultdict(list)
+        reads: dict[tuple[int, ReadSignature], list[int]] = defaultdict(list)
         mutations: dict[tuple[int, str], list[int]] = defaultdict(list)
         for contributor_index, contributor in enumerate(thread.contributors):
-            if contributor.kind != "tool_result" or not contributor.detail:
+            if contributor.kind != "tool_result":
                 continue
-            key = (contributor.epoch, contributor.detail)
             if contributor.tool_name == "Read":
-                reads[key].append(contributor_index)
+                signature = normalize_read_signature(
+                    contributor.tool_input,
+                    fallback_path=contributor.detail,
+                    result_signature=contributor.result_signature,
+                )
+                if signature is not None:
+                    reads[(contributor.epoch, signature)].append(contributor_index)
             elif contributor.tool_name in ("Write", "Edit"):
-                mutations[key].append(contributor.entry_call)
-        for (epoch, path), indexes in reads.items():
+                tool_input = contributor.tool_input or {}
+                path = normalize_tool_path(tool_input.get("file_path") or contributor.detail)
+                if path is not None:
+                    mutations[(contributor.epoch, path)].append(contributor.entry_call)
+        for (epoch, signature), indexes in reads.items():
             if len(indexes) < 2:
                 continue
-            indexes.sort(key=lambda i: thread.contributors[i].entry_call)
-            mutation_calls = sorted(mutations.get((epoch, path), []))
-            duplicate_indexes: list[int] = []
-            anchor_entry = thread.contributors[indexes[0]].entry_call
-            for i in indexes[1:]:
-                entry = thread.contributors[i].entry_call
-                if any(anchor_entry < m <= entry for m in mutation_calls):
-                    anchor_entry = entry  # legitimate re-read after an edit
+            mutation_calls = sorted(mutations.get((epoch, signature.path), []))
+            runs = split_read_runs(indexes, thread.contributors, mutation_calls)
+            for run in (candidate for candidate in runs if len(candidate) >= 2):
+                duplicate_indexes = run[1:]
+                duplicates = [thread.contributors[i] for i in duplicate_indexes]
+                savings_tokens = sum(duplicate.est_tokens for duplicate in duplicates)
+                savings_usd = sum(duplicate.accrued_usd for duplicate in duplicates)
+                if _has_price_signal(thread) and savings_usd < MIN_FINDING_USD:
+                    continue
+                for i in duplicate_indexes:
+                    claims.claim_contributor(
+                        thread_index, i, thread.contributors[i],
+                        thread.contributors[i].est_tokens,
+                    )
+                first = thread.contributors[run[0]]
+                params: dict[str, float] = {
+                    "copies": len(run),
+                    "first_entry_turn": first.entry_call,
+                    "offset": signature.offset,
+                    "result_signature_match": int(signature.result_signature is not None),
+                }
+                if signature.limit is not None:
+                    params["limit"] = signature.limit
+                if signature.result_signature is not None:
+                    model = (
+                        "Estimated carry reduction if the repeated matching-result copy "
+                        "is removed."
+                    )
                 else:
-                    duplicate_indexes.append(i)
-            if not duplicate_indexes:
-                continue
-            duplicates = [thread.contributors[i] for i in duplicate_indexes]
-            savings_tokens = sum(d.est_tokens for d in duplicates)
-            savings_usd = sum(d.accrued_usd for d in duplicates)
-            if _has_price_signal(thread) and savings_usd < MIN_FINDING_USD:
-                continue
-            for i in duplicate_indexes:
-                claims.claim_contributor(thread_index, i, thread.contributors[i],
-                                         thread.contributors[i].est_tokens)
-            first = thread.contributors[indexes[0]]
-            findings.append(FindingRec(
-                archetype="rereads",
-                session_id=thread.session_db_id,
-                session_title=thread.session_title,
-                project_name=thread.project_name,
-                epoch=epoch,
-                entry_turn=duplicates[0].entry_call,
-                label=f"{path} read {len(indexes)}× in one epoch",
-                carried_turns=max(d.end_call - d.entry_call for d in duplicates),
-                carried_tokens=savings_tokens,
-                savings_tokens=savings_tokens,
-                savings_usd=savings_usd,
-                counterfactual={
-                    "model": "drop duplicate copies; only the first read is kept",
-                    "params": {"copies": len(indexes), "first_entry_turn": first.entry_call},
-                },
-                event_id=duplicates[0].event_id,
-                ts=thread.calls[duplicates[0].entry_call].ts,
-            ))
+                    model = (
+                        "Estimated carry reduction if the repeated same-range read was "
+                        "unnecessary; full result content was unavailable for comparison."
+                    )
+                findings.append(FindingRec(
+                    archetype="rereads",
+                    session_id=thread.session_db_id,
+                    session_title=thread.session_title,
+                    project_name=thread.project_name,
+                    epoch=epoch,
+                    entry_turn=duplicates[0].entry_call,
+                    label=f"{signature.path} same range read {len(run)}× in one epoch",
+                    carried_turns=max(d.end_call - d.entry_call for d in duplicates),
+                    carried_tokens=savings_tokens,
+                    savings_tokens=savings_tokens,
+                    savings_usd=savings_usd,
+                    counterfactual={"model": model, "params": params},
+                    event_id=duplicates[0].event_id,
+                    evidence_event_ids=[
+                        event_id
+                        for i in run
+                        if (event_id := thread.contributors[i].event_id) is not None
+                    ],
+                    ts=thread.calls[duplicates[0].entry_call].ts,
+                ))
     return findings
 
 
@@ -538,36 +688,78 @@ def detect_rereads(threads: list[ThreadRec], claims: Claims) -> list[FindingRec]
 # Detector 2: oversized tool results (corpus-adaptive)
 # ---------------------------------------------------------------------------
 
+
+@dataclass(frozen=True)
+class ResultSizeBaseline:
+    tool_name: str
+    sample_size: int
+    threshold_tokens: float
+    cap_tokens: float
+
+
+def result_size_baseline(tool_name: str, sizes: list[float]) -> ResultSizeBaseline:
+    """Pure tool-specific threshold and conservative median-cap model."""
+    return ResultSizeBaseline(
+        tool_name=tool_name,
+        sample_size=len(sizes),
+        threshold_tokens=max(
+            _percentile(sizes, OVERSIZED_PERCENTILE), float(OVERSIZED_FLOOR_TOKENS),
+        ),
+        cap_tokens=max(_percentile(sizes, 0.5), float(CAP_FLOOR_TOKENS)),
+    )
+
+
+def _baseline_thresholds(baseline: ResultSizeBaseline) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": f"{baseline.tool_name} large-result threshold",
+            "value": baseline.threshold_tokens,
+            "provenance": (
+                f"{baseline.tool_name} p95 of {baseline.sample_size} results; "
+                f"floor {OVERSIZED_FLOOR_TOKENS:,} tok"
+            ),
+        },
+        {
+            "name": f"{baseline.tool_name} baseline cap",
+            "value": baseline.cap_tokens,
+            "provenance": (
+                f"{baseline.tool_name} median result; floor {CAP_FLOOR_TOKENS:,} tok"
+            ),
+        },
+    ]
+
+
 def detect_oversized(
     threads: list[ThreadRec], claims: Claims,
 ) -> tuple[list[FindingRec], list[dict[str, Any]]]:
-    """Single tool results above the corpus p95 (and an absolute floor).
-
-    Counterfactual: the result is capped at the corpus median result size
-    (a limit/offset read or persisted output); the difference stops being
-    carried from its entry call onward.
-    """
-    sizes = [
-        float(c.est_tokens)
-        for thread in threads for c in thread.contributors
-        if c.kind == "tool_result"
-    ]
-    threshold = max(_percentile(sizes, OVERSIZED_PERCENTILE), float(OVERSIZED_FLOOR_TOKENS))
-    cap = max(_percentile(sizes, 0.5), float(CAP_FLOOR_TOKENS))
-    thresholds = [
-        {"name": "oversized_tokens", "value": threshold,
-         "provenance": f"p95 of {len(sizes)} tool results, floor {OVERSIZED_FLOOR_TOKENS:,} tok"},
-        {"name": "cap_tokens", "value": cap,
-         "provenance": f"median tool result size, floor {CAP_FLOOR_TOKENS:,} tok"},
-    ]
+    """Results large relative to other results produced by the same tool."""
+    sizes_by_tool: dict[str, list[float]] = defaultdict(list)
+    for thread in threads:
+        for contributor in thread.contributors:
+            if contributor.kind == "tool_result":
+                sizes_by_tool[contributor.tool_name or "Unknown tool"].append(
+                    float(contributor.est_tokens)
+                )
+    baselines = {
+        tool_name: result_size_baseline(tool_name, sizes)
+        for tool_name, sizes in sizes_by_tool.items()
+    }
+    flagged_tools: set[str] = set()
     findings: list[FindingRec] = []
     for thread_index, thread in enumerate(threads):
         for contributor_index, contributor in enumerate(thread.contributors):
-            if contributor.kind != "tool_result" or contributor.est_tokens < threshold:
+            if contributor.kind != "tool_result":
+                continue
+            tool_name = contributor.tool_name or "Unknown tool"
+            baseline = baselines[tool_name]
+            if (
+                contributor.est_tokens < baseline.threshold_tokens
+                or contributor.est_tokens <= baseline.cap_tokens
+            ):
                 continue
             if (thread_index, contributor_index) in claims.contributors:
                 continue
-            saved_tokens = int(contributor.est_tokens - cap)
+            saved_tokens = int(contributor.est_tokens - baseline.cap_tokens)
             savings_usd = (
                 _carry_usd(thread, saved_tokens, contributor.entry_call, contributor.end_call)
                 + saved_tokens * thread.write_prices[contributor.entry_call]
@@ -575,6 +767,7 @@ def detect_oversized(
             if _has_price_signal(thread) and savings_usd < MIN_FINDING_USD:
                 continue
             claims.claim_contributor(thread_index, contributor_index, contributor, saved_tokens)
+            flagged_tools.add(tool_name)
             findings.append(FindingRec(
                 archetype="oversized",
                 session_id=thread.session_db_id,
@@ -588,197 +781,28 @@ def detect_oversized(
                 savings_tokens=saved_tokens,
                 savings_usd=savings_usd,
                 counterfactual={
-                    "model": "result capped at the corpus median size (limit/offset or persisted output)",
-                    "params": {"cap_tokens": cap, "actual_tokens": contributor.est_tokens},
+                    "model": (
+                        f"Estimated carry reduction using the {tool_name} result median as a cap; "
+                        "token size is calibrated from observed context growth."
+                    ),
+                    "params": {
+                        "observed_size": contributor.source_size,
+                        "estimated_tokens": contributor.est_tokens,
+                        "tool_baseline_tokens": baseline.cap_tokens,
+                        "threshold_tokens": baseline.threshold_tokens,
+                        "modeled_reduction_tokens": saved_tokens,
+                        "tool_sample_size": baseline.sample_size,
+                    },
                 },
                 event_id=contributor.event_id,
+                evidence_event_ids=[contributor.event_id] if contributor.event_id is not None else [],
                 ts=thread.calls[contributor.entry_call].ts,
             ))
-    return findings, thresholds
-
-
-# ---------------------------------------------------------------------------
-# Detector 3: late compaction
-# ---------------------------------------------------------------------------
-
-def detect_late_compaction(
-    threads: list[ThreadRec], claims: Claims,
-) -> tuple[list[FindingRec], list[dict[str, Any]]]:
-    """Context stayed above the compaction pressure point for a long tail.
-
-    Counterfactual: compaction at the first eligible call retains
-    COMPACTION_RETAINED_RATIO of that call's context and drops the rest. The
-    dropped tokens are a FIXED count — post-compaction work would regrow context
-    identically in both worlds, so only the dropped ballast is avoidable, not the
-    later growth. Savings = dropped tokens (minus any already claimed by
-    contributor-level findings) read-priced over the tail, minus the one-off
-    re-write of the retained content.
-
-    `savings_tokens` is the one-time avoidable footprint; `savings_usd`
-    accumulates the per-call carry.
-    """
-    pressure = CONTEXT_WINDOW_TOKENS * COMPACTION_PRESSURE_RATIO
     thresholds = [
-        {"name": "pressure_tokens", "value": pressure,
-         "provenance": f"{int(COMPACTION_PRESSURE_RATIO * 100)}% of an assumed "
-                       f"{CONTEXT_WINDOW_TOKENS:,}-token context window"},
-        {"name": "min_tail_calls", "value": float(COMPACTION_MIN_TAIL),
-         "provenance": "minimum calls after the pressure point to flag"},
+        threshold
+        for tool_name in sorted(flagged_tools)
+        for threshold in _baseline_thresholds(baselines[tool_name])
     ]
-    findings: list[FindingRec] = []
-    for thread_index, thread in enumerate(threads):
-        claimed = claims.tokens_by_call[thread_index]
-        for epoch_index, epoch in enumerate(thread.epochs):
-            eligible = next(
-                (i for i in range(epoch.start, epoch.end + 1)
-                 if thread.calls[i].context_tokens >= pressure),
-                None,
-            )
-            if eligible is None or epoch.end - eligible < COMPACTION_MIN_TAIL:
-                continue
-            eligible_ctx = thread.calls[eligible].context_tokens
-            retained = eligible_ctx * COMPACTION_RETAINED_RATIO
-            dropped = eligible_ctx - retained  # fixed avoidable tokens per tail call
-            savings_usd = -retained * thread.write_prices[eligible]
-            savings_tokens = 0
-            covered: list[int] = []
-            for k in range(eligible + 1, epoch.end + 1):
-                residual = dropped - claimed[k]
-                if residual > 0:
-                    savings_usd += residual * thread.read_prices[k]
-                    # Footprint, not token-turns: the same ballast is re-paid each
-                    # call; the frontend subtracts savings_tokens from EVERY tail
-                    # turn (streamGeometry counterfactual), so report it once.
-                    savings_tokens = max(savings_tokens, int(residual))
-                    covered.append(k)
-            if _has_price_signal(thread) and savings_usd < MIN_FINDING_USD:
-                continue
-            for k in covered:
-                claims.calls[thread_index].add(k)
-            findings.append(FindingRec(
-                archetype="late_compaction",
-                session_id=thread.session_db_id,
-                session_title=thread.session_title,
-                project_name=thread.project_name,
-                epoch=epoch_index,
-                entry_turn=eligible,
-                label=(f"Context above {int(pressure / 1000)}k tokens for "
-                       f"{epoch.end - eligible} more turns without compaction"),
-                carried_turns=epoch.end - eligible,
-                carried_tokens=int(dropped),
-                savings_tokens=savings_tokens,
-                savings_usd=savings_usd,
-                counterfactual={
-                    "model": "compact at the first eligible turn, retaining "
-                             f"{int(COMPACTION_RETAINED_RATIO * 100)}% of the context",
-                    "params": {"eligible_turn": eligible, "retained_tokens": retained},
-                },
-                event_id=thread.calls[eligible].event_id,
-                ts=thread.calls[eligible].ts,
-            ))
-    return findings, thresholds
-
-
-# ---------------------------------------------------------------------------
-# Detector 4: stale session continuation
-# ---------------------------------------------------------------------------
-
-def _gap_seconds(a: str | None, b: str | None) -> float:
-    if not a or not b:
-        return 0.0
-    try:
-        start = datetime.fromisoformat(a.replace("Z", "+00:00"))
-        end = datetime.fromisoformat(b.replace("Z", "+00:00"))
-        return max(0.0, (end - start).total_seconds())
-    except (ValueError, TypeError):
-        return 0.0
-
-
-def detect_stale_continuation(
-    threads: list[ThreadRec], claims: Claims,
-) -> tuple[list[FindingRec], list[dict[str, Any]]]:
-    """A short follow-up burst after a long idle gap re-pays a huge context.
-
-    Counterfactual: the follow-up runs in a fresh session whose context is the
-    thread's first-call baseline; savings = residual context above baseline for
-    each follow-up call. Calls already claimed by late-compaction are skipped.
-
-    Must run AFTER detect_late_compaction so compaction-claimed calls (in
-    claims.calls) are excluded here.
-
-    `savings_tokens` is the one-time avoidable footprint; `savings_usd`
-    accumulates the per-call carry.
-    """
-    all_gaps = [
-        _gap_seconds(thread.calls[i - 1].ts, thread.calls[i].ts)
-        for thread in threads for i in range(1, len(thread.calls))
-    ]
-    all_contexts = [float(c.context_tokens) for t in threads for c in t.calls]
-    gap_threshold = max(_percentile(all_gaps, STALE_GAP_PERCENTILE),
-                        float(STALE_GAP_FLOOR_SECONDS))
-    context_threshold = _percentile(all_contexts, STALE_CONTEXT_PERCENTILE)
-    thresholds = [
-        {"name": "gap_seconds", "value": gap_threshold,
-         "provenance": f"p90 of {len(all_gaps)} call gaps, floor "
-                       f"{STALE_GAP_FLOOR_SECONDS // 60} min"},
-        {"name": "context_tokens", "value": context_threshold,
-         "provenance": f"p75 of {len(all_contexts)} call context sizes"},
-    ]
-    findings: list[FindingRec] = []
-    for thread_index, thread in enumerate(threads):
-        n = len(thread.calls)
-        claimed_tokens = claims.tokens_by_call[thread_index]
-        for i in range(1, n):
-            tail = n - i
-            if tail > max(1, int(n * STALE_MAX_TAIL_FRACTION)):
-                continue
-            if _gap_seconds(thread.calls[i - 1].ts, thread.calls[i].ts) < gap_threshold:
-                continue
-            if thread.calls[i - 1].context_tokens < context_threshold:
-                continue
-            tail_calls = [k for k in range(i, n) if k not in claims.calls[thread_index]]
-            if not tail_calls:
-                continue
-            baseline = thread.calls[0].context_tokens
-            # Avoidable = the stale ballast carried across the gap (context just
-            # before the gap, minus the fresh-session baseline). Constant across
-            # tail calls: the follow-up's own new work happens in both worlds, so
-            # only the pre-gap ballast is avoidable — crediting later growth would
-            # inflate the headline. Exact when context grows through the tail (the
-            # usual case); conservative if context shrinks mildly between tail calls.
-            avoidable_ctx = thread.calls[i - 1].context_tokens - baseline
-            savings_usd = 0.0
-            savings_tokens = 0
-            for k in tail_calls:
-                residual = avoidable_ctx - claimed_tokens[k]
-                if residual > 0:
-                    savings_usd += residual * thread.read_prices[k]
-                    savings_tokens = max(savings_tokens, int(residual))
-            if _has_price_signal(thread) and savings_usd < MIN_FINDING_USD:
-                continue
-            claims.calls[thread_index].update(tail_calls)
-            gap_minutes = int(_gap_seconds(thread.calls[i - 1].ts, thread.calls[i].ts) // 60)
-            findings.append(FindingRec(
-                archetype="stale_continuation",
-                session_id=thread.session_db_id,
-                session_title=thread.session_title,
-                project_name=thread.project_name,
-                epoch=next((e for e, ep in enumerate(thread.epochs) if ep.start <= i <= ep.end), 0),
-                entry_turn=i,
-                label=(f"Resumed a {thread.calls[i - 1].context_tokens // 1000}k-token "
-                       f"context after {gap_minutes} min for {tail} short turns"),
-                carried_turns=tail,
-                carried_tokens=int(avoidable_ctx),
-                savings_tokens=savings_tokens,
-                savings_usd=savings_usd,
-                counterfactual={
-                    "model": "run the follow-up in a fresh session at the thread's baseline context",
-                    "params": {"baseline_tokens": baseline, "gap_minutes": gap_minutes},
-                },
-                event_id=thread.calls[i].event_id,
-                ts=thread.calls[i].ts,
-            ))
-            break  # one stale-continuation finding per thread
     return findings, thresholds
 
 
@@ -787,29 +811,17 @@ def detect_stale_continuation(
 # ---------------------------------------------------------------------------
 
 ARCHETYPES: list[dict[str, str]] = [
-    {"key": "rereads", "title": "Redundant re-reads",
-     "description": "The same file was read into the context more than once in one epoch.",
+    {"key": "rereads", "title": "Repeated same-range reads",
+     "description": "The same normalized file range was requested more than once in one context epoch; stored results were compared when complete content was available.",
      "recommendation": "Re-read only the changed region (offset/limit) or rely on the copy already in context."},
-    {"key": "oversized", "title": "Oversized tool results",
-     "description": "Single tool results far above this corpus's norm entered the context and were re-paid every turn.",
+    {"key": "oversized", "title": "Large result carry opportunity",
+     "description": "A result was unusually large relative to other results from the same tool, so carrying it may have increased context cost.",
      "recommendation": "Read large files with limit/offset, filter command output, or offload to a subagent and keep only its summary."},
-    {"key": "late_compaction", "title": "Late compaction",
-     "description": "The context stayed near the window limit for many turns without compaction.",
-     "recommendation": "Compact (or let auto-compact run) once the context stops earning its keep."},
-    {"key": "stale_continuation", "title": "Stale continuation",
-     "description": "A short follow-up after a long break re-paid a huge accumulated context.",
-     "recommendation": "Start short follow-ups in a fresh session instead of resuming a heavyweight one."},
 ]
 
 
 def _thumbnail(thread: ThreadRec, finding: FindingRec) -> dict[str, Any]:
-    """Downsampled context series for an archetype card, with the finding's
-    contributor (when contributor-level) highlighted.
-
-    Context-level findings (late_compaction, stale_continuation) carry a call's
-    event_id rather than a contributor's, so no contributor matches and the
-    series renders without a highlight band — the curve alone is the evidence.
-    """
+    """Downsampled context series with the finding contributor highlighted."""
     highlight_entry, highlight_end, highlight_tokens = None, None, 0
     for contributor in thread.contributors:
         if contributor.event_id is not None and contributor.event_id == finding.event_id:
@@ -857,8 +869,14 @@ def _corpus_total_tokens(conn: sqlite3.Connection, project_id: int | None) -> in
     return int(row["total"] or 0)
 
 
-def _corpus_total_usd(conn: sqlite3.Connection, project_id: int | None,
-                      timeline: PriceTimeline, *, historical: bool = True) -> float:
+def _corpus_cost_summary(
+    conn: sqlite3.Connection,
+    project_id: int | None,
+    timeline: PriceTimeline,
+    *,
+    historical: bool = True,
+) -> tuple[float, list[str]]:
+    """Known corpus cost and models whose used messages could not be priced."""
     where, params = "", []
     if project_id is not None:
         where = "WHERE s.project_id = ?"
@@ -878,9 +896,17 @@ def _corpus_total_usd(conn: sqlite3.Connection, project_id: int | None,
         params,
     ).fetchall()
     total = 0.0
+    unpriced_models: set[str] = set()
     for row in rows:
-        price = match_price(timeline.table_for_period(row["price_period"], historical=historical), row["model"])
+        used_tokens = sum(
+            int(row[key] or 0) for key in ("base", "c5", "c1", "cr", "out")
+        )
+        if used_tokens <= 0:
+            continue
+        table = timeline.table_for_period(row["price_period"], historical=historical)
+        price = match_price(table, row["model"])
         if price is None:
+            unpriced_models.add(str(row["model"] or "unknown"))
             continue
         total += (
             (row["base"] or 0) * price.base_input
@@ -889,7 +915,15 @@ def _corpus_total_usd(conn: sqlite3.Connection, project_id: int | None,
             + (row["cr"] or 0) * price.cache_read
             + (row["out"] or 0) * price.output
         ) / 1_000_000
-    return total
+    return total, sorted(unpriced_models)
+
+
+def _corpus_total_usd(conn: sqlite3.Connection, project_id: int | None,
+                      timeline: PriceTimeline, *, historical: bool = True) -> float:
+    """Compatibility helper for callers that only need the known priced total."""
+    return _corpus_cost_summary(
+        conn, project_id, timeline, historical=historical,
+    )[0]
 
 
 TREND_WEEKS = 12
@@ -961,21 +995,18 @@ def _finding_payload(finding: FindingRec) -> dict[str, Any]:
         "savings_usd": round(finding.savings_usd, 6),
         "counterfactual": finding.counterfactual,
         "event_id": finding.event_id,
+        "evidence_event_ids": finding.evidence_event_ids,
     }
 
 
 def run_detectors(threads: list[ThreadRec]) -> dict[str, tuple[list[FindingRec], list[dict[str, Any]]]]:
-    """All four detectors in claim-priority order over already-taxed threads."""
+    """Supported production detectors in claim-priority order."""
     claims = Claims.for_threads(threads)
     rereads = detect_rereads(threads, claims)
     oversized, oversized_thresholds = detect_oversized(threads, claims)
-    compaction, compaction_thresholds = detect_late_compaction(threads, claims)
-    stale, stale_thresholds = detect_stale_continuation(threads, claims)
     return {
         "rereads": (rereads, []),
         "oversized": (oversized, oversized_thresholds),
-        "late_compaction": (compaction, compaction_thresholds),
-        "stale_continuation": (stale, stale_thresholds),
     }
 
 
@@ -999,8 +1030,8 @@ def context_economics_analytics(
     }
 
     archetypes = []
-    avoidable = 0.0
-    avoidable_weekly: dict[str, float] = defaultdict(float)
+    opportunity = 0.0
+    opportunity_weekly: dict[str, float] = defaultdict(float)
     for spec in ARCHETYPES:
         findings, thresholds = results[spec["key"]]
         findings = sorted(findings, key=lambda f: f.savings_usd, reverse=True)
@@ -1008,11 +1039,11 @@ def context_economics_analytics(
         savings_usd = sum(f.savings_usd for f in findings) if meets else 0.0
         savings_tokens = sum(f.savings_tokens for f in findings) if meets else 0
         if meets:
-            avoidable += savings_usd
+            opportunity += savings_usd
             for finding in findings:
                 week = _week_start(finding.ts)
                 if week is not None:
-                    avoidable_weekly[week] += finding.savings_usd
+                    opportunity_weekly[week] += finding.savings_usd
         exemplar = None
         if meets and findings:
             top = findings[0]
@@ -1036,51 +1067,44 @@ def context_economics_analytics(
             "findings": [_finding_payload(f) for f in findings[:FINDINGS_LIMIT]] if meets else [],
         })
 
-    total_usd = _corpus_total_usd(conn, project_id, timeline, historical=historical) if cost_available else 0.0
-    # avoidable is a subset of carry reads/writes that are themselves part of
-    # total, so it should not exceed total. The clamp is defense-in-depth against
-    # the estimate-vs-actual gap (savings use calibrated token estimates; total
-    # uses billed counts), keeping the headline honest if they ever disagree.
-    avoidable = min(avoidable, total_usd) if cost_available else 0.0
-    unattributed = sum(
-        c.est_tokens for t in threads for c in t.contributors if c.kind == "unattributed"
+    recorded_usd, unpriced_models = _corpus_cost_summary(
+        conn, project_id, timeline, historical=historical,
     )
+    costs_partial = cost_available and bool(unpriced_models)
+    # Detected opportunity is modeled from a subset of recorded carry costs. The
+    # clamp protects the headline from estimate-vs-recorded calibration drift.
+    opportunity = min(opportunity, recorded_usd) if cost_available else 0.0
+    unattributed_usd = max(0.0, recorded_usd - opportunity)
     trend: list[dict[str, Any]] = []
     if cost_available:
         weekly_total = _corpus_weekly_usd(conn, project_id, timeline, historical=historical)
-        weeks = sorted(set(weekly_total) | set(avoidable_weekly))[-TREND_WEEKS:]
+        weeks = sorted(set(weekly_total) | set(opportunity_weekly))[-TREND_WEEKS:]
         trend = [
             {
                 "week_start": week,
                 "total_usd": round(weekly_total.get(week, 0.0), 6),
-                # Same honesty clamp as the headline: avoidable is a subset of
-                # that week's billed spend.
+                # Keep the existing trend wire format while presenting this as
+                # estimated opportunity in the UI.
                 "avoidable_usd": round(
-                    min(avoidable_weekly.get(week, 0.0), weekly_total.get(week, 0.0)), 6),
+                    min(opportunity_weekly.get(week, 0.0), weekly_total.get(week, 0.0)), 6),
             }
             for week in weeks
         ]
     total_tokens = _corpus_total_tokens(conn, project_id)
-    # avoidable_tokens is the token analogue of the avoidable_usd headline: the
-    # supported archetypes' one-time footprint savings, clamped so it can never
-    # exceed the corpus's own throughput (mirrors the avoidable_usd <= total_usd
-    # clamp above).
-    avoidable_tokens = min(
+    opportunity_tokens = min(
         sum(a["savings_tokens"] for a in archetypes), total_tokens
     )
-    avoidable_token_share = (avoidable_tokens / total_tokens) if total_tokens else 0.0
     return {
         "meta": {
             "project_id": project_id,
             "min_support": min_support,
-            "total_usd": round(total_usd, 6),
-            "necessary_usd": round(max(0.0, total_usd - avoidable), 6),
-            "avoidable_usd": round(avoidable, 6),
-            "unattributed_tokens": unattributed,
-            "total_tokens": total_tokens,
-            "avoidable_tokens": avoidable_tokens,
-            "avoidable_token_share": round(avoidable_token_share, 6),
+            "recorded_api_equivalent_usd": round(recorded_usd, 6),
+            "opportunity_usd": round(opportunity, 6),
+            "unattributed_usd": round(unattributed_usd, 6),
+            "opportunity_tokens": opportunity_tokens,
             "cost_available": cost_available,
+            "costs_partial": costs_partial,
+            "unpriced_models": unpriced_models,
             "sessions_analyzed": len({t.session_db_id for t in threads}),
             "sessions_skipped": skipped,
             "trend": trend,

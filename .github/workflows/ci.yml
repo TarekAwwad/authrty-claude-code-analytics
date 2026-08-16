@@ -13,8 +13,12 @@ permissions:
 
 jobs:
   backend:
-    name: Backend
+    name: Backend (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
     defaults:
       run:
         working-directory: backend
@@ -25,13 +29,21 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
-          python-version: "3.12"
+          python-version: "${{ matrix.python-version }}"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
 
       - name: Run tests
-        run: uv run --extra dev pytest
+        run: uv run --locked --extra dev pytest
+
+      - name: Check Python correctness
+        if: matrix.python-version == '3.12'
+        run: uv run --locked --extra dev ruff check src tests --select E9,F63,F7,F82
+
+      - name: Audit Python dependencies
+        if: matrix.python-version == '3.12'
+        run: uv run --locked --with pip-audit pip-audit
 
   frontend:
     name: Frontend
@@ -57,9 +69,53 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Audit dependencies
-        # Audit production deps strictly — those are what ship to users. Build/test
-        # tooling (vite, esbuild, jsdom) never reaches the bundle. The one residual
-        # dev-only advisory (GHSA-gv7w-rqvm-qjhr in esbuild) has no fix compatible
-        # with vite 6 and is a Deno-install-path RCE not reachable via npm.
-        run: npm audit --omit=dev --audit-level=moderate
+      - name: Audit all dependencies
+        run: npm audit --audit-level=moderate
+
+  package:
+    name: Package smoke test
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
+
+      - name: Verify package versions agree
+        run: |
+          backend_version="$(python -c "import tomllib; print(tomllib.load(open('backend/pyproject.toml','rb'))['project']['version'])")"
+          frontend_version="$(node -p "require('./frontend/package.json').version")"
+          test "$backend_version" = "$frontend_version"
+
+      - name: Build web UI and stage packaged assets
+        run: python scripts/build_webui.py
+
+      - name: Build sdist and wheel
+        run: uv build
+        working-directory: backend
+
+      - name: Verify and install the wheel
+        run: |
+          version="$(python -c "import tomllib; print(tomllib.load(open('backend/pyproject.toml','rb'))['project']['version'])")"
+          wheel="$(ls backend/dist/checkyouragent-*.whl)"
+          test -f "backend/dist/checkyouragent-${version}.tar.gz"
+          python -m zipfile -l "$wheel" > wheel-contents.txt
+          for path in "ccfr/webui/index.html" "ccfr/_assets/pricing.csv" "ccfr/_assets/claude-export/" \
+                      "ccfr/docs_assets/swagger-ui-bundle.js" "ccfr/docs_assets/swagger-ui.css"; do
+            grep -qF "$path" wheel-contents.txt
+          done
+          python -m venv .wheel-smoke
+          .wheel-smoke/bin/python -m pip install "$wheel"
+          EXPECTED_VERSION="$version" .wheel-smoke/bin/python -c "import os; from ccfr.config import app_version, pricing_path, webui_dir; assert app_version() == os.environ['EXPECTED_VERSION']; assert pricing_path().is_file(); assert (webui_dir() / 'index.html').is_file()"

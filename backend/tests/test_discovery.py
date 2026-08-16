@@ -52,10 +52,9 @@ def test_section_bonferroni_gate_excludes_marginal_keeps_strong() -> None:
     Population (195 subjects, 39 positive, baseline rate exactly 0.20):
       - "strong" (signal family): 20 subjects, 18 positive (rate 0.90).
         Clears the adjusted gate with a wide margin.
-      - "marginal" (signal family): 25 subjects, 10 positive (rate 0.40).
-        Wilson lower bound at z=1.6449 is ~0.256 (clears the 0.20 baseline by
-        ~0.056); at the adjusted z for m=32 candidates it is ~0.175 (fails by
-        ~0.025).
+          - "marginal" (signal family): 25 subjects, 9 positive (rate 0.36).
+            Its classic Wilson lower bound clears the complement rate, but its
+            adjusted lower bound does not.
       - 30 "noise" descriptors (noise family) over 150 background subjects,
         support exactly 5 each, so every one clears min_support=5 and counts
         toward m. Eleven of them carry exactly 1 positive (rate 0.20, equal to
@@ -72,14 +71,14 @@ def test_section_bonferroni_gate_excludes_marginal_keeps_strong() -> None:
     for i in range(20):
         subjects.append(Subject(id=len(subjects), descriptors={strong_desc}, positive=i < 18))
     for i in range(25):
-        subjects.append(Subject(id=len(subjects), descriptors={marginal_desc}, positive=i < 10))
+        subjects.append(Subject(id=len(subjects), descriptors={marginal_desc}, positive=i < 9))
     for noise_index, noise in enumerate(noise_descriptors):
         for member in range(5):
             subjects.append(
                 Subject(
                     id=len(subjects),
                     descriptors={noise},
-                    positive=noise_index < 11 and member == 0,
+                    positive=noise_index < 12 and member == 0,
                 )
             )
 
@@ -89,8 +88,8 @@ def test_section_bonferroni_gate_excludes_marginal_keeps_strong() -> None:
     assert (total, positives) == (195, 39)
     assert baseline_rate == 0.20
 
-    # m must match what _section scores: replicate the candidate filter
-    # (require_fanout is False here, so every candidate is scored).
+    # m must match what _section scores: every candidate is included in the
+    # family-wise correction.
     candidates = _candidate_groups(subjects, min_support=5)
     m = len(candidates)
     assert m == 32
@@ -98,10 +97,11 @@ def test_section_bonferroni_gate_excludes_marginal_keeps_strong() -> None:
     # The marginal subgroup clears the classic gate and fails the adjusted one,
     # with comfortable margins on both sides — the test is not balanced on a
     # rounding edge.
-    lb_classic = _wilson_lower_bound(10, 25, _adjusted_z(1))
-    lb_adjusted = _wilson_lower_bound(10, 25, _adjusted_z(m))
-    assert lb_classic > baseline_rate + 0.04
-    assert lb_adjusted < baseline_rate - 0.02
+    complement_rate = 30 / 170
+    lb_classic = _wilson_lower_bound(9, 25, _adjusted_z(1))
+    lb_adjusted = _wilson_lower_bound(9, 25, _adjusted_z(m))
+    assert lb_classic > complement_rate + 0.04
+    assert lb_adjusted < complement_rate - 0.02
 
     result = _section(
         key="test",
@@ -110,6 +110,7 @@ def test_section_bonferroni_gate_excludes_marginal_keeps_strong() -> None:
         description="Test",
         subjects=subjects,
         min_support=5,
+        observation_unit="session",
     )
     result_ids = {item["id"] for item in result["results"]}
 
@@ -119,6 +120,40 @@ def test_section_bonferroni_gate_excludes_marginal_keeps_strong() -> None:
     assert marginal_desc.key not in result_ids, (
         f"Marginal driver survived the adjusted gate. Results: {result_ids}"
     )
+
+
+def test_section_reports_complement_rate_effect_size_and_observation_unit() -> None:
+    signal = _descriptor("model", "sonnet", "Uses Sonnet")
+    subjects = [
+        Subject(id=index, descriptors={signal}, positive=index < 9)
+        for index in range(10)
+    ] + [
+        Subject(id=index + 10, descriptors=set(), positive=index == 0)
+        for index in range(10)
+    ]
+
+    section = _section(
+        key="cost_associations",
+        title="Cost associations",
+        target_label="High estimated cost",
+        description="Observed associations.",
+        subjects=subjects,
+        min_support=3,
+        observation_unit="session",
+    )
+
+    result = section["results"][0]
+    assert section["observation_unit"] == "session"
+    assert result["support"] == 10
+    assert result["positive_support"] == 9
+    assert result["complement_count"] == 10
+    assert result["complement_positive_count"] == 1
+    assert result["baseline_rate"] == 0.5
+    assert result["subgroup_rate"] == 0.9
+    assert result["complement_rate"] == 0.1
+    assert result["effect_size"] == 0.8
+    assert "associated with" in result["summary"].lower()
+    assert "more likely" not in result["summary"].lower()
 
 
 def _add_session(
@@ -168,10 +203,9 @@ def _add_session(
         """
         INSERT INTO session_stats(
             session_id, event_count, turn_count, tool_call_count, subagent_count,
-            error_count, system_count, persisted_output_count, input_tokens, output_tokens,
-            loop_count, max_repeat
+            error_count, system_count, persisted_output_count, input_tokens, output_tokens
         )
-        VALUES (?, 4, 2, ?, ?, 0, 0, 0, ?, 0, 0, 0)
+        VALUES (?, 4, 2, ?, ?, 0, 0, 0, ?, 0)
         """,
         (session_id, 1 if tool_name else 0, subagents, base_tokens),
     )
@@ -254,34 +288,6 @@ def _seed(conn: sqlite3.Connection) -> tuple[int, int]:
             (event_id, session_id, tool_use_id, 1 if is_error else 0),
         )
 
-    # Rejection signal: 40 git-activity slices rejected 70% of the time vs 40
-    # inspect/read slices that are almost always clean.
-    for index in range(80):
-        session_id = sessions[index % len(sessions)]
-        event_id = int(conn.execute(
-            """
-            INSERT INTO events(session_id, source_path, line_no, type, timestamp, raw_json)
-            VALUES (?, 'slices.jsonl', ?, 'assistant', '2026-01-01T00:20:00Z', '{}')
-            """,
-            (session_id, index + 1),
-        ).lastrowid)
-        is_git = index < 40
-        rejected = (is_git and index < 28) or (not is_git and index >= 78)
-        slice_id = int(conn.execute(
-            """
-            INSERT INTO sequence_slices(session_id, kind, lane, start_event_id, end_event_id, outcome, length, duration_seconds)
-            VALUES (?, 'turn', 'main', ?, ?, ?, 4, 60)
-            """,
-            (session_id, event_id, event_id, "rejected" if rejected else "clean"),
-        ).lastrowid)
-        symbol = "CALL:Bash:git" if is_git else "CALL:inspect:Read"
-        conn.execute(
-            """
-            INSERT INTO event_features(event_id, session_id, sequence_slice_id, position, symbol, family, attributes_json)
-            VALUES (?, ?, ?, 0, ?, 'tool_call', '{}')
-            """,
-            (event_id, session_id, slice_id, symbol),
-        )
     conn.commit()
     return alpha, beta
 
@@ -307,24 +313,48 @@ def test_discovery_returns_ranked_driver_sections(seeded: tuple[sqlite3.Connecti
     conn, _alpha, _beta = seeded
     payload = discovery_analytics(conn, min_support=3)
 
-    assert set(payload["sections"]) == {"cost", "fanout_cost", "tool_errors", "rejections"}
-    cost = payload["sections"]["cost"]
-    fanout = payload["sections"]["fanout_cost"]
-    tool_errors = payload["sections"]["tool_errors"]
-    rejections = payload["sections"]["rejections"]
+    assert set(payload["sections"]) == {"cost_associations", "tool_error_associations"}
+    cost = payload["sections"]["cost_associations"]
+    tool_errors = payload["sections"]["tool_error_associations"]
 
     assert cost["available"] is True
-    assert any("subagents" in result["title"] or "Uses Agent" in result["title"] for result in fanout["results"])
     assert any("Bash Test commands" in result["title"] for result in tool_errors["results"])
-    assert any("Bash git activity" in result["title"] for result in rejections["results"])
-    assert all("cost" not in selector.lower() for result in cost["results"] for selector in result["selectors"])
+    assert cost["observation_unit"] == "session"
+    assert tool_errors["observation_unit"] == "tool_call"
+    assert cost["baseline_count"] == conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    assert tool_errors["baseline_count"] == conn.execute("SELECT COUNT(*) FROM tool_calls").fetchone()[0]
+    forbidden = ("turn", "tool call", "token", "event", "loop", "duration")
+    assert all(
+        not any(term in selector.lower() for term in forbidden)
+        for result in cost["results"]
+        for selector in result["selectors"]
+    )
 
-    # Every surfaced driver must clear its baseline with statistical confidence,
-    # not merely on raw rate. The Wilson lower bound stays above the baseline.
-    for section in (cost, fanout, tool_errors, rejections):
-        baseline_rate = section["positive_count"] / section["baseline_count"]
+    # Every surfaced association compares independent rows with their
+    # complement, not with a baseline that includes the subgroup itself.
+    for section in (cost, tool_errors):
         for result in section["results"]:
-            assert result["subgroup_rate_low"] > baseline_rate
+            assert result["subgroup_rate_low"] > result["complement_rate"]
+            expected_effect = (
+                result["positive_support"] / result["support"]
+                - result["complement_positive_count"] / result["complement_count"]
+            )
+            assert result["effect_size"] == pytest.approx(expected_effect, abs=1e-4)
+            assert result["support"] + result["complement_count"] == section["baseline_count"]
+
+
+def test_discovery_does_not_read_transitional_sequence_tables(
+    seeded: tuple[sqlite3.Connection, int, int],
+) -> None:
+    conn, _alpha, _beta = seeded
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    discovery_analytics(conn, min_support=3)
+    conn.set_trace_callback(None)
+
+    sql = "\n".join(statements).lower()
+    assert "sequence_slices" not in sql
+    assert "event_features" not in sql
 
 
 def test_discovery_applies_project_and_support_filters(seeded: tuple[sqlite3.Connection, int, int]) -> None:
@@ -336,8 +366,8 @@ def test_discovery_applies_project_and_support_filters(seeded: tuple[sqlite3.Con
 
     assert alpha_payload["meta"]["total_sessions"] == 36
     assert beta_payload["meta"]["total_sessions"] == 24
-    assert alpha_payload["sections"]["cost"]["results"]
-    assert not strict_payload["sections"]["cost"]["results"]
+    assert alpha_payload["sections"]["cost_associations"]["results"]
+    assert not strict_payload["sections"]["cost_associations"]["results"]
 
 
 def test_discovery_empty_db_is_stable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -354,8 +384,8 @@ def test_discovery_empty_db_is_stable(tmp_path: Path, monkeypatch: pytest.Monkey
     payload = discovery_analytics(conn)
 
     assert payload["meta"]["total_sessions"] == 0
-    assert payload["sections"]["tool_errors"]["results"] == []
-    assert payload["sections"]["rejections"]["baseline_count"] == 0
+    assert payload["sections"]["tool_error_associations"]["results"] == []
+    assert payload["sections"]["cost_associations"]["baseline_count"] == 0
 
 
 def _conn_two_dated_opus(tmp_path):
@@ -397,9 +427,74 @@ def test_scoped_session_costs_prices_by_period(monkeypatch, tmp_path):
     monkeypatch.setattr(discovery, "pricing_path", lambda: baseline)
     monkeypatch.setattr(discovery, "pricing_dir", lambda: sheets)
 
-    costs, available = discovery._scoped_session_costs(conn, project_id=None, historical=True)
+    costs, available, unpriced_models = discovery._scoped_session_costs(
+        conn, project_id=None, historical=True
+    )
     assert available is True
+    assert unpriced_models == []
     assert costs == {1: 15.0, 2: 5.0}
+
+
+def test_model_less_messages_do_not_invalidate_complete_pricing(
+    seeded: tuple[sqlite3.Connection, int, int],
+) -> None:
+    conn, _alpha, _beta = seeded
+    event_id = conn.execute("SELECT MIN(id) FROM events").fetchone()[0]
+    conn.execute(
+        "INSERT INTO messages(event_id, role, model, base_input_tokens, output_tokens) "
+        "VALUES(?, 'user', NULL, 0, 0)",
+        (event_id,),
+    )
+    conn.commit()
+
+    payload = discovery_analytics(conn, min_support=3)
+
+    assert payload["meta"]["cost_available"] is True
+    assert payload["meta"]["unpriced_models"] == []
+
+
+def test_synthetic_notices_have_zero_cost_without_invalidating_pricing(
+    seeded: tuple[sqlite3.Connection, int, int],
+) -> None:
+    conn, _alpha, _beta = seeded
+    costs_before, available_before, _unpriced_before = discovery._scoped_session_costs(
+        conn, project_id=None
+    )
+    event_id = conn.execute("SELECT MIN(id) FROM events").fetchone()[0]
+    conn.execute(
+        "INSERT INTO messages(event_id, role, model, base_input_tokens, output_tokens) "
+        "VALUES(?, 'assistant', '<synthetic>', 1000000, 1000000)",
+        (event_id,),
+    )
+    conn.commit()
+
+    costs_after, available_after, unpriced_after = discovery._scoped_session_costs(
+        conn, project_id=None
+    )
+
+    assert available_before is True
+    assert available_after is True
+    assert unpriced_after == []
+    assert costs_after == costs_before
+
+
+def test_cost_associations_require_complete_pricing(
+    seeded: tuple[sqlite3.Connection, int, int],
+) -> None:
+    conn, _alpha, _beta = seeded
+    conn.execute(
+        "UPDATE messages SET model = 'unpriced-model' WHERE id = (SELECT MIN(id) FROM messages)"
+    )
+    conn.commit()
+
+    payload = discovery_analytics(conn, min_support=3)
+    cost = payload["sections"]["cost_associations"]
+
+    assert payload["meta"]["cost_available"] is False
+    assert payload["meta"]["unpriced_models"] == ["unpriced-model"]
+    assert cost["available"] is False
+    assert cost["results"] == []
+    assert "complete pricing" in cost["unavailable_reason"].lower()
 
 
 def test_discovery_endpoint_returns_payload(seeded: tuple[sqlite3.Connection, int, int], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -413,8 +508,14 @@ def test_discovery_endpoint_returns_payload(seeded: tuple[sqlite3.Connection, in
     assert response.status_code == 200
     body = response.json()
     assert body["meta"]["project_id"] == alpha
-    assert body["sections"]["cost"]["available"] is True
-    assert "tool_errors" in body["sections"]
-    first_result = body["sections"]["cost"]["results"][0]
+    assert body["sections"]["cost_associations"]["available"] is True
+    assert set(body["sections"]) == {"cost_associations", "tool_error_associations"}
+    first_result = body["sections"]["cost_associations"]["results"][0]
     assert "subgroup_rate_low" in first_result
-    assert first_result["subgroup_rate_low"] > first_result["baseline_rate"]
+    assert first_result["subgroup_rate_low"] > first_result["complement_rate"]
+    assert "effect_size" in first_result
+    assert "lift" not in first_result
+    assert "score" not in first_result
+
+    tool_result = body["sections"]["tool_error_associations"]["results"][0]
+    assert tool_result["examples"][0]["event_id"] is not None

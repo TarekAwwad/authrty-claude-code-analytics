@@ -82,6 +82,7 @@ describe("counterfactualSeries", () => {
     savings_usd: 0.02,
     counterfactual: { model: "capped", params: { cap_tokens: 1_500 } },
     event_id: 5,
+    evidence_event_ids: [5],
   };
 
   it("subtracts contributor savings over the carry window", () => {
@@ -93,36 +94,9 @@ describe("counterfactualSeries", () => {
     expect(cf[0]).toBe(thread.calls[0].context_tokens);
   });
 
-  it("drops a fixed ballast after the compaction-eligible turn", () => {
-    const finding: ContextFinding = {
-      ...baseFinding,
-      archetype: "late_compaction",
-      entry_turn: 1,
-      counterfactual: { model: "compact", params: { eligible_turn: 1, retained_tokens: 2_000 } },
-    };
-    // dropped = 22000 - 2000 = 20000 from turn 1 onward
-    expect(counterfactualSeries(thread, finding)).toEqual([10_000, 2_000, 2_500]);
-  });
-
-  it("removes the pre-gap ballast for stale continuations", () => {
-    const finding: ContextFinding = {
-      ...baseFinding,
-      archetype: "stale_continuation",
-      entry_turn: 2,
-      counterfactual: { model: "fresh session", params: { baseline_tokens: 10_000, gap_minutes: 90 } },
-    };
-    // avoidable = context[1] - baseline = 12000, removed from turn 2 onward
-    expect(counterfactualSeries(thread, finding)).toEqual([10_000, 22_000, 10_500]);
-  });
-
   it("returns null when the finding cannot be reconstructed", () => {
     expect(counterfactualSeries(thread, { ...baseFinding, entry_turn: 99 })).toBeNull();
     expect(counterfactualSeries(thread, { ...baseFinding, savings_tokens: 0 })).toBeNull();
-    expect(counterfactualSeries(thread, {
-      ...baseFinding,
-      archetype: "late_compaction",
-      counterfactual: { model: "compact", params: {} },
-    })).toBeNull();
   });
 });
 

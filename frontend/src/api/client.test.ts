@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as apiClient from "./client";
 import {
   exportTeamBundle,
   getCostAnalytics,
+  getSessionFindings,
+  getSubagents,
   getTeamDashboard,
   getTeamPreview,
   getTeamProjects,
+  getToolActivity,
   importTeamBundle,
   importTeamBundleFile,
   listTeamImports,
@@ -23,6 +27,11 @@ describe("api client", () => {
     vi.stubGlobal("fetch", fetchMock);
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it("does not expose the retired standalone contribution workflow", () => {
+    expect(apiClient).not.toHaveProperty("getContributionPreview");
+    expect(apiClient).not.toHaveProperty("exportContribution");
+  });
 
   it("requests are sent with cache disabled so toggled state can't serve stale data", async () => {
     await getCostAnalytics({});
@@ -43,6 +52,39 @@ describe("api client", () => {
   it("omits the historical param when the mode is not provided", async () => {
     await getCostAnalytics({ dateFrom: "2026-05-18" });
     expect(fetchMock.mock.calls[0][0] as string).not.toContain("historical=");
+  });
+
+  it("uses the session activity routes and shares the historical pricing mode", async () => {
+    await getSubagents(7, false);
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/sessions/7/subagents?historical=false");
+
+    await getSubagents(7, true);
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/sessions/7/subagents?historical=true");
+
+    await getToolActivity(7);
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/sessions/7/tool-activity");
+
+    fetchMock.mockResolvedValueOnce(okJson([{
+      id: 1,
+      session_id: 7,
+      detector_key: "timeout",
+      basis: "observed",
+      category: "execution_failure",
+      title: "Tool call timed out",
+      explanation: "The call exceeded its time limit.",
+      recommendation: "Narrow the operation before retrying.",
+      start_event_id: 10,
+      end_event_id: 10,
+      evidence_event_ids: [10],
+      evidence: { event_ids: [10] },
+    }]));
+    const findings = await getSessionFindings(7);
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/sessions/7/findings");
+    expect(findings[0]).toEqual(expect.objectContaining({
+      detector_key: "timeout",
+      basis: "observed",
+      evidence_event_ids: [10],
+    }));
   });
 
   it("surfaces FastAPI error details as the thrown message", async () => {

@@ -4,7 +4,7 @@ import {
   ACCENT_COLOR, formatUsd, formatTokens, buildModelColorMap, orderedModels, displayModelName,
   topProjectsWithRollup, stackedSegments, categoryRows, cacheReadPctOfInput, buildSpendArea,
   largestSpike, topModelSpendSharePct, modelSpendSharePct, modelTokenSharePct,
-  effectiveUsdPerMillion, reviewSessions, costPerTurnSessions, costPerTurn, formatSignedUsd,
+  effectiveUsdPerMillion, formatSignedUsd,
   chartModels, buildTurnBubblePlot, turnDistributionSessions, turnDistributionSummary,
 } from "./chartGeometry";
 import type {
@@ -40,18 +40,33 @@ const session = (partial: Partial<SessionCostEntry> & { id: number }): SessionCo
   tool_call_count: 0,
   subagent_count: 0,
   error_count: 0,
-  loop_count: 0,
-  max_repeat: 0,
   finding_count: 0,
   duration_seconds: 0,
   turn_cost_stats: { turn_count: 0, median_usd: 0, p95_usd: 0, max_usd: 0, outlier_count: 0 },
   ...partial,
 });
 
+const trendBucket = (bucket: string, per_model: Record<string, number>): OverTimeBucket => ({
+  bucket,
+  per_model,
+  total_usd: Object.values(per_model).reduce((sum, usd) => sum + usd, 0),
+  session_count: 1,
+  priced_session_count: 1,
+  unpriced_models: [],
+  costs_are_lower_bound: false,
+  baseline_usd: null,
+  delta_usd: null,
+  delta_pct: null,
+  is_spike: false,
+  sessions: [],
+});
+
 const payload = (partial: Partial<CostAnalyticsResponse>): CostAnalyticsResponse => ({
   meta: {
     available: true,
     unpriced_models: [],
+    costs_partial: false,
+    costs_are_lower_bound: false,
     total_usd: 100,
     total_tokens: 1_000_000,
     available_projects: [],
@@ -174,9 +189,9 @@ describe("categoryRows / cacheReadPctOfInput", () => {
 describe("buildSpendArea", () => {
   it("returns one path per present model, 3 y-ticks, and first+last x labels", () => {
     const ot: OverTimeBucket[] = [
-      { bucket: "2026-05-01", per_model: { a: 10 } },
-      { bucket: "2026-05-02", per_model: { a: 5, b: 15 } },
-      { bucket: "2026-05-03", per_model: { b: 20 } },
+      trendBucket("2026-05-01", { a: 10 }),
+      trendBucket("2026-05-02", { a: 5, b: 15 }),
+      trendBucket("2026-05-03", { b: 20 }),
     ];
     const area = buildSpendArea(ot, ["a", "b"], 600, 150);
     expect(area.paths.map((p) => p.model)).toEqual(["a", "b"]);
@@ -186,7 +201,7 @@ describe("buildSpendArea", () => {
     expect(area.xLabels[area.xLabels.length - 1].label).toBe("2026-05-03");
   });
   it("handles a single bucket without throwing", () => {
-    const area = buildSpendArea([{ bucket: "2026-05-01", per_model: { a: 10 } }], ["a"], 600, 150);
+    const area = buildSpendArea([trendBucket("2026-05-01", { a: 10 })], ["a"], 600, 150);
     expect(area.paths).toHaveLength(1);
   });
 });
@@ -195,8 +210,8 @@ describe("insight helpers", () => {
   it("selects the largest spend spike", () => {
     const p = payload({
       spikes: [
-        { bucket: "2026-05-02", total_usd: 30, delta_usd: 5, sessions: [] },
-        { bucket: "2026-05-03", total_usd: 80, delta_usd: 50, sessions: [] },
+        { bucket: "2026-05-02", total_usd: 30, baseline_usd: 25, delta_usd: 5, delta_pct: 20, sessions: [] },
+        { bucket: "2026-05-03", total_usd: 80, baseline_usd: 30, delta_usd: 50, delta_pct: 166.67, sessions: [] },
       ],
     });
     expect(largestSpike(p)?.bucket).toBe("2026-05-03");
@@ -209,17 +224,6 @@ describe("insight helpers", () => {
     expect(modelSpendSharePct(m, p)).toBe(75);
     expect(modelTokenSharePct(m, p)).toBe(25);
     expect(effectiveUsdPerMillion(m)).toBe(300);
-  });
-
-  it("ranks review sessions by spend and cost-per-turn sessions by efficiency", () => {
-    const rows = [
-      session({ id: 1, usd: 10, turn_count: 10, loop_count: 1 }),
-      session({ id: 2, usd: 5, turn_count: 1, error_count: 1 }),
-      session({ id: 3, usd: 20, turn_count: 20 }),
-    ];
-    expect(reviewSessions(rows).map((s) => s.id)).toEqual([1, 2]);
-    expect(costPerTurn(rows[1])).toBe(5);
-    expect(costPerTurnSessions(rows).map((s) => s.id)).toEqual([2, 1, 3]);
   });
 
   it("ranks turn distribution by p95 and builds bubble plot geometry", () => {
@@ -240,8 +244,9 @@ describe("insight helpers", () => {
     expect(turnDistributionSessions(rows).map((s) => s.id)).toEqual([1, 2]);
     const plot = buildTurnBubblePlot(rows, 640, 240);
     expect(plot.points.map((point) => point.session.id)).toEqual([1, 2]);
-    expect(plot.points.find((point) => point.session.id === 1)?.severity).toBe("alert");
-    expect(plot.points.find((point) => point.session.id === 2)?.severity).toBe("normal");
+    expect(plot.points.every((point) => !("severity" in point))).toBe(true);
+    expect(plot.xReference.value).toBeCloseTo(0.14, 5);
+    expect(plot.yReference.value).toBeCloseTo(0.825, 5);
     expect(plot.points.find((point) => point.session.id === 1)?.outlierCount).toBe(1);
     expect(plot.points.find((point) => point.session.id === 1)?.outlierRate).toBeCloseTo(1 / 6, 5);
     expect(plot.points.find((point) => point.session.id === 2)!.r).toBeGreaterThan(
@@ -249,7 +254,7 @@ describe("insight helpers", () => {
     );
   });
 
-  it("summarizes sessions that need turn attention", () => {
+  it("summarizes the observed session sample without inventing a target", () => {
     const rows = [
       session({
         id: 1, usd: 10,
@@ -269,6 +274,10 @@ describe("insight helpers", () => {
       }),
     ];
 
-    expect(turnDistributionSummary(rows)).toEqual({ total: 3, attentionCount: 2 });
+    expect(turnDistributionSummary(rows)).toEqual({
+      total: 3,
+      medianUsd: 0.2,
+      p95Usd: 0.75,
+    });
   });
 });

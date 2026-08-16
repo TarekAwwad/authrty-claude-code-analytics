@@ -1,6 +1,6 @@
 // frontend/src/shell/Sidebar.tsx
-import { Eye, EyeOff, History, HelpCircle, Monitor, Moon, PanelLeft, PanelLeftClose, Sun, Users } from "lucide-react";
-import { NAV_ITEMS, type View } from "./navConfig";
+import { Eye, EyeOff, HelpCircle, Monitor, Moon, PanelLeft, PanelLeftClose, Sun, Users } from "lucide-react";
+import { NAV_ITEMS, navItemLabel, type View } from "./navConfig";
 import type { DataScope } from "./useDataScope";
 import { TECHNIQUES } from "../discover/techniques";
 
@@ -21,8 +21,6 @@ interface Props {
   onToggleCollapsed: () => void;
   onToggleTheme: () => void;
   onOpenGlossary: () => void;
-  historicalPricing: boolean;
-  onToggleHistoricalPricing: () => void;
   privacyMode: boolean;
   onTogglePrivacyMode: () => void;
   // First-run hint that surfaces the glossary. When true, the help button
@@ -45,12 +43,12 @@ export default function Sidebar({
   onOpenGlossary,
   glossaryHint = false,
   onDismissGlossaryHint,
-  historicalPricing,
-  onToggleHistoricalPricing,
   privacyMode,
   onTogglePrivacyMode,
 }: Props) {
   const readyTechniques = TECHNIQUES.filter((tech) => tech.status === "ready");
+  const mainTechniques = readyTechniques.filter((tech) => tech.section === "main");
+  const experimentalTechniques = readyTechniques.filter((tech) => tech.section === "experimental");
   const navItems = NAV_ITEMS.filter((item) => item.scopes.includes(scope));
   const scopeLabel = scope === "team" ? "Team" : "This machine";
   const ScopeIcon = scope === "team" ? Users : Monitor;
@@ -71,21 +69,22 @@ export default function Sidebar({
         {navItems.map((item) => {
           const Icon = item.icon;
           const active = view === item.key;
+          const label = navItemLabel(item, scope);
           return (
             <div key={item.key}>
               <button
                 className={`sb-item ${active ? "active" : ""}`}
                 onClick={() => onSelectView(item.key)}
-                aria-label={item.label}
-                title={item.label}
+                aria-label={label}
+                title={label}
               >
                 <Icon className="sb-ic" size={16} />
-                <span className="sb-label">{item.label}</span>
+                <span className="sb-label">{label}</span>
               </button>
 
-              {item.key === "discover" && view === "discover" && (
-                <div className="sb-subnav" role="group" aria-label="Discovery techniques">
-                  {readyTechniques.map((tech) => (
+              {item.key === "discover" && view === "discover" && !collapsed && (
+                <div className="sb-subnav" role="group" aria-label="Explore techniques">
+                  {mainTechniques.map((tech) => (
                     <button
                       key={tech.key}
                       className={`sb-subitem ${discoverTechnique === tech.key ? "active" : ""}`}
@@ -96,6 +95,22 @@ export default function Sidebar({
                       <span className="sb-label">{tech.label}</span>
                     </button>
                   ))}
+                  {experimentalTechniques.length > 0 && (
+                    <div className="sb-subsection" role="group" aria-label="Experimental techniques">
+                      <span className="sb-subsection-label">Experimental</span>
+                      {experimentalTechniques.map((tech) => (
+                        <button
+                          key={tech.key}
+                          className={`sb-subitem ${discoverTechnique === tech.key ? "active" : ""}`}
+                          onClick={() => onSelectTechnique(tech.key)}
+                          title={tech.label}
+                        >
+                          <span className="sb-dot" aria-hidden="true" />
+                          <span className="sb-label">{tech.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -141,19 +156,6 @@ export default function Sidebar({
           >
             {privacyMode ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
-          <button
-            className={`sb-action ${historicalPricing ? "is-active" : ""}`}
-            onClick={onToggleHistoricalPricing}
-            aria-pressed={historicalPricing}
-            aria-label="Historical pricing"
-            title={
-              historicalPricing
-                ? "Historical pricing on — spend uses rates effective on each session's date"
-                : "Historical pricing off — spend uses current rates for all sessions"
-            }
-          >
-            <History size={16} />
-          </button>
           <div className="sb-glossary">
             <button
               className={`sb-action ${glossaryHint ? "is-hinted" : ""}`}
@@ -166,7 +168,7 @@ export default function Sidebar({
             {glossaryHint && (
               <div className="glossary-hint" role="note" aria-labelledby="glossary-hint-title">
                 <h4 id="glossary-hint-title">Not sure what a term means?</h4>
-                <p>Open the glossary any time for plain-English definitions — and how each score is computed.</p>
+                <p>Open the glossary any time for plain-English definitions — including how evidence and estimates are derived.</p>
                 <div className="glossary-hint-actions">
                   <button type="button" className="ghint-primary" onClick={onOpenGlossary}>
                     Browse glossary

@@ -2,17 +2,14 @@ import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { Blurred } from "../shell/Blurred";
 import {
-  type ContributionSession,
+  type TeamBundleSession,
   compactInt,
   formatDuration,
   prettyModel,
-  prettySymbol,
-} from "./specimen";
-
-const SEQ_PREVIEW = 32;
+} from "./bundlePresentation";
 
 interface Props {
-  sample: ContributionSession;
+  sample: TeamBundleSession;
   open: boolean;
   onClose: () => void;
   title?: string;
@@ -56,9 +53,7 @@ export default function SpecimenModal({
   const models = sample.models ?? [];
   const stats = sample.stats;
   const stopReasons = Object.entries(sample.stop_reasons ?? {});
-  const risks = sample.risk_categories ?? [];
   const subagents = sample.subagents ?? [];
-  const sequence = sample.sequence ?? [];
 
   // Aggregate subagents by type so repeated agents read as one compact row.
   const subagentGroups = Object.values(
@@ -76,7 +71,6 @@ export default function SpecimenModal({
     ["tool calls", stats?.tool_calls],
     ["subagents", stats?.subagents],
     ["errors", stats?.errors],
-    ["loops", stats?.loops],
   ];
   const activityShown = activity.filter(([, value]) => value !== undefined);
 
@@ -187,40 +181,7 @@ export default function SpecimenModal({
                     </dd>
                   </div>
                 )}
-                {risks.length > 0 && (
-                  <div>
-                    <dt>Risk categories</dt>
-                    <dd className="chips">
-                      {risks.map((risk) => (
-                        <span className="chip is-risk" key={risk}>
-                          {risk}
-                        </span>
-                      ))}
-                    </dd>
-                  </div>
-                )}
               </dl>
-
-              {sequence.length > 0 && (
-                <div className="seq">
-                  <div className="seq-label">
-                    Tool / event sequence <em>{sequence.length} steps</em>
-                  </div>
-                  <ol className="seq-strand" aria-label="Event sequence">
-                    {sequence.slice(0, SEQ_PREVIEW).map((step, index) => {
-                      const { label, kind } = prettySymbol(step.sym);
-                      return (
-                        <li className={`seq-chip k-${kind}`} key={index} title={step.sym}>
-                          {label}
-                        </li>
-                      );
-                    })}
-                    {sequence.length > SEQ_PREVIEW && (
-                      <li className="seq-more">+{sequence.length - SEQ_PREVIEW} more</li>
-                    )}
-                  </ol>
-                </div>
-              )}
             </>
           )}
         </div>

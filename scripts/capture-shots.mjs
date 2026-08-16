@@ -13,14 +13,64 @@ import { mkdirSync } from "node:fs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..");
 const SHOTS_DIR = join(REPO_ROOT, "docs", "media", "shots");
-const DEMO_URL = process.env.DEMO_URL ?? "http://localhost:5173";
+const DEMO_URL = process.env.DEMO_URL ?? "http://localhost:5174";
 const VIEWPORT = { width: 1440, height: 900 };
 const WAIT = { state: "visible", timeout: 60_000 };
+const DEMO_PROJECTS = ["demo-data-pipeline", "demo-mobile-app", "demo-web-shop"];
+const DEMO_SESSION_COUNT = 46;
+// Stand-in shown in import.png so the capture machine's real export root is
+// never published.
+const MASKED_ROOT = "<configured Claude export root>";
 
 // Brief settle for physics/transition-driven views (mindmap force sim, slide
 // transitions) so a still is not captured mid-animation. Not synchronization —
 // every screen is first awaited on a visible element.
 const settle = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const nav = (page, label) =>
+  page.locator("nav.sb-nav").getByRole("button", { name: label, exact: true }).click();
+
+// The Cost filter defaults to the last 30 days, but the bundled demo corpus is
+// fixed in time (2026-05-05 .. 2026-06-26). Once that corpus is older than the
+// default window every tile renders "no data in range", so the Cost stills must
+// select All time first. Without this the page still screenshots successfully,
+// it just captures empty states.
+async function selectAllTime(p) {
+  await p.getByLabel("Date range").selectOption("all");
+  await p
+    .getByText("No cost data in range")
+    .waitFor({ state: "hidden", timeout: 60_000 })
+    .catch(() => {});
+}
+
+async function assertSyntheticSessions(page) {
+  const sessions = await page.evaluate(async () => {
+    const resource = performance
+      .getEntriesByType("resource")
+      .toReversed()
+      .find((entry) => new URL(entry.name).pathname.endsWith("/api/sessions"));
+    if (!resource) throw new Error("Could not locate the Sessions API request.");
+    const url = new URL(resource.name);
+    url.search = "";
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Sessions API returned ${response.status}.`);
+    return response.json();
+  });
+  if (!Array.isArray(sessions)) {
+    throw new Error("Refusing to capture: the Sessions API returned an unexpected payload.");
+  }
+  const seen = new Set();
+  for (const session of sessions) {
+    const project = session?.project_name;
+    if (typeof project !== "string" || !DEMO_PROJECTS.includes(project)) {
+      throw new Error("Refusing to capture: the Sessions table contains non-demo data.");
+    }
+    seen.add(project);
+  }
+  if (sessions.length !== DEMO_SESSION_COUNT || seen.size !== DEMO_PROJECTS.length) {
+    throw new Error("Refusing to capture: the complete bundled demo corpus is not loaded.");
+  }
+}
 
 async function main() {
   mkdirSync(SHOTS_DIR, { recursive: true });
@@ -37,15 +87,20 @@ async function main() {
   const page = await context.newPage();
   await page.goto(DEMO_URL, { waitUntil: "domcontentloaded" });
 
-  // Ensure the demo dataset is loaded (idempotent: the card only shows on an
-  // empty cache; if data is already present we just continue).
+  // Load the demo into an empty cache, or verify that an existing cache contains
+  // only the complete bundled demo before writing any public artifact.
   const loadDemo = page.getByRole("button", { name: /load demo/i });
-  if (await loadDemo.isVisible().catch(() => false)) {
+  const demoAvailable = await loadDemo
+    .waitFor({ state: "visible", timeout: 10_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (demoAvailable) {
     await loadDemo.click();
-    await page.getByRole("button", { name: "Overview" }).click();
-    await page.getByPlaceholder("Search sessions").waitFor(WAIT);
-    await page.locator("tbody tr").first().waitFor(WAIT);
   }
+  await nav(page, "Sessions");
+  await page.getByPlaceholder("Search sessions").waitFor(WAIT);
+  await page.locator("tbody tr").first().waitFor(WAIT);
+  await assertSyntheticSessions(page);
 
   const shot = async (file, selector, pre = 400) => {
     const el = page.locator(selector).first();
@@ -57,7 +112,7 @@ async function main() {
   };
 
   // 01 — Habit & anti-pattern mindmap.
-  await page.getByRole("button", { name: "Explore" }).click();
+  await nav(page, "Explore");
   await page.getByRole("button", { name: "Usage Mindmap" }).click();
   await shot("mindmap.png", ".mindmap-stage", 1600); // let the d3-force layout settle
 
@@ -66,13 +121,14 @@ async function main() {
   await page.getByRole("tab", { name: "Tool errors" }).click();
   await shot("subgroups.png", ".driver-board", 500);
 
-  // 03 — Late compaction / context forensics.
+  // 03 — Estimated context opportunity with receipt-backed evidence.
   await page.getByRole("button", { name: "Context economics" }).click();
-  await page.locator(".tax-meter-hero").first().waitFor(WAIT);
+  await page.locator(".opportunity-meter-hero").first().waitFor(WAIT);
   await shot("context.png", ".discover-page-inner", 500);
 
   // 04 — Project & session cost.
-  await page.getByRole("button", { name: "Cost" }).click();
+  await nav(page, "Cost");
+  await selectAllTime(page);
   await shot("cost.png", ".cost-bento", 600);
 
   // 06 — Turn outlier analysis (a Cost-page tile, always shown in local scope).
@@ -87,7 +143,7 @@ async function main() {
   console.log("shot: turns.png");
 
   // 05 — Session forensics (open the first triage session).
-  await page.getByRole("button", { name: "Overview" }).click();
+  await nav(page, "Sessions");
   await page.locator("tbody tr").first().waitFor(WAIT);
   await page.locator("tbody tr").first().click();
   await shot("session.png", ".session-workspace", 600);
@@ -104,6 +160,11 @@ async function main() {
   });
   const rp = await readmeCtx.newPage();
   await rp.goto(DEMO_URL, { waitUntil: "domcontentloaded" });
+  // App.tsx auto-routes off Import to Sessions on first load once the imports
+  // query resolves (frontend/src/App.tsx, the autoRouted effect). A nav click
+  // issued before that resolves is silently undone, which captures the Sessions
+  // board into import.png. Wait for the auto-route to land before navigating.
+  await rp.locator("tbody tr").first().waitFor(WAIT);
 
   const README_DIR = join(REPO_ROOT, "docs", "screenshots");
   mkdirSync(README_DIR, { recursive: true });
@@ -124,12 +185,33 @@ async function main() {
   // import.png — Import screen with populated cache totals.
   // exact: true — the page also has an "Import all new" action button whose
   // accessible name would otherwise substring-match the sidebar nav button.
-  await rp.getByRole("button", { name: "Import", exact: true }).click();
-  await rp.getByPlaceholder("Path to the Claude Code export root").waitFor(WAIT);
-  await rshotPage("import.png", 600);
+  await nav(rp, "Import");
+  const sourcePath = rp.getByPlaceholder("Path to the Claude Code export root");
+  await sourcePath.waitFor(WAIT);
+  // fill(), not a raw input.value assignment: this input is React-controlled
+  // (value={draft} in frontend/src/pages/ImportPage.tsx), so a direct value
+  // write is reverted on the next render and the real local export path ends up
+  // in a public screenshot. fill() dispatches the input event React listens for.
+  await sourcePath.fill(MASKED_ROOT);
+  // fill() leaves the field focused; drop focus so the still shows the resting
+  // state rather than a focus ring.
+  await sourcePath.blur();
+  await settle(600);
+  const shownRoot = await sourcePath.inputValue();
+  if (!(await sourcePath.isVisible())) {
+    throw new Error("Refusing to capture: expected the Import page, got another view.");
+  }
+  if (shownRoot !== MASKED_ROOT) {
+    throw new Error(
+      `Refusing to capture: Import source root reads ${JSON.stringify(shownRoot)}, ` +
+        "not the masked placeholder. This would publish a real local path.",
+    );
+  }
+  await rp.screenshot({ path: join(README_DIR, "import.png") });
+  console.log("readme shot: import.png");
 
-  // triage-board.png — Overview with demo sessions.
-  await rp.getByRole("button", { name: "Overview" }).click();
+  // triage-board.png — Sessions with the synthetic demo corpus.
+  await nav(rp, "Sessions");
   await rp.getByPlaceholder("Search sessions").waitFor(WAIT);
   await rp.locator("tbody tr").first().waitFor(WAIT);
   await rshotPage("triage-board.png", 600);
@@ -139,7 +221,8 @@ async function main() {
   await rshotEl("session-workspace.png", ".session-workspace", 800);
 
   // cost-analytics-1.png — Cost dashboard.
-  await rp.getByRole("button", { name: "Cost" }).click();
+  await nav(rp, "Cost");
+  await selectAllTime(rp);
   await rshotEl("cost-analytics-1.png", ".cost-bento", 600);
 
   // cost-analytics-2.png — turn distribution / outlier tile.
@@ -153,15 +236,14 @@ async function main() {
   await rTurnTile.screenshot({ path: join(README_DIR, "cost-analytics-2.png") });
   console.log("readme shot: cost-analytics-2.png");
 
-  // subgroup.png — Subgroups on its DEFAULT tab (README caption says
-  // "session conditions ranked by lift over baseline" — no tab click).
-  await rp.getByRole("button", { name: "Explore" }).click();
+  // subgroup.png — Subgroups on its default, explicitly non-causal view.
+  await nav(rp, "Explore");
   await rp.getByRole("button", { name: "Subgroups" }).click();
   await rshotEl("subgroup.png", ".driver-board", 500);
 
-  // context-economics.png — avoidable vs necessary spend.
+  // context-economics.png — estimated context opportunity and evidence.
   await rp.getByRole("button", { name: "Context economics" }).click();
-  await rp.locator(".tax-meter-hero").first().waitFor(WAIT);
+  await rp.locator(".opportunity-meter-hero").first().waitFor(WAIT);
   await rshotEl("context-economics.png", ".discover-page-inner", 500);
 
   await readmeCtx.close();

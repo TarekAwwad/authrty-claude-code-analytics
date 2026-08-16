@@ -18,8 +18,6 @@ function setup(overrides: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
     onToggleTheme: vi.fn(),
     onOpenGlossary: vi.fn(),
     onDismissGlossaryHint: vi.fn(),
-    historicalPricing: true,
-    onToggleHistoricalPricing: vi.fn(),
     privacyMode: false,
     onTogglePrivacyMode: vi.fn(),
     ...overrides,
@@ -33,9 +31,10 @@ describe("Sidebar", () => {
     setup();
     expect(screen.getByText("Check Your Agent")).toBeInTheDocument();
     expect(screen.getByText("local, read-only session data")).toBeInTheDocument();
-    for (const name of ["Import", "Export", "Overview", "Cost", "Explore"]) {
+    for (const name of ["Import", "Export", "Sessions", "Cost", "Explore"]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Data" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Session" })).not.toBeInTheDocument();
   });
@@ -45,6 +44,7 @@ describe("Sidebar", () => {
     for (const name of ["Import", "Overview", "Cost"]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("button", { name: "Sessions" })).not.toBeInTheDocument();
     // Export (share a local bundle) and Explore (subgroup drilldown) have no
     // team-bundle equivalent.
     expect(screen.queryByRole("button", { name: "Export" })).not.toBeInTheDocument();
@@ -75,7 +75,7 @@ describe("Sidebar", () => {
   it("marks the active view and routes nav clicks", () => {
     const props = setup({ view: "cost" });
     expect(screen.getByRole("button", { name: "Cost" })).toHaveClass("active");
-    fireEvent.click(screen.getByRole("button", { name: "Overview" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sessions" }));
     expect(props.onSelectView).toHaveBeenCalledWith("map");
   });
 
@@ -86,25 +86,42 @@ describe("Sidebar", () => {
     fireEvent.click(ready);
     expect(props.onSelectTechnique).toHaveBeenCalledWith("subgroup");
     expect(screen.queryByRole("button", { name: /Sequence mining/ })).not.toBeInTheDocument();
+
+    const experimental = screen.getByRole("group", { name: "Experimental techniques" });
+    expect(within(experimental).getByRole("button", { name: "Usage Mindmap" })).toBeInTheDocument();
+    expect(within(experimental).getByRole("button", { name: "Subgroups" })).toBeInTheDocument();
+    expect(within(experimental).queryByRole("button", { name: "Usage drivers" })).not.toBeInTheDocument();
+    expect(screen.getByText("Experimental")).toBeInTheDocument();
   });
 
   it("hides the technique subnav when Explore is not active", () => {
     setup({ view: "cost" });
+    expect(screen.queryByRole("group", { name: "Explore techniques" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Experimental techniques" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Subgroups" })).not.toBeInTheDocument();
+  });
+
+  it("does not render the technique subnav while collapsed", () => {
+    setup({ view: "discover", collapsed: true });
+    expect(screen.queryByRole("group", { name: "Explore techniques" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Experimental techniques" })).not.toBeInTheDocument();
   });
 
   it("fires footer actions", () => {
     const props = setup();
     fireEvent.click(screen.getByRole("button", { name: "Open glossary" }));
     fireEvent.click(screen.getByRole("button", { name: "Privacy mode" }));
-    fireEvent.click(screen.getByRole("button", { name: "Historical pricing" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch to light theme" }));
     fireEvent.click(screen.getByRole("button", { name: /collapse sidebar/i }));
     expect(props.onOpenGlossary).toHaveBeenCalled();
     expect(props.onTogglePrivacyMode).toHaveBeenCalled();
-    expect(props.onToggleHistoricalPricing).toHaveBeenCalled();
     expect(props.onToggleTheme).toHaveBeenCalled();
     expect(props.onToggleCollapsed).toHaveBeenCalled();
+  });
+
+  it("does not expose the Cost-specific historical-pricing setting", () => {
+    setup();
+    expect(screen.queryByRole("button", { name: "Historical pricing" })).not.toBeInTheDocument();
   });
 
   it("applies the collapsed class to the sidebar when collapsed", () => {
@@ -131,62 +148,5 @@ describe("Sidebar", () => {
     // ...and "Got it" dismisses the hint without opening it.
     fireEvent.click(screen.getByRole("button", { name: "Got it" }));
     expect(props.onDismissGlossaryHint).toHaveBeenCalled();
-  });
-});
-
-describe("Sidebar historical-pricing toggle", () => {
-  it("renders and toggles", () => {
-    const onToggle = vi.fn();
-    render(
-      <Sidebar
-        view="map"
-        scope="local"
-        discoverTechnique="subgroup"
-        collapsed={false}
-        theme="dark"
-        onSelectView={vi.fn()}
-        onSelectScope={vi.fn()}
-        onSelectTechnique={vi.fn()}
-        onToggleCollapsed={vi.fn()}
-        onToggleTheme={vi.fn()}
-        onOpenGlossary={vi.fn()}
-        historicalPricing={true}
-        onToggleHistoricalPricing={onToggle}
-        privacyMode={false}
-        onTogglePrivacyMode={vi.fn()}
-      />,
-    );
-    const btn = screen.getByRole("button", { name: /historical pricing/i });
-    expect(btn).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(btn);
-    expect(onToggle).toHaveBeenCalledTimes(1);
-  });
-
-  it("reflects on/off state on the toggle button", () => {
-    const base = {
-      view: "map" as const,
-      scope: "local" as const,
-      discoverTechnique: "subgroup",
-      collapsed: false,
-      theme: "dark" as const,
-      onSelectView: vi.fn(),
-      onSelectScope: vi.fn(),
-      onSelectTechnique: vi.fn(),
-      onToggleCollapsed: vi.fn(),
-      onToggleTheme: vi.fn(),
-      onOpenGlossary: vi.fn(),
-      onToggleHistoricalPricing: vi.fn(),
-      privacyMode: false,
-      onTogglePrivacyMode: vi.fn(),
-    };
-    const { rerender } = render(<Sidebar {...base} historicalPricing={true} />);
-    let btn = screen.getByRole("button", { name: /historical pricing/i });
-    expect(btn).toHaveClass("is-active");
-    expect(btn).toHaveAttribute("aria-pressed", "true");
-
-    rerender(<Sidebar {...base} historicalPricing={false} />);
-    btn = screen.getByRole("button", { name: /historical pricing/i });
-    expect(btn).not.toHaveClass("is-active");
-    expect(btn).toHaveAttribute("aria-pressed", "false");
   });
 });

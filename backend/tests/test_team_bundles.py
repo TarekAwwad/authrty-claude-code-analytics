@@ -9,11 +9,49 @@ from pathlib import Path
 import pytest
 
 from ccfr.analysis import team_bundles
-from ccfr.analysis.contribution import bucket_model
+from ccfr.analysis import bundle_sanitization as bundle_helpers
 from ccfr.ingest import import_export
 from ccfr.storage import init_db
-from tests.fixtures import ALPHA_SESSION_ID, BETA_SESSION_ID, sanitized_export
-from tests.test_contribution import SENTINELS, _allowed_syms, _export_with_sentinels
+from tests.fixtures import (
+    ALPHA_SESSION_ID,
+    BETA_SESSION_ID,
+    TEAM_BUNDLE_SENTINELS,
+    sanitized_export,
+    sentinel_export,
+)
+
+
+def test_team_bundle_model_and_agent_buckets_are_closed() -> None:
+    assert bundle_helpers.bucket_model("claude-opus-4-8") == "claude-opus-4-8"
+    assert bundle_helpers.bucket_model("claude-opus-5-20260801") == "claude-opus-5"
+    assert bundle_helpers.bucket_model("claude-haiku-4-5-20251001") == "claude-haiku-4-5"
+    assert bundle_helpers.bucket_model("SECRET_MODEL_zzz") == "other"
+    assert bundle_helpers.bucket_model(None) == "unknown"
+    assert bundle_helpers.bucket_agent_type("general-purpose") == "general-purpose"
+    assert bundle_helpers.bucket_agent_type("acme-deploy-bot") == "custom"
+    assert bundle_helpers.bucket_agent_type(None) == "custom"
+
+
+def test_legacy_team_sequence_symbols_are_sanitized_to_closed_values() -> None:
+    assert bundle_helpers.sanitize_symbol("CALL:Bash:git", "tool_call") == "CALL:Bash:git"
+    assert bundle_helpers.sanitize_symbol("CALL:Bash:private", "tool_call") == "CALL:Bash:other"
+    assert bundle_helpers.sanitize_symbol("CALL:inspect:Read", "tool_call") == "CALL:inspect:Read"
+    assert bundle_helpers.sanitize_symbol("CALL:write:Edit", "tool_call") == "CALL:write:Edit"
+    assert bundle_helpers.sanitize_symbol("CALL:Agent", "tool_call") == "CALL:Agent"
+    assert bundle_helpers.sanitize_symbol("CALL:WebFetch", "tool_call") == "CALL:WebFetch"
+    assert bundle_helpers.sanitize_symbol(
+        "CALL:mcp__SECRETSERVER__deploy", "tool_call"
+    ) == "CALL:mcp"
+    assert bundle_helpers.sanitize_symbol(
+        "CALL:SomePrivateTool", "tool_call"
+    ) == "CALL:other"
+    assert bundle_helpers.sanitize_symbol("RESULT:ok", "tool_result") == "RESULT:ok"
+    assert bundle_helpers.sanitize_symbol(
+        "RESULT:error:permission_denied", "tool_result"
+    ) == "RESULT:error:permission_denied"
+    assert bundle_helpers.sanitize_symbol(
+        "RESULT:error:private", "tool_result"
+    ) == "RESULT:error:other"
 
 
 def _bundle_from_sanitized(tmp_path):
@@ -33,11 +71,11 @@ def _bundle_from_sanitized(tmp_path):
         conn.close()
 
 
-def test_team_bundle_v2_structural_shape(tmp_path):
+def test_team_bundle_v3_structural_shape_omits_deprecated_inventory(tmp_path):
     bundle = _bundle_from_sanitized(tmp_path)
     data = bundle.to_dict()
 
-    assert data["schema_version"] == 2
+    assert data["schema_version"] == 3
     assert data["privacy_level"] == "structural"
     assert "profile" not in data
     assert "member_name" not in data
@@ -47,6 +85,8 @@ def test_team_bundle_v2_structural_shape(tmp_path):
     assert BETA_SESSION_ID not in blob
     assert "d--Alpha" not in blob
     for session in data["sessions"]:
+        assert {"risk_categories", "sequence"}.isdisjoint(session)
+        assert {"loops", "max_repeat"}.isdisjoint(session["stats"])
         assert len(session["pid"]) == 64
         assert len(session["sid"]) == 64
         int(session["pid"], 16)
@@ -74,7 +114,7 @@ def test_team_bundle_never_leaks_sentinels(tmp_path):
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     init_db(conn)
-    import_export(conn, _export_with_sentinels(tmp_path))
+    import_export(conn, sentinel_export(tmp_path))
     try:
         bundle = team_bundles.build_team_bundle(
             conn,
@@ -87,32 +127,8 @@ def test_team_bundle_never_leaks_sentinels(tmp_path):
         conn.close()
 
     blob = json.dumps(bundle.to_dict())
-    for sentinel in SENTINELS:
+    for sentinel in TEAM_BUNDLE_SENTINELS:
         assert sentinel not in blob, f"leaked sentinel: {sentinel}"
-
-
-def test_team_bundle_sequence_is_closed_vocabulary(tmp_path):
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    init_db(conn)
-    import_export(conn, _export_with_sentinels(tmp_path))
-    try:
-        bundle = team_bundles.build_team_bundle(
-            conn,
-            salt="abcd" * 16,
-            member_id="member",
-            app_version="0.1.0",
-            generated_on=datetime.date(2026, 6, 18),
-        )
-    finally:
-        conn.close()
-
-    allowed = _allowed_syms()
-    steps = [step for session in bundle.to_dict()["sessions"] for step in session["sequence"]]
-    assert steps
-    for step in steps:
-        assert step["fam"] in {"tool_call", "tool_result"}
-        assert step["sym"] in allowed
 
 
 def test_team_dashboard_date_to_includes_sessions_without_last_date():
@@ -187,7 +203,7 @@ def test_team_bundle_tokens_by_model_sum_to_session_tokens(tmp_path):
             assert sum(vals[key] for vals in tbm.values()) == session["tokens"][key]
         # Keys are bucketed model families (idempotent under bucket_model).
         for family in tbm:
-            assert bucket_model(family) == family
+            assert bundle_helpers.bucket_model(family) == family
 
 
 def test_validate_team_bundle_accepts_legacy_without_tokens_by_model(tmp_path):
@@ -218,6 +234,47 @@ def test_validate_team_bundle_buckets_raw_tokens_by_model(tmp_path):
     }
 
 
+def test_v1_and_v2_readers_strip_deprecated_fields_before_persistence(tmp_path):
+    current = _bundle_from_sanitized(tmp_path).to_dict()
+    v2 = copy.deepcopy(current)
+    v2.pop("bundle_id", None)
+    v2["schema_version"] = 2
+    for session in v2["sessions"]:
+        session["stats"]["loops"] = 2
+        session["stats"]["max_repeat"] = 7
+        session["risk_categories"] = ["permission_friction"]
+        session["sequence"] = [
+            {"sym": "CALL:inspect:Read", "fam": "tool_call", "dt_s": 1, "out_tok": 0}
+        ]
+    v2["bundle_id"] = team_bundles.bundle_content_id_v2(v2)
+
+    v1 = {
+        "schema_version": 1,
+        "profile": team_bundles.PROFILE,
+        "member_id": v2["member_id"],
+        "generated_at": v2["generated_at"],
+        "app_version": v2["app_version"],
+        "sessions": copy.deepcopy(v2["sessions"]),
+    }
+    v1["bundle_id"] = team_bundles.bundle_content_id(v1)
+
+    for legacy in (v1, v2):
+        canonical = team_bundles.validate_team_bundle(legacy)
+        assert canonical["schema_version"] == legacy["schema_version"]
+        for session in canonical["sessions"]:
+            assert {"risk_categories", "sequence"}.isdisjoint(session)
+            assert {"loops", "max_repeat"}.isdisjoint(session["stats"])
+
+        conn = _team_conn()
+        result = team_bundles.import_team_bundle(conn, legacy, source_path=Path("legacy.json"))
+        assert result.imported is True
+        stored = conn.execute(
+            "SELECT stats_json, stop_reasons_json, tokens_json FROM team_bundle_sessions LIMIT 1"
+        ).fetchone()
+        assert {"loops", "max_repeat"}.isdisjoint(json.loads(stored["stats_json"]))
+        conn.close()
+
+
 def test_validate_team_bundle_rejects_invalid_profile_and_schema(tmp_path):
     data = _bundle_from_sanitized(tmp_path).to_dict()
 
@@ -231,22 +288,37 @@ def test_validate_team_bundle_rejects_invalid_profile_and_schema(tmp_path):
         team_bundles.validate_team_bundle(bad_schema)
 
 
-def test_validate_team_bundle_canonicalizes_raw_symbol_and_model(tmp_path):
+def test_validate_team_bundle_canonicalizes_models_and_strips_legacy_symbols(tmp_path):
     data = _bundle_from_sanitized(tmp_path).to_dict()
     mutated = copy.deepcopy(data)
     mutated.pop("bundle_id")
     mutated["sessions"][0]["models"] = ["SECRET_MODEL_zzz"]
-    mutated["sessions"][0]["sequence"] = [
-        {"sym": "CALL:mcp__SECRET_SERVER__deploy", "fam": "tool_call", "dt_s": 1, "out_tok": 2}
-    ]
 
     canonical = team_bundles.validate_team_bundle(mutated)
+    assert "SECRET_MODEL_zzz" not in json.dumps(canonical)
+    assert canonical["sessions"][0]["models"] == ["other"]
+
+    smuggled = copy.deepcopy(mutated)
+    smuggled["sessions"][0]["sequence"] = []
+    with pytest.raises(ValueError, match="sequence"):
+        team_bundles.validate_team_bundle(smuggled)
+
+    legacy = copy.deepcopy(mutated)
+    legacy["schema_version"] = 2
+    legacy["sessions"][0]["sequence"] = [
+        {"sym": "CALL:mcp__SECRET_SERVER__deploy", "fam": "tool_call", "dt_s": 1, "out_tok": 2}
+    ]
+    legacy["sessions"][0]["risk_categories"] = []
+    legacy["sessions"][0]["stats"]["loops"] = 0
+    legacy["sessions"][0]["stats"]["max_repeat"] = 0
+
+    canonical = team_bundles.validate_team_bundle(legacy)
 
     blob = json.dumps(canonical)
     assert "SECRET_MODEL_zzz" not in blob
     assert "SECRET_SERVER" not in blob
     assert canonical["sessions"][0]["models"] == ["other"]
-    assert canonical["sessions"][0]["sequence"][0]["sym"] == "CALL:mcp"
+    assert "sequence" not in canonical["sessions"][0]
 
 
 def _team_conn() -> sqlite3.Connection:
@@ -289,6 +361,42 @@ def test_team_dashboard_counts_subagent_sessions_once_per_session(tmp_path):
     custom = next(item for item in dashboard["subagents"] if item["agent_type"] == "custom")
     assert custom["session_count"] == 1
     assert custom["event_count"] == 5
+
+
+def test_team_dashboard_uses_observed_units_and_omits_deprecated_inventory(tmp_path):
+    bundle = _bundle_from_sanitized(tmp_path).to_dict()
+    expected_model_tokens: dict[str, int] = {}
+    expected_errors = 0
+    for session in bundle["sessions"]:
+        expected_errors += int(session["stats"].get("errors", 0))
+        for model, tokens in session["tokens_by_model"].items():
+            expected_model_tokens[model] = expected_model_tokens.get(model, 0) + int(
+                tokens.get("input", 0)
+            ) + int(tokens.get("output", 0))
+
+    conn = _team_conn()
+    team_bundles.import_team_bundle(conn, bundle, source_path=Path("bundle.json"))
+
+    dashboard = team_bundles.team_dashboard(conn)
+
+    assert {"risk_categories", "sequence"}.isdisjoint(dashboard)
+    assert {"loops", "max_repeat"}.isdisjoint(dashboard["stats"])
+    assert dashboard["reliability"]["error_count"] == expected_errors
+    assert dashboard["reliability"]["session_count"] == len(bundle["sessions"])
+    assert dashboard["reliability"]["errors_per_session"] == pytest.approx(
+        expected_errors / len(bundle["sessions"])
+    )
+    assert {
+        row["model"]: row["tokens"] for row in dashboard["models"]
+    } == expected_model_tokens
+    assert all(set(row) == {"model", "tokens"} for row in dashboard["models"])
+
+    member = dashboard["members"][0]
+    assert member["error_count"] == expected_errors
+    assert member["session_count"] == len(bundle["sessions"])
+    assert member["errors_per_session"] == pytest.approx(
+        expected_errors / len(bundle["sessions"])
+    )
 
 
 def test_reimport_newer_bundle_replaces_members_previous_sessions(tmp_path):
@@ -452,6 +560,34 @@ def test_validate_team_bundle_rejects_non_int_generated_seq(tmp_path):
     data = _bundle_from_sanitized(tmp_path).to_dict()
     bad = {**data, "generated_seq": "x"}
     with pytest.raises(ValueError, match="generated_seq"):
+        team_bundles.validate_team_bundle(bad)
+
+
+@pytest.mark.parametrize(
+    "invalid_date",
+    ["zzzz-not-a-date", "2026-6-18", "20260618", "2026-06-18T00:00:00Z"],
+)
+def test_validate_team_bundle_rejects_noncanonical_dates(tmp_path, invalid_date):
+    data = _bundle_from_sanitized(tmp_path).to_dict()
+    bad = {**data, "generated_at": invalid_date}
+    with pytest.raises(ValueError, match="generated_at"):
+        team_bundles.validate_team_bundle(bad)
+
+
+def test_validate_team_bundle_rejects_generated_seq_above_sqlite_limit(tmp_path):
+    data = _bundle_from_sanitized(tmp_path).to_dict()
+    bad = {**data, "generated_seq": team_bundles.MAX_GENERATED_SEQ + 1}
+    with pytest.raises(ValueError, match="generated_seq"):
+        team_bundles.validate_team_bundle(bad)
+
+
+def test_validate_team_bundle_rejects_excessive_session_count(tmp_path):
+    data = _bundle_from_sanitized(tmp_path).to_dict()
+    bad = {
+        **data,
+        "sessions": [None] * (team_bundles.MAX_SESSIONS_PER_BUNDLE + 1),
+    }
+    with pytest.raises(ValueError, match="sessions list is too long"):
         team_bundles.validate_team_bundle(bad)
 
 
@@ -644,9 +780,20 @@ def test_manifest_is_level_aware(tmp_path):
     team = team_bundles.team_bundle_manifest(_team_level_bundle(team_dir))
     assert structural["privacy_level"] == "structural"
     assert team["privacy_level"] == "team"
+    assert "sequence_step_count" not in structural
+    assert "sequence_step_count" not in team
     assert any("member name" in item.lower() for item in team["included_fields"])
     assert any("tool" in item.lower() for item in team["included_fields"])
     assert not any("member name" in item.lower() for item in structural["included_fields"])
+    for manifest in (structural, team):
+        included = " ".join(manifest["included_fields"]).lower()
+        excluded = " ".join(manifest["excluded"]).lower()
+        assert "risk" not in included
+        assert "sequence" not in included
+        assert "loop" not in included
+        assert "risk" in excluded
+        assert "sequence" in excluded
+        assert "loop" in excluded
 
 
 def test_import_team_level_bundle_persists_names_and_key(tmp_path):

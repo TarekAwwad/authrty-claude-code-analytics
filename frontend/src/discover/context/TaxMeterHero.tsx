@@ -5,41 +5,52 @@ import { formatTokens, formatUsd } from "./ContextEconomics";
 export const ARCHETYPE_COLORS: Record<string, string> = {
   rereads: "var(--info)",
   oversized: "var(--warning)",
-  late_compaction: "var(--success)",
-  stale_continuation: "var(--subagent)",
 };
 
-function TrendSparkline({ trend }: { trend: ContextTrendBucket[] }) {
+function TrendSparkline({
+  trend,
+  lowerBound,
+}: {
+  trend: ContextTrendBucket[];
+  lowerBound: boolean;
+}) {
   if (trend.length < 2) return null;
   const width = 160;
   const height = 40;
-  const max = Math.max(...trend.map((t) => t.total_usd), 1e-9);
+  const max = Math.max(...trend.map((bucket) => bucket.total_usd), 1e-9);
   const barWidth = width / trend.length;
+  const prefix = lowerBound ? "≥" : "";
+
   return (
-    <div className="tax-meter-trend">
-      <span>Weekly · avoidable share</span>
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Weekly avoidable spend trend">
-        {trend.map((bucket, i) => {
-          const totalH = (bucket.total_usd / max) * height;
-          const avoidableH = (bucket.avoidable_usd / max) * height;
+    <div className="opportunity-meter-trend">
+      <span>Weekly · estimated opportunity</span>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label="Weekly estimated context opportunity"
+      >
+        {trend.map((bucket, index) => {
+          const totalHeight = (bucket.total_usd / max) * height;
+          const opportunityHeight = (bucket.avoidable_usd / max) * height;
           return (
             <g key={bucket.week_start}>
               <rect
-                x={i * barWidth + 1}
+                x={index * barWidth + 1}
                 width={Math.max(1, barWidth - 2)}
-                y={height - totalH}
-                height={totalH}
-                className="trend-total"
+                y={height - totalHeight}
+                height={totalHeight}
+                className="trend-recorded-cost"
               />
               <rect
-                x={i * barWidth + 1}
+                x={index * barWidth + 1}
                 width={Math.max(1, barWidth - 2)}
-                y={height - avoidableH}
-                height={avoidableH}
-                className="trend-avoidable"
+                y={height - opportunityHeight}
+                height={opportunityHeight}
+                className="trend-opportunity"
               >
                 <title>
-                  week of {bucket.week_start}: {formatUsd(bucket.avoidable_usd)} avoidable of {formatUsd(bucket.total_usd)}
+                  week of {bucket.week_start}: {prefix}{formatUsd(bucket.avoidable_usd)} estimated
+                  opportunity from {prefix}{formatUsd(bucket.total_usd)} recorded estimated cost
                 </title>
               </rect>
             </g>
@@ -61,93 +72,95 @@ export default function TaxMeterHero({
   selectedKey?: string | null;
   onSelectArchetype?: (key: string) => void;
 }) {
-  const total = Math.max(meta.total_usd, 1e-9);
-  const supported = archetypes.filter((a) =>
-    a.meets_support && (meta.cost_available ? a.savings_usd > 0 : a.savings_tokens > 0));
-  const pct = meta.total_usd > 0 ? Math.round((meta.avoidable_usd / meta.total_usd) * 100) : 0;
-  const supportedSum = supported.reduce((acc, a) => acc + a.savings_usd, 0);
-  const segmentScale = supportedSum > 0 ? meta.avoidable_usd / supportedSum : 0;
-  const avoidableTokens = supported.reduce((acc, a) => acc + a.savings_tokens, 0);
-  // Honest usage share: avoidable footprint over the user's own total tokens —
-  // never a % of an unknown plan limit.
-  const usagePct = meta.total_tokens > 0 ? Math.round(meta.avoidable_token_share * 100) : 0;
+  const total = Math.max(meta.recorded_api_equivalent_usd, 1e-9);
+  const supported = archetypes.filter((archetype) =>
+    archetype.meets_support
+    && (meta.cost_available ? archetype.savings_usd > 0 : archetype.savings_tokens > 0));
+  const opportunityPercent = meta.recorded_api_equivalent_usd > 0
+    ? Math.round((meta.opportunity_usd / meta.recorded_api_equivalent_usd) * 100)
+    : 0;
+  const supportedUsd = supported.reduce((sum, archetype) => sum + archetype.savings_usd, 0);
+  const segmentScale = supportedUsd > 0 ? meta.opportunity_usd / supportedUsd : 0;
+  const supportedTokens = supported.reduce((sum, archetype) => sum + archetype.savings_tokens, 0);
+  const lowerBoundPrefix = meta.costs_partial ? "≥" : "";
 
   return (
-    <section className="tax-meter-hero">
+    <section className="opportunity-meter-hero">
       {meta.cost_available ? (
         <>
-          <div className="tax-meter-stats">
-            <div className="tax-meter-stat is-avoidable">
-              <span>Avoidable</span>
+          <div className="opportunity-meter-stats">
+            <div className="opportunity-meter-stat is-opportunity">
+              <span>Estimated context opportunity</span>
               <strong>
-                {formatUsd(meta.avoidable_usd)}{" "}
-                <em>({pct}%)</em>
+                {lowerBoundPrefix}{formatUsd(meta.opportunity_usd)}{" "}
+                {!meta.costs_partial && <em>({opportunityPercent}%)</em>}
               </strong>
-              <small className="tax-meter-usage">
-                ≈ {formatTokens(meta.avoidable_tokens)} · {usagePct}% of your usage
+              <small className="opportunity-meter-token-note">
+                ≈ {formatTokens(meta.opportunity_tokens)} modeled opportunity
               </small>
             </div>
-            <div className="tax-meter-stat">
-              <span>Total spend</span>
-              <strong>{formatUsd(meta.total_usd)}</strong>
+            <div className="opportunity-meter-stat">
+              <span>Recorded estimated API-equivalent cost</span>
+              <strong>{lowerBoundPrefix}{formatUsd(meta.recorded_api_equivalent_usd)}</strong>
             </div>
-            <div className="tax-meter-stat">
-              <span>Necessary</span>
-              <strong>{formatUsd(meta.necessary_usd)}</strong>
+            <div className="opportunity-meter-stat">
+              <span>Cost not attributed to detected opportunities</span>
+              <strong>{formatUsd(meta.unattributed_usd)}</strong>
             </div>
-            <TrendSparkline trend={meta.trend ?? []} />
+            <TrendSparkline trend={meta.trend ?? []} lowerBound={meta.costs_partial} />
           </div>
-          <div
-            className="tax-meter-bar"
-            role="group"
-            aria-label={`Avoidable spend breakdown: ${formatUsd(meta.avoidable_usd)} of ${formatUsd(meta.total_usd)}`}
-          >
-            <i
-              className="tax-meter-necessary"
-              style={{ width: `${(meta.necessary_usd / total) * 100}%` }}
-              title={`Necessary ${formatUsd(meta.necessary_usd)}`}
-            />
-            {supported.map((archetype) => (
-              <button
-                key={archetype.key}
-                type="button"
-                className="tax-meter-segment"
-                style={{
-                  width: `${(archetype.savings_usd * segmentScale / total) * 100}%`,
-                  background: ARCHETYPE_COLORS[archetype.key],
-                }}
-                title={`${archetype.title} ${formatUsd(archetype.savings_usd)} — jump to card`}
-                aria-label={`${archetype.title}: ${formatUsd(archetype.savings_usd)}`}
-                onClick={() => onSelectArchetype?.(archetype.key)}
+          {!meta.costs_partial && (
+            <div
+              className="opportunity-meter-bar"
+              role="group"
+              aria-label={`Estimated context opportunity breakdown: ${formatUsd(meta.opportunity_usd)} of ${formatUsd(meta.recorded_api_equivalent_usd)}`}
+            >
+              <i
+                className="opportunity-meter-unattributed"
+                style={{ width: `${(meta.unattributed_usd / total) * 100}%` }}
+                title={`Cost not attributed to detected opportunities ${formatUsd(meta.unattributed_usd)}`}
               />
-            ))}
-          </div>
+              {supported.map((archetype) => (
+                <button
+                  key={archetype.key}
+                  type="button"
+                  className="opportunity-meter-segment"
+                  style={{
+                    width: `${(archetype.savings_usd * segmentScale / total) * 100}%`,
+                    background: ARCHETYPE_COLORS[archetype.key],
+                  }}
+                  title={`${archetype.title} ${formatUsd(archetype.savings_usd)} — inspect findings`}
+                  aria-label={`${archetype.title}: ${formatUsd(archetype.savings_usd)}`}
+                  onClick={() => onSelectArchetype?.(archetype.key)}
+                />
+              ))}
+            </div>
+          )}
         </>
       ) : (
         <>
-          <div className="tax-meter-stats">
-            <div className="tax-meter-stat is-avoidable">
-              <span>Avoidable context</span>
-              <strong>{formatTokens(meta.avoidable_tokens)}</strong>
-              <small className="tax-meter-usage">{usagePct}% of your usage</small>
+          <div className="opportunity-meter-stats">
+            <div className="opportunity-meter-stat is-opportunity">
+              <span>Estimated context opportunity</span>
+              <strong>{formatTokens(meta.opportunity_tokens)}</strong>
             </div>
           </div>
-          {avoidableTokens > 0 && (
+          {supportedTokens > 0 && (
             <div
-              className="tax-meter-bar"
+              className="opportunity-meter-bar"
               role="group"
-              aria-label={`Avoidable context breakdown: ${formatTokens(avoidableTokens)}`}
+              aria-label={`Estimated context opportunity breakdown: ${formatTokens(supportedTokens)}`}
             >
               {supported.map((archetype) => (
                 <button
                   key={archetype.key}
                   type="button"
-                  className="tax-meter-segment"
+                  className="opportunity-meter-segment"
                   style={{
-                    width: `${(archetype.savings_tokens / avoidableTokens) * 100}%`,
+                    width: `${(archetype.savings_tokens / supportedTokens) * 100}%`,
                     background: ARCHETYPE_COLORS[archetype.key],
                   }}
-                  title={`${archetype.title} ${formatTokens(archetype.savings_tokens)} — jump to card`}
+                  title={`${archetype.title} ${formatTokens(archetype.savings_tokens)} — inspect findings`}
                   aria-label={`${archetype.title}: ${formatTokens(archetype.savings_tokens)}`}
                   onClick={() => onSelectArchetype?.(archetype.key)}
                 />
@@ -156,14 +169,14 @@ export default function TaxMeterHero({
           )}
         </>
       )}
-      <div className="tax-meter-legend">
+      <div className="opportunity-meter-legend">
         {archetypes.map((archetype) => {
           const gated = !archetype.meets_support;
           return (
             <button
               key={archetype.key}
               type="button"
-              className={`tax-meter-legend-item${selectedKey === archetype.key ? " is-active" : ""}`}
+              className={`opportunity-meter-legend-item${selectedKey === archetype.key ? " is-active" : ""}`}
               style={{ "--archetype-color": ARCHETYPE_COLORS[archetype.key] } as React.CSSProperties}
               disabled={gated}
               title={gated
@@ -177,17 +190,17 @@ export default function TaxMeterHero({
                 {gated
                   ? `${archetype.findings_count}/${meta.min_support}`
                   : meta.cost_available
-                    ? formatUsd(archetype.savings_usd)
+                    ? `${lowerBoundPrefix}${formatUsd(archetype.savings_usd)}`
                     : formatTokens(archetype.savings_tokens)}
               </b>
             </button>
           );
         })}
         {meta.cost_available && (
-          <span className="tax-meter-legend-item is-static">
-            <i className="tax-meter-necessary-swatch" />
-            Necessary
-            <b>{formatUsd(meta.necessary_usd)}</b>
+          <span className="opportunity-meter-legend-item is-static">
+            <i className="opportunity-meter-unattributed-swatch" />
+            Cost not attributed to detected opportunities
+            <b>{formatUsd(meta.unattributed_usd)}</b>
           </span>
         )}
       </div>

@@ -54,7 +54,10 @@ def test_limits_endpoint_returns_hits_windows_and_eras(client: TestClient) -> No
     assert body["eras"][0]["era"] == "Max 5x"
     assert body["hits"][0]["usage_at_hit"] == 10.0
     assert body["hits"][0]["usage_at_hit_tokens"] == 1_000_000
-    assert body["eras"][0]["cap_median_tokens"] == 1_000_000
+    assert body["eras"][0]["hit_level_median_tokens"] == 1_000_000
+    assert body["hits"][0]["minutes_until_reset"] == 50.0
+    assert "blocked_minutes" not in body["hits"][0]
+    assert "near_miss_count" not in body["eras"][0]
     assert body["hits"][0]["session_titles"] == ["Session One"]
 
 

@@ -154,19 +154,6 @@ CREATE TABLE IF NOT EXISTS subagents (
     UNIQUE(parent_session_id, agent_id)
 );
 
-CREATE TABLE IF NOT EXISTS memory_nodes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    path TEXT NOT NULL,
-    name TEXT,
-    type TEXT,
-    description TEXT,
-    origin_session_id TEXT,
-    text_preview TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_memory_nodes_project ON memory_nodes(project_id);
-
 CREATE TABLE IF NOT EXISTS event_edges (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -189,9 +176,7 @@ CREATE TABLE IF NOT EXISTS session_stats (
     system_count INTEGER NOT NULL DEFAULT 0,
     persisted_output_count INTEGER NOT NULL DEFAULT 0,
     input_tokens INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    loop_count INTEGER NOT NULL DEFAULT 0,
-    max_repeat INTEGER NOT NULL DEFAULT 0
+    output_tokens INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS import_errors (
@@ -202,82 +187,31 @@ CREATE TABLE IF NOT EXISTS import_errors (
     message TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS sequence_slices (
+CREATE TABLE IF NOT EXISTS session_findings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL,
-    lane TEXT NOT NULL,
-    start_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
-    end_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
-    outcome TEXT NOT NULL,
-    length INTEGER NOT NULL DEFAULT 0,
-    duration_seconds INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_sequence_slices_session ON sequence_slices(session_id);
-CREATE INDEX IF NOT EXISTS idx_sequence_slices_kind ON sequence_slices(kind);
-
-CREATE TABLE IF NOT EXISTS event_features (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    sequence_slice_id INTEGER NOT NULL REFERENCES sequence_slices(id) ON DELETE CASCADE,
-    position INTEGER NOT NULL,
-    symbol TEXT NOT NULL,
-    family TEXT NOT NULL,
-    attributes_json TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE INDEX IF NOT EXISTS idx_event_features_session ON event_features(session_id);
-CREATE INDEX IF NOT EXISTS idx_event_features_slice_pos ON event_features(sequence_slice_id, position);
-CREATE INDEX IF NOT EXISTS idx_event_features_symbol ON event_features(symbol);
-
-CREATE TABLE IF NOT EXISTS sequence_patterns (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind TEXT NOT NULL,
-    pattern_json TEXT NOT NULL,
-    support INTEGER NOT NULL DEFAULT 0,
-    positive_support INTEGER NOT NULL DEFAULT 0,
-    negative_support INTEGER NOT NULL DEFAULT 0,
-    lift REAL NOT NULL DEFAULT 0,
-    score REAL NOT NULL DEFAULT 0,
-    label TEXT,
-    explanation TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_sequence_patterns_kind ON sequence_patterns(kind);
-CREATE INDEX IF NOT EXISTS idx_sequence_patterns_score ON sequence_patterns(score);
-
-CREATE TABLE IF NOT EXISTS pattern_hits (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    pattern_id INTEGER NOT NULL REFERENCES sequence_patterns(id) ON DELETE CASCADE,
-    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    sequence_slice_id INTEGER NOT NULL REFERENCES sequence_slices(id) ON DELETE CASCADE,
-    start_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
-    end_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
-    evidence_json TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE INDEX IF NOT EXISTS idx_pattern_hits_session ON pattern_hits(session_id);
-CREATE INDEX IF NOT EXISTS idx_pattern_hits_pattern ON pattern_hits(pattern_id);
-
-CREATE TABLE IF NOT EXISTS risk_findings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    severity TEXT NOT NULL,
+    finding_key TEXT NOT NULL,
+    detector_key TEXT NOT NULL,
+    basis TEXT NOT NULL CHECK (basis IN ('observed', 'estimated', 'inferred', 'associated')),
     category TEXT NOT NULL,
     title TEXT NOT NULL,
     explanation TEXT NOT NULL,
-    pattern_id INTEGER REFERENCES sequence_patterns(id) ON DELETE SET NULL,
+    recommendation TEXT,
     start_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
     end_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
-    score REAL NOT NULL DEFAULT 0,
-    evidence_json TEXT NOT NULL DEFAULT '{}'
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    UNIQUE(session_id, finding_key)
 );
 
-CREATE INDEX IF NOT EXISTS idx_risk_findings_session ON risk_findings(session_id);
-CREATE INDEX IF NOT EXISTS idx_risk_findings_category ON risk_findings(category);
-CREATE INDEX IF NOT EXISTS idx_risk_findings_score ON risk_findings(score);
+CREATE INDEX IF NOT EXISTS idx_session_findings_session
+    ON session_findings(session_id);
+CREATE INDEX IF NOT EXISTS idx_session_findings_detector
+    ON session_findings(detector_key);
+
+CREATE TABLE IF NOT EXISTS analysis_metadata (
+    name TEXT PRIMARY KEY,
+    version INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS team_bundles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -313,11 +247,9 @@ CREATE TABLE IF NOT EXISTS team_bundle_sessions (
     tokens_by_model_json TEXT NOT NULL DEFAULT '{}',
     stats_json TEXT NOT NULL DEFAULT '{}',
     stop_reasons_json TEXT NOT NULL DEFAULT '{}',
-    risk_categories_json TEXT NOT NULL DEFAULT '[]',
     subagents_json TEXT NOT NULL DEFAULT '[]',
     tools_json TEXT NOT NULL DEFAULT '[]',
     file_types_json TEXT NOT NULL DEFAULT '[]',
-    sequence_json TEXT NOT NULL DEFAULT '[]',
     UNIQUE(team_bundle_id, session_id)
 );
 
@@ -337,12 +269,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
 
 DROP_TABLES = [
     "search_index",
+    "analysis_metadata",
     "team_bundle_sessions",
     "team_bundles",
-    "risk_findings",
-    "pattern_hits",
+    "session_findings",
     "event_features",
-    "sequence_patterns",
     "sequence_slices",
     "import_errors",
     "session_stats",
@@ -360,6 +291,9 @@ DROP_TABLES = [
     "imports",
 ]
 
+TEAM_TABLES = {"team_bundle_sessions", "team_bundles"}
+LOCAL_DATA_TABLES = [table for table in DROP_TABLES if table not in TEAM_TABLES]
+
 MESSAGE_COST_COLUMNS = {
     "base_input_tokens": "INTEGER DEFAULT 0",
     "cache_5m_tokens": "INTEGER DEFAULT 0",
@@ -374,6 +308,11 @@ def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
 
 def migrate_db(conn: sqlite3.Connection) -> None:
     """Apply lightweight migrations for databases created by older app versions."""
+    _drop_legacy_risk_tables(conn)
+    _drop_unused_memory_index(conn)
+    _drop_unused_sequence_cache(conn)
+    _migrate_session_stats(conn)
+
     existing_message_columns = _column_names(conn, "messages")
     for name, definition in MESSAGE_COST_COLUMNS.items():
         if name not in existing_message_columns:
@@ -425,10 +364,131 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     if team_session_columns and "file_types_json" not in team_session_columns:
         conn.execute("ALTER TABLE team_bundle_sessions ADD COLUMN file_types_json TEXT NOT NULL DEFAULT '[]'")
 
+    _migrate_team_bundle_sessions(conn)
+
     tool_call_columns = _column_names(conn, "tool_calls")
     if tool_call_columns and "file_ext" not in tool_call_columns:
         conn.execute("ALTER TABLE tool_calls ADD COLUMN file_ext TEXT")
         _backfill_tool_call_file_ext(conn)
+
+
+def _drop_legacy_risk_tables(conn: sqlite3.Connection) -> None:
+    """Remove obsolete inferred-pattern caches while preserving receipt findings."""
+    for table in ("risk_findings", "pattern_hits", "sequence_patterns"):
+        conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+
+def _drop_unused_memory_index(conn: sqlite3.Connection) -> None:
+    """Remove the retired derived memory index without touching source files."""
+    search_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name = 'search_index'"
+    ).fetchone()
+    if search_exists:
+        conn.execute("DELETE FROM search_index WHERE kind = 'memory'")
+    conn.execute("DROP TABLE IF EXISTS memory_nodes")
+
+
+def _drop_unused_sequence_cache(conn: sqlite3.Connection) -> None:
+    """Remove transitional structural rows no shipped analysis consumes."""
+    conn.execute("DROP TABLE IF EXISTS event_features")
+    conn.execute("DROP TABLE IF EXISTS sequence_slices")
+
+
+def _migrate_session_stats(conn: sqlite3.Connection) -> None:
+    columns = _column_names(conn, "session_stats")
+    if not {"loop_count", "max_repeat"} & columns:
+        return
+
+    conn.execute("DROP TABLE IF EXISTS session_stats_without_loops")
+    conn.execute(
+        """
+        CREATE TABLE session_stats_without_loops (
+            session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+            event_count INTEGER NOT NULL DEFAULT 0,
+            turn_count INTEGER NOT NULL DEFAULT 0,
+            tool_call_count INTEGER NOT NULL DEFAULT 0,
+            subagent_count INTEGER NOT NULL DEFAULT 0,
+            error_count INTEGER NOT NULL DEFAULT 0,
+            system_count INTEGER NOT NULL DEFAULT 0,
+            persisted_output_count INTEGER NOT NULL DEFAULT 0,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO session_stats_without_loops(
+            session_id, event_count, turn_count, tool_call_count, subagent_count,
+            error_count, system_count, persisted_output_count, input_tokens, output_tokens
+        )
+        SELECT session_id, event_count, turn_count, tool_call_count, subagent_count,
+               error_count, system_count, persisted_output_count, input_tokens, output_tokens
+        FROM session_stats
+        """
+    )
+    conn.execute("DROP TABLE session_stats")
+    conn.execute("ALTER TABLE session_stats_without_loops RENAME TO session_stats")
+
+
+def _migrate_team_bundle_sessions(conn: sqlite3.Connection) -> None:
+    """Drop v1/v2 risk/sequence columns while preserving imported core aggregates."""
+    columns = _column_names(conn, "team_bundle_sessions")
+    if not {"risk_categories_json", "sequence_json"} & columns:
+        return
+
+    conn.execute("DROP TABLE IF EXISTS team_bundle_sessions_v3")
+    conn.execute(
+        """
+        CREATE TABLE team_bundle_sessions_v3 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            team_bundle_id INTEGER NOT NULL REFERENCES team_bundles(id) ON DELETE CASCADE,
+            member_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            project_name TEXT,
+            session_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            first_date TEXT,
+            last_date TEXT,
+            duration_s INTEGER NOT NULL DEFAULT 0,
+            models_json TEXT NOT NULL DEFAULT '[]',
+            tokens_json TEXT NOT NULL DEFAULT '{}',
+            tokens_by_model_json TEXT NOT NULL DEFAULT '{}',
+            stats_json TEXT NOT NULL DEFAULT '{}',
+            stop_reasons_json TEXT NOT NULL DEFAULT '{}',
+            subagents_json TEXT NOT NULL DEFAULT '[]',
+            tools_json TEXT NOT NULL DEFAULT '[]',
+            file_types_json TEXT NOT NULL DEFAULT '[]',
+            UNIQUE(team_bundle_id, session_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO team_bundle_sessions_v3(
+            id, team_bundle_id, member_id, project_id, project_name, session_id,
+            provider, first_date, last_date, duration_s, models_json, tokens_json,
+            tokens_by_model_json, stats_json, stop_reasons_json, subagents_json,
+            tools_json, file_types_json
+        )
+        SELECT id, team_bundle_id, member_id, project_id, project_name, session_id,
+               provider, first_date, last_date, duration_s, models_json, tokens_json,
+               tokens_by_model_json, stats_json, stop_reasons_json, subagents_json,
+               tools_json, file_types_json
+        FROM team_bundle_sessions
+        """
+    )
+    conn.execute("DROP TABLE team_bundle_sessions")
+    conn.execute("ALTER TABLE team_bundle_sessions_v3 RENAME TO team_bundle_sessions")
+    conn.execute(
+        "CREATE INDEX idx_team_bundle_sessions_bundle ON team_bundle_sessions(team_bundle_id)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_team_bundle_sessions_member ON team_bundle_sessions(member_id)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_team_bundle_sessions_first_date ON team_bundle_sessions(first_date)"
+    )
 
 
 def _backfill_tool_call_file_ext(conn: sqlite3.Connection) -> None:
@@ -476,15 +536,51 @@ def connect(path: Path) -> sqlite3.Connection:
 
 
 def init_db(conn: sqlite3.Connection) -> None:
-    conn.executescript(SCHEMA)
-    migrate_db(conn)
-    conn.commit()
+    try:
+        conn.executescript(SCHEMA)
+        migrate_db(conn)
+        _backfill_session_findings_once(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
-def reset_db(conn: sqlite3.Connection) -> None:
+_SESSION_FINDINGS_ANALYSIS_VERSION = 2
+
+
+def _backfill_session_findings_once(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT version FROM analysis_metadata WHERE name = 'session_findings'"
+    ).fetchone()
+    if row is not None and int(row[0]) >= _SESSION_FINDINGS_ANALYSIS_VERSION:
+        return
+
+    from ccfr.analysis.session_findings import rebuild_session_findings
+
+    rebuild_session_findings(conn)
+    conn.execute(
+        """
+        INSERT INTO analysis_metadata(name, version) VALUES ('session_findings', 2)
+        ON CONFLICT(name) DO UPDATE SET version = excluded.version
+        """
+    )
+
+
+def _reset_tables(conn: sqlite3.Connection, tables: list[str]) -> None:
     conn.execute("PRAGMA foreign_keys = OFF")
-    for table in DROP_TABLES:
+    for table in tables:
         conn.execute(f"DROP TABLE IF EXISTS {table}")
     conn.commit()
     conn.execute("PRAGMA foreign_keys = ON")
     init_db(conn)
+
+
+def reset_local_data(conn: sqlite3.Connection) -> None:
+    """Clear imported local analytics while preserving imported team bundles."""
+    _reset_tables(conn, LOCAL_DATA_TABLES)
+
+
+def reset_db(conn: sqlite3.Connection) -> None:
+    """Clear all application data, including imported team bundles."""
+    _reset_tables(conn, DROP_TABLES)
