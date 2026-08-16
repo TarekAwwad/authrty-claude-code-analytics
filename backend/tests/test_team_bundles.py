@@ -23,6 +23,7 @@ from tests.fixtures import (
 
 def test_team_bundle_model_and_agent_buckets_are_closed() -> None:
     assert bundle_helpers.bucket_model("claude-opus-4-8") == "claude-opus-4-8"
+    assert bundle_helpers.bucket_model("claude-opus-5-20260801") == "claude-opus-5"
     assert bundle_helpers.bucket_model("claude-haiku-4-5-20251001") == "claude-haiku-4-5"
     assert bundle_helpers.bucket_model("SECRET_MODEL_zzz") == "other"
     assert bundle_helpers.bucket_model(None) == "unknown"

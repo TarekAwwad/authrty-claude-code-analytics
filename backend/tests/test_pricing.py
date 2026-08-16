@@ -11,6 +11,7 @@ from ccfr.analysis.pricing import (
     load_price_timeline,
     match_price,
     normalize_model_key,
+    PUBLIC_MODEL_KEYS,
 )
 
 
@@ -25,6 +26,11 @@ def _write_pricing(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return csv
+
+
+def test_shipped_pricing_models_are_safe_team_model_families() -> None:
+    shipped_pricing = Path(__file__).resolve().parents[2] / "pricing.csv"
+    assert set(load_price_table(shipped_pricing)) <= PUBLIC_MODEL_KEYS
 
 
 def test_normalize_model_key_maps_display_names_to_ids() -> None:

@@ -27,6 +27,33 @@ class ModelPrice:
     output: float
 
 
+# Public model families that may be retained in privacy-sanitized Team bundles.
+# Keep this closed vocabulary independent of CCFR_PRICING_PATH: a custom pricing
+# file may contain an internal model name that must not become shareable merely
+# because it has a price. The pricing tests require the shipped CSV to stay in
+# sync with this registry.
+PUBLIC_MODEL_KEYS = frozenset(
+    {
+        "claude-fable-5",
+        "claude-mythos-5",
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-opus-4-5",
+        "claude-opus-4-1",
+        "claude-opus-4",
+        "claude-sonnet-5",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5",
+        "claude-sonnet-4",
+        "claude-haiku-4-5",
+        "claude-3-5-sonnet",
+        "claude-3-5-haiku",
+        "claude-3-opus",
+    }
+)
+
 _NON_BILLABLE_MODEL_KEYS = frozenset({"<synthetic>"})
 _ZERO_PRICE = ModelPrice(
     base_input=0.0,

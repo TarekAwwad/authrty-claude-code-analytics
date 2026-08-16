@@ -8,22 +8,11 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime
 
+from ccfr.analysis.pricing import PUBLIC_MODEL_KEYS
 
-KNOWN_MODELS = frozenset(
-    {
-        "claude-opus-4-8",
-        "claude-opus-4-7",
-        "claude-opus-4-6",
-        "claude-opus-4-1",
-        "claude-sonnet-4-6",
-        "claude-sonnet-4-5",
-        "claude-haiku-4-5",
-        "claude-fable-5",
-        "claude-3-5-sonnet",
-        "claude-3-5-haiku",
-        "claude-3-opus",
-    }
-)
+
+KNOWN_MODELS = PUBLIC_MODEL_KEYS
+
 
 KNOWN_AGENT_TYPES = frozenset(
     {
