@@ -6,7 +6,17 @@ ENV CCFR_DB_PATH=/app/data/ccfr.sqlite3
 ENV CCFR_IMPORT_ROOT=/imports
 ENV PYTHONPATH=/app/backend/src
 COPY backend ./backend
-RUN pip install --no-cache-dir ./backend
+# Install the dependency set pinned in uv.lock (hash-checked), then the package
+# itself without resolution; a bare `pip install ./backend` would re-resolve
+# the open-ended ranges in pyproject.toml at build time, so the image would
+# not match the audited lockfile.
+RUN pip install --no-cache-dir uv==0.7.2 \
+    && uv export --frozen --no-dev --no-emit-project \
+        --directory backend --output-file /tmp/requirements.txt \
+    && pip install --no-cache-dir --requirement /tmp/requirements.txt \
+    && pip install --no-cache-dir --no-deps ./backend \
+    && pip uninstall --yes uv \
+    && rm /tmp/requirements.txt
 # Data assets live at the repo root; the image mirrors the checkout layout, so
 # the defaults resolve to /app/pricing.csv and /app/demo/claude-export ("Load
 # demo data" / `serve --demo`). Copied after the pip install so data edits

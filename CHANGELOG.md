@@ -49,6 +49,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - API request bodies are capped at 50 MiB before JSON parsing.
 - Raised the Starlette runtime floor to a version containing the 2026 request
   URL and form-limit security fixes.
+- The API docs page now serves Swagger UI from files bundled into the package
+  instead of loading them from a third-party CDN, and the unused ReDoc page is
+  disabled. Opening /docs no longer runs remotely hosted JavaScript inside the
+  unauthenticated local API origin, and no longer contacts external hosts.
+- Docker builds now install the exact hash-pinned Python dependency set from
+  uv.lock instead of re-resolving version ranges, the frontend image pins its
+  Node and nginx base images by digest, and Dependabot now watches the
+  frontend Dockerfile.
 
 ### Removed
 - Removed uninterpretable risk scores and tiers, loop/max-repeat metrics, the
