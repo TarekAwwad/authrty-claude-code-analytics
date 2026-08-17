@@ -563,7 +563,8 @@ def list_subagents(
             COALESCE(SUM(m.output_tokens), 0) AS output
         FROM events e
         JOIN messages m ON m.event_id = e.id
-        WHERE e.session_id = ? AND e.agent_id IS NOT NULL AND m.role = 'assistant'
+        WHERE e.session_id = ? AND e.is_replay = 0
+          AND e.agent_id IS NOT NULL AND m.role = 'assistant'
         GROUP BY e.agent_id, m.model, price_period
         """,
         (session_id,),

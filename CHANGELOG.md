@@ -10,10 +10,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Resumed and forked sessions no longer inflate cost and token totals. Claude
   Code writes a new JSONL containing the whole prior history each time a session
   is resumed, so the same event was imported once per resume and counted every
-  time. Events now carry `is_replay`, and cost and token views count each event
-  once. Existing caches are backfilled on open; no re-import is needed.
-  Per-session timelines still show every row, so a resumed session renders its
-  full history.
+  time. Events now carry `is_replay`, and every cost and token view -- Cost,
+  per-session and project totals, context economics, the usage map, limit
+  analytics, discovery, and team exports -- counts each event once. Existing
+  caches are backfilled on open; no re-import is needed. Per-session timelines
+  still show every row, so a resumed session renders its full history.
 
 ## [0.2.0] - 2026-08-16
 

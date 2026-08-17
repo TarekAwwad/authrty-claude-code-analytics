@@ -510,9 +510,9 @@ def _insert_event(
         """
         INSERT INTO events(
             session_id, source_path, line_no, uuid, parent_uuid, type, timestamp,
-            is_sidechain, agent_id, raw_json
+            is_sidechain, agent_id, origin_session_id, raw_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             session_pk,
@@ -524,6 +524,7 @@ def _insert_event(
             obj.get("timestamp"),
             1 if is_sidechain else 0,
             agent_id,
+            obj.get("sessionId"),
             _json(_compact_for_storage(obj)),
         ),
     )

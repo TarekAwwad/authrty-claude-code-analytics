@@ -43,11 +43,13 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_project_id ON sessions(project_id, id);
 
--- events.is_replay is 1 when the row repeats an event already recorded under another
--- session in the same project. Resuming or forking a session makes Claude Code write a
--- new JSONL containing the whole prior history, so one uuid lands in several sessions.
--- Cost and token aggregates count only is_replay = 0 rows; per-session timelines keep
--- every row, so a resumed session still renders its full history.
+-- Resuming or forking a session makes Claude Code write a new JSONL containing the whole
+-- prior history, so one event uuid lands in several sessions. events.is_replay marks every
+-- copy except one canonical row per (project, uuid); cost and token aggregates count only
+-- is_replay = 0, while per-session timelines keep every row so a resumed session still
+-- renders its full history. origin_session_id is the sessionId the record carries itself,
+-- which is what a copy claims as its origin -- see mark_replay_events for how ownership is
+-- resolved when several sessions claim the same event.
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -60,6 +62,7 @@ CREATE TABLE IF NOT EXISTS events (
     is_sidechain INTEGER NOT NULL DEFAULT 0,
     agent_id TEXT,
     raw_json TEXT NOT NULL,
+    origin_session_id TEXT,
     is_replay INTEGER NOT NULL DEFAULT 0
 );
 
@@ -315,18 +318,32 @@ def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
 
 
 def mark_replay_events(conn: sqlite3.Connection, *, project_ids: list[int] | None = None) -> int:
-    """Flag events that replay one already recorded elsewhere in the same project.
+    """Flag every copy of an event except one canonical row per (project, uuid).
 
     Resuming or forking a session makes Claude Code write a new JSONL that repeats the
     whole prior history, so the same ``uuid`` is imported once per resume. Left alone
     that multiplies cost and token totals by the number of resumes.
 
-    Within a project, the row with the lowest ``events.id`` for a given uuid is the
-    canonical one (``is_replay = 0``); every later copy is flagged. Events with no uuid
-    are never flagged — there is nothing to match them on. Passing ``project_ids``
-    limits the pass to those projects; ``None`` recomputes every project.
+    **Ownership.** No field identifies the single original run. Each record carries its
+    own ``sessionId`` (stored as ``origin_session_id``), and a resume usually preserves
+    it -- but a fork re-stamps the replayed history as its own, so several sessions can
+    each claim the same event. Ownership is therefore a deliberate choice, resolved in
+    this order:
 
-    Returns the number of rows flagged.
+    1. A row whose ``origin_session_id`` equals the session it sits in wins over a row
+       that names some other session. That prefers a session that claims to have
+       recorded the event over one that only replayed it.
+    2. Otherwise the session that started first (``sessions.first_ts``, nulls last),
+       since the earlier run is where the work actually happened.
+    3. Ties break on ``sessions.session_id`` -- intrinsic to the export and stable,
+       unlike row ids, which depend on the order files happened to be imported in.
+
+    The corpus total is the same whichever row wins; the ordering decides which session
+    carries a shared prefix, so it must not drift between imports of the same export.
+    Events with no uuid are never flagged -- there is nothing to match them on.
+
+    Passing ``project_ids`` limits the pass to those projects; ``None`` recomputes every
+    project. Returns the number of rows flagged.
     """
     if project_ids is not None and not project_ids:
         return 0
@@ -349,18 +366,25 @@ def mark_replay_events(conn: sqlite3.Connection, *, project_ids: list[int] | Non
     )
     cursor = conn.execute(
         f"""
-        WITH canonical AS (
-            SELECT e.uuid AS uuid, s.project_id AS project_id, MIN(e.id) AS keep_id
+        WITH ranked AS (
+            SELECT e.id AS event_id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY s.project_id, e.uuid
+                       ORDER BY
+                           CASE WHEN e.origin_session_id IS NOT NULL
+                                 AND e.origin_session_id = s.session_id THEN 0
+                                ELSE 1 END,
+                           CASE WHEN s.first_ts IS NULL THEN 1 ELSE 0 END,
+                           s.first_ts,
+                           s.session_id,
+                           e.id
+                   ) AS position
             FROM events e
             JOIN sessions s ON s.id = e.session_id
             WHERE e.uuid IS NOT NULL {scope}
-            GROUP BY s.project_id, e.uuid
         )
         UPDATE events SET is_replay = 1
-        WHERE id IN (SELECT e.id FROM events e
-                     JOIN sessions s ON s.id = e.session_id
-                     JOIN canonical c ON c.uuid = e.uuid AND c.project_id = s.project_id
-                     WHERE e.id <> c.keep_id)
+        WHERE id IN (SELECT event_id FROM ranked WHERE position > 1)
         """,
         params,
     )
@@ -375,14 +399,28 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     _migrate_session_stats(conn)
 
     # Resumed/forked sessions replay prior history, so the same event lands in several
-    # sessions. Older databases have no flag for that; add it and backfill once so
-    # existing caches stop double-counting without needing a re-import.
+    # sessions. Older databases have neither the origin claim nor the flag; add both and
+    # backfill once so existing caches stop double-counting without needing a re-import.
     event_columns = _column_names(conn, "events")
+    remark_replays = False
+    if event_columns and "origin_session_id" not in event_columns:
+        conn.execute("ALTER TABLE events ADD COLUMN origin_session_id TEXT")
+        # The record keeps its own sessionId in raw_json; _compact_for_storage only
+        # truncates long strings, so a 36-char uuid is always still there to recover.
+        conn.execute(
+            "UPDATE events SET origin_session_id = json_extract(raw_json, '$.sessionId')"
+            " WHERE json_valid(raw_json)"
+        )
+        # Gaining the origin claim changes which copy wins, so any flags computed
+        # without it have to be recomputed even though the column already exists.
+        remark_replays = True
     if event_columns and "is_replay" not in event_columns:
         conn.execute("ALTER TABLE events ADD COLUMN is_replay INTEGER NOT NULL DEFAULT 0")
-        mark_replay_events(conn)
+        remark_replays = True
     if event_columns:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_events_replay ON events(is_replay)")
+        if remark_replays:
+            mark_replay_events(conn)
 
     existing_message_columns = _column_names(conn, "messages")
     for name, definition in MESSAGE_COST_COLUMNS.items():
