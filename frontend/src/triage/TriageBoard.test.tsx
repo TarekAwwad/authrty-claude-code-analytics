@@ -99,6 +99,7 @@ describe("TriageBoard", () => {
 
     expect(options).toEqual([
       { value: "first_ts", label: "Newest first" },
+      { value: "last_ts", label: "Recently ended" },
       { value: "cost_usd", label: "Highest estimated API-equivalent cost" },
       { value: "error_count", label: "Most observed errors" },
       { value: "finding_count", label: "Supported finding" },
@@ -184,7 +185,7 @@ describe("TriageBoard", () => {
 
     expect(screen.getByRole("columnheader", { name: "Started" })).toBeInTheDocument();
     const timestamp = screen.getByText(
-      new Date(firstTs).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }),
+      new Date(firstTs).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" }),
     );
     expect(timestamp).toHaveAttribute("datetime", firstTs);
   });
@@ -204,6 +205,41 @@ describe("TriageBoard", () => {
     expect(within(rows[1]).getByText(/older111/)).toBeInTheDocument();
     expect(within(rows[2]).getByText(/undated2/)).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Sort sessions" })).toHaveValue("first_ts");
+  });
+
+  it("shows the session end timestamp in the Sessions table", () => {
+    const lastTs = "2026-06-03T11:30:00Z";
+    render(
+      <TriageBoard
+        projects={projects}
+        sessions={[s({ last_ts: lastTs })]}
+        loading={false}
+        onOpenSession={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("columnheader", { name: "Ended" })).toBeInTheDocument();
+    const timestamp = screen.getByText(
+      new Date(lastTs).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" }),
+    );
+    expect(timestamp).toHaveAttribute("datetime", lastTs);
+  });
+
+  it("sorts sessions by most recently ended from the Ended column", () => {
+    const sessions = [
+      s({ id: 1, session_id: "older111", last_ts: "2026-06-01T10:00:00Z" }),
+      s({ id: 2, session_id: "undated2", last_ts: null }),
+      s({ id: 3, session_id: "newer333", last_ts: "2026-06-03T10:00:00Z" }),
+    ];
+    render(<TriageBoard projects={projects} sessions={sessions} loading={false} onOpenSession={() => {}} />);
+
+    fireEvent.click(screen.getByRole("columnheader", { name: "Ended" }));
+
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]).getByText(/newer333/)).toBeInTheDocument();
+    expect(within(rows[1]).getByText(/older111/)).toBeInTheDocument();
+    expect(within(rows[2]).getByText(/undated2/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Sort sessions" })).toHaveValue("last_ts");
   });
 
   it("sorts by the displayed cost when the Cost header is clicked", () => {
