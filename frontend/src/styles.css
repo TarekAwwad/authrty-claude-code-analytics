@@ -852,7 +852,7 @@ pre { max-height: 260px; overflow: auto; background: var(--track); color: var(--
 
 .tr-name { font-weight: 700; color: var(--text); }
 .tr-sub { font-size: 11px; color: var(--faint); margin-top: 3px; }
-.cell-started { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cell-started, .cell-ended { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cell-muted { color: var(--faint); }
 .cell-vol b { font-weight: 700; } .vol-dur { color: var(--muted); font-size: 11px; margin-top: 2px; }
 .cell-cost { font-weight: 700; font-variant-numeric: tabular-nums; }
