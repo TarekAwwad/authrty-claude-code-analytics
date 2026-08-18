@@ -7,8 +7,7 @@
 
 [![Check Your Agent: where does your Claude Code money actually go?](https://raw.githubusercontent.com/TarekAwwad/checkyouragent/main/docs/media/readme-hero.png)](https://checkyouragent.dev)
 
-*[Visit checkyouragent.dev](https://checkyouragent.dev) or
-[watch the short demo](https://github.com/TarekAwwad/checkyouragent/blob/main/docs/media/demo.webm).*
+*[Visit checkyouragent.dev](https://checkyouragent.dev)*
 
 Claude Code writes a detailed record of every session to `~/.claude/projects`.
 Check Your Agent turns that record into estimated API-equivalent cost, observed
